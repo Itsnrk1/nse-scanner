@@ -1,0 +1,37 @@
+name: Daily NSE Scan
+
+on:
+  schedule:
+    # 10:30 UTC = 16:00 IST — after the 15:30 IST market close.
+    # GitHub Actions cron is UTC-only; Mon-Fri (1-5) only.
+    - cron: '30 10 * * 1-5'
+  workflow_dispatch: {}   # lets you trigger a run manually from the Actions tab, no waiting
+
+permissions:
+  contents: write   # needed so the workflow can commit index.html back to the repo
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install yfinance pandas nselib
+
+      - name: Run the scan
+        run: python nse_daily_scanner.py
+
+      - name: Commit updated results
+        run: |
+          git config user.name "nse-scan-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add index.html
+          git diff --quiet --cached || git commit -m "Daily scan results"
+          git push
