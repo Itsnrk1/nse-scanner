@@ -1,27 +1,23 @@
 """
-NSE Daily Scanner — runs on YOUR computer, not in any sandbox or browser.
-=========================================================================
-This is the piece that actually solves the "scan every stock automatically"
-problem. It works because:
-  1. It's a plain Python script — CORS (a browser-only rule) doesn't apply.
-  2. It runs on your machine — Anthropic's sandbox restrictions don't apply.
-
+NSE Daily Scanner — runs automatically on GitHub's servers via GitHub Actions.
+================================================================================
 It checks each stock's most recently completed trading day against:
-  1) 3-min candles 9:15 & 9:18  -> both RED
-  2) 3-min candles 15:24 & 15:27 -> both GREEN, 15:27 volume > 15:24 volume
-  3) 1-min candles 15:28 & 15:29 -> both GREEN, 15:28 volume > 15:29 volume
-A stock that passes all three is a candidate for a LONG entry at tomorrow's
+  1) 1-min candles 9:15 & 9:16   -> both RED
+  2) 3-min candles 9:15 & 9:18   -> both RED
+  3) 3-min candles 15:24 & 15:27 -> both GREEN, 15:27 volume > 15:24 volume
+  4) 1-min candles 15:28 & 15:29 -> both GREEN, 15:28 volume > 15:29 volume
+A stock that passes all four is a candidate for a LONG entry at tomorrow's
 9:15 open (exit at 15:27), per your rule.
 
 SETUP (one-time):
-    pip install yfinance pandas
+    pip install yfinance pandas nselib
 
 USAGE:
     python nse_daily_scanner.py
 
-To run automatically every day, see the scheduling notes at the bottom
-of this file — that part is genuinely automatable, since it's your own
-machine's task scheduler doing it, not something I can run for you.
+Writes results to index.html. When run via the GitHub Actions workflow
+(.github/workflows/daily_scan.yml), this happens automatically every trading
+day and the result is published at your GitHub Pages URL.
 """
 
 import time
