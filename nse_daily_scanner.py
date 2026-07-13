@@ -259,7 +259,7 @@ def generate_html_report(all_results, scan_time):
   </div>
 
   <table>
-    <tr><th>Symbol</th><th>Signal day</th><th>9:15/9:16 red (1m)</th><th>9:15/9:18 red (3m)</th><th>15:24/15:27 vol-up</th><th>15:28/15:29 vol-down</th><th>Result</th></tr>
+    <tr><th>Symbol</th><th>Signal day</th><th>9:15/9:16 red (1m)</th><th>9:15/9:18 red (3m)</th><th>15:24/15:27 green, vol-up</th><th>15:28/15:29 green, vol-down</th><th>Result</th></tr>
     {rows_html}
   </table>
 
