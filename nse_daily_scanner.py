@@ -2,8 +2,8 @@
 NSE Daily Scanner — runs automatically on GitHub's servers via GitHub Actions.
 ================================================================================
 It checks each stock's most recently completed trading day against:
-  1) 1-min candles 9:15 & 9:16   -> both RED
-  2) 3-min candles 9:15 & 9:18   -> both RED
+  1) 1-min candles 9:15 & 9:16   -> both GREEN
+  2) 3-min candles 9:15 & 9:18   -> both GREEN
   3) 3-min candles 15:24 & 15:27 -> both GREEN, 15:27 volume > 15:24 volume
   4) 1-min candles 15:28 & 15:29 -> both GREEN, 15:28 volume > 15:29 volume
 A stock that passes all four is a candidate for a LONG entry at tomorrow's
@@ -90,20 +90,42 @@ NIFTY_NEXT_150 = [
     "GNFC", "GODIGIT", "GRANULES", "GRSE", "HFCL", "HONAUT",
 ]
 
-STOCK_UNIVERSE = NIFTY_50 + NIFTY_NEXT_150  # ~200 stocks by default
+STOCK_UNIVERSE = NIFTY_50 + NIFTY_NEXT_150  # ~210 stocks, safe fallback
 
+# Tier 2: try the live Nifty 500 via nselib (broader, self-updating)
 try:
     from nselib import indices
     df = indices.constituent_stock_list(index_category='BroadMarketIndices',
                                          index_name='Nifty 500')
     fetched = df['Symbol'].tolist()
-    if len(fetched) > 100:  # sanity check before trusting it over the fallback
+    if len(fetched) > 100:
         STOCK_UNIVERSE = fetched
-        print(f"Loaded {len(STOCK_UNIVERSE)} symbols live from nselib (Nifty 500)")
-    else:
-        print(f"nselib returned only {len(fetched)} symbols — using the ~200-stock fallback list instead")
+        print(f"Loaded {len(STOCK_UNIVERSE)} symbols from nselib (Nifty 500)")
 except Exception as e:
-    print(f"nselib fetch failed ({e}) — using the ~200-stock fallback list instead")
+    print(f"nselib Nifty 500 fetch failed ({e}) — keeping current {len(STOCK_UNIVERSE)}-stock list")
+
+# Tier 3: try NSE's own full official equity list (~2000 stocks) — broadest option.
+# I could not test this myself (my own sandbox can't reach NSE either), but it's
+# worth attempting since this runs on GitHub's servers with real internet access.
+# Falls back to whichever list survived Tier 1/2 above if this doesn't work.
+try:
+    import requests
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+    resp = requests.get('https://archives.nseindia.com/content/equity/EQUITY_L.csv',
+                         headers=headers, timeout=30)
+    resp.raise_for_status()
+    from io import StringIO
+    full_df = pd.read_csv(StringIO(resp.text))
+    full_list = full_df['SYMBOL'].tolist()
+    if len(full_list) > len(STOCK_UNIVERSE):
+        STOCK_UNIVERSE = full_list
+        print(f"Loaded {len(STOCK_UNIVERSE)} symbols from NSE's full equity list — using this broadest option")
+    else:
+        print(f"NSE full list returned {len(full_list)} symbols, not larger than current {len(STOCK_UNIVERSE)} — keeping current list")
+except Exception as e:
+    print(f"NSE full equity list fetch failed ({e}) — keeping current {len(STOCK_UNIVERSE)}-stock list")
+
+print(f"FINAL universe size: {len(STOCK_UNIVERSE)} stocks")
 
 
 # ---------------------------------------------------------------------------
@@ -129,7 +151,7 @@ def evaluate_rows(rows):
     d = valid_dates[-1]
     m = by_date[d]
 
-    cond_a = (m[917]['close'] < m[915]['open']) and (m[920]['close'] < m[918]['open'])
+    cond_a = (m[917]['close'] > m[915]['open']) and (m[920]['close'] > m[918]['open'])
 
     vol_1524 = m[1524]['volume'] + m[1525]['volume'] + m[1526]['volume']
     vol_1527 = m[1527]['volume'] + m[1528]['volume'] + m[1529]['volume']
@@ -141,7 +163,7 @@ def evaluate_rows(rows):
              (m[1529]['close'] > m[1529]['open']) and \
              (m[1528]['volume'] > m[1529]['volume'])
 
-    cond_d = (m[915]['close'] < m[915]['open']) and (m[916]['close'] < m[916]['open'])
+    cond_d = (m[915]['close'] > m[915]['open']) and (m[916]['close'] > m[916]['open'])
 
     passed = cond_a and cond_b and cond_c and cond_d
     return {"status": "PASS" if passed else "FAIL",
@@ -259,14 +281,14 @@ def generate_html_report(all_results, scan_time):
   </div>
 
   <table>
-    <tr><th>Symbol</th><th>Signal day</th><th>9:15/9:16 red (1m)</th><th>9:15/9:18 red (3m)</th><th>15:24/15:27 green, vol-up</th><th>15:28/15:29 green, vol-down</th><th>Result</th></tr>
+    <tr><th>Symbol</th><th>Signal day</th><th>9:15/9:16 green (1m)</th><th>9:15/9:18 green (3m)</th><th>15:24/15:27 green, vol-up</th><th>15:28/15:29 green, vol-down</th><th>Result</th></tr>
     {rows_html}
   </table>
 
   {skipped_html}
 
   <p class="rule-note">
-    Rule: 1-min 9:15 &amp; 9:16 both red · 3-min 9:15 &amp; 9:18 both red · 3-min 15:24 &amp; 15:27 both green with
+    Rule: 1-min 9:15 &amp; 9:16 both green · 3-min 9:15 &amp; 9:18 both green · 3-min 15:24 &amp; 15:27 both green with
     15:27 volume &gt; 15:24 · 1-min 15:28 &amp; 15:29 both green with 15:28 volume &gt; 15:29. A PASS is a
     candidate for a long entry at the next 9:15 open, exit 15:27. Re-run the script to regenerate this page
     with fresh data. Scanned {len(all_results)} stocks this run.
