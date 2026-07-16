@@ -110,9 +110,16 @@ except Exception as e:
 # Falls back to whichever list survived Tier 1/2 above if this doesn't work.
 try:
     import requests
-    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
-    resp = requests.get('https://archives.nseindia.com/content/equity/EQUITY_L.csv',
-                         headers=headers, timeout=30)
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+    }
+    session = requests.Session()
+    session.headers.update(headers)
+    # NSE commonly requires a valid session cookie from visiting the site first,
+    # otherwise even a correct data URL can get rejected.
+    session.get('https://www.nseindia.com', timeout=20)
+    resp = session.get('https://nsearchives.nseindia.com/content/equity/EQUITY_L.csv', timeout=30)
     resp.raise_for_status()
     from io import StringIO
     full_df = pd.read_csv(StringIO(resp.text))
