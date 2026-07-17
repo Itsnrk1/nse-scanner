@@ -104,7 +104,7 @@ try:
 except Exception as e:
     print(f"nselib Nifty 500 fetch failed ({e}) — keeping current {len(STOCK_UNIVERSE)}-stock list")
 
-# Tier 3: try NSE's own full official equity list (~2000 stocks) — broadest option.
+# Tier 3: try NSE's own full official equity list (~2200 stocks) — broadest option.
 # I could not test this myself (my own sandbox can't reach NSE either), but it's
 # worth attempting since this runs on GitHub's servers with real internet access.
 # Falls back to whichever list survived Tier 1/2 above if this doesn't work.
@@ -116,17 +116,31 @@ try:
     }
     session = requests.Session()
     session.headers.update(headers)
-    # NSE commonly requires a valid session cookie from visiting the site first,
-    # otherwise even a correct data URL can get rejected.
     session.get('https://www.nseindia.com', timeout=20)
-    resp = session.get('https://nsearchives.nseindia.com/content/equity/EQUITY_L.csv', timeout=30)
+    resp = session.get('https://nsearchives.nseindia.com/content/equities/sec_list.csv', timeout=30)
     resp.raise_for_status()
     from io import StringIO
     full_df = pd.read_csv(StringIO(resp.text))
-    full_list = full_df['SYMBOL'].tolist()
+
+    # Column name might not be exactly "SYMBOL" - search case-insensitively rather
+    # than assume, and fail loudly with the actual columns seen if not found.
+    symbol_col = next((c for c in full_df.columns if 'symbol' in c.lower()), None)
+    if symbol_col is None:
+        raise ValueError(f"No symbol-like column found. Columns present: {list(full_df.columns)}")
+
+    # Filter to regular equity shares (series "EQ") only - this file also mixes in
+    # ETFs, mutual fund wrappers, and SME-platform listings under other series codes,
+    # which aren't what "stocks" means for this strategy.
+    series_col = next((c for c in full_df.columns if 'series' in c.lower()), None)
+    if series_col is not None:
+        before = len(full_df)
+        full_df = full_df[full_df[series_col].astype(str).str.strip() == 'EQ']
+        print(f"Filtered to EQ series: {before} -> {len(full_df)} rows")
+
+    full_list = full_df[symbol_col].dropna().astype(str).str.strip().tolist()
     if len(full_list) > len(STOCK_UNIVERSE):
         STOCK_UNIVERSE = full_list
-        print(f"Loaded {len(STOCK_UNIVERSE)} symbols from NSE's full equity list — using this broadest option")
+        print(f"Loaded {len(STOCK_UNIVERSE)} symbols from NSE's full equity list (column: {symbol_col}) — using this broadest option")
     else:
         print(f"NSE full list returned {len(full_list)} symbols, not larger than current {len(STOCK_UNIVERSE)} — keeping current list")
 except Exception as e:
