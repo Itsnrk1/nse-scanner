@@ -2,12 +2,12 @@
 NSE Daily Scanner — runs automatically on GitHub's servers via GitHub Actions.
 ================================================================================
 It checks each stock's most recently completed trading day against:
-  1) 1-min candles 9:15 & 9:16   -> both GREEN
-  2) 3-min candles 9:15 & 9:18   -> both GREEN
-  3) 3-min candles 15:24 & 15:27 -> both GREEN, 15:27 volume > 15:24 volume
-  4) 1-min candles 15:28 & 15:29 -> both GREEN, 15:28 volume > 15:29 volume
-A stock that passes all four is a candidate for a LONG entry at tomorrow's
-9:15 open (exit at 15:27), per your rule.
+  1) 3-min candles 15:24 & 15:27 -> opposite trends, 15:24 volume > 15:27 volume
+  2) 3-min candles 9:15 & 9:18   -> both match 15:24's direction
+  3) 1-min candle 15:28          -> matches 15:24's direction
+  4) 1-min candles 9:15 & 9:16   -> both match 15:28's direction
+This rule is DIRECTIONAL: a PASS results in either a LONG or SHORT entry at
+tomorrow's 9:15 open (exit at 15:27), depending on which way 15:24 went.
 
 SETUP (one-time):
     pip install yfinance pandas nselib
@@ -158,7 +158,9 @@ NEEDED_HM = [915, 916, 917, 918, 919, 920, 1524, 1525, 1526, 1527, 1528, 1529]
 
 def evaluate_rows(rows):
     """rows: DataFrame with columns date, hm, open, close, volume.
-    Finds the latest date with all needed candles present and checks the rule."""
+    Finds the latest date with all needed candles present and checks the rule.
+    This rule is DIRECTIONAL - the resulting trade may be LONG or SHORT
+    depending on which way the 15:24 3-min candle went."""
     by_date = {}
     for _, r in rows.iterrows():
         by_date.setdefault(r['date'], {})[r['hm']] = r
@@ -172,23 +174,36 @@ def evaluate_rows(rows):
     d = valid_dates[-1]
     m = by_date[d]
 
-    cond_a = (m[917]['close'] > m[915]['open']) and (m[920]['close'] > m[918]['open'])
+    def sign(x):
+        return (x > 0) - (x < 0)
 
+    # cond1: 3-min 15:24(24-26) & 15:27(27-29) opposite, 15:24 vol > 15:27 vol
+    dir_1524 = sign(m[1526]['close'] - m[1524]['open'])
+    dir_1527 = sign(m[1529]['close'] - m[1527]['open'])
     vol_1524 = m[1524]['volume'] + m[1525]['volume'] + m[1526]['volume']
     vol_1527 = m[1527]['volume'] + m[1528]['volume'] + m[1529]['volume']
-    cond_b = (m[1526]['close'] > m[1524]['open']) and \
-             (m[1529]['close'] > m[1527]['open']) and \
-             (vol_1527 > vol_1524)
+    cond1 = (dir_1524 != 0) and (dir_1527 != 0) and (dir_1524 != dir_1527) and (vol_1524 > vol_1527)
 
-    cond_c = (m[1528]['close'] > m[1528]['open']) and \
-             (m[1529]['close'] > m[1529]['open']) and \
-             (m[1528]['volume'] > m[1529]['volume'])
+    # cond2: 3-min 9:15(15-17) & 9:18(18-20) both match dir_1524
+    dir_915_3m = sign(m[917]['close'] - m[915]['open'])
+    dir_918_3m = sign(m[920]['close'] - m[918]['open'])
+    cond2 = (dir_915_3m == dir_1524) and (dir_918_3m == dir_1524)
 
-    cond_d = (m[915]['close'] > m[915]['open']) and (m[916]['close'] > m[916]['open'])
+    # cond3: 1-min 15:28 matches dir_1524
+    dir_1528_1m = sign(m[1528]['close'] - m[1528]['open'])
+    cond3 = (dir_1528_1m == dir_1524)
 
-    passed = cond_a and cond_b and cond_c and cond_d
+    # cond4: 1-min 9:15 & 9:16 both match dir_1528_1m (== dir_1524)
+    dir_915_1m = sign(m[915]['close'] - m[915]['open'])
+    dir_916_1m = sign(m[916]['close'] - m[916]['open'])
+    cond4 = (dir_915_1m == dir_1528_1m) and (dir_916_1m == dir_1528_1m)
+
+    passed = cond1 and cond2 and cond3 and cond4
+    direction = 'LONG' if dir_1524 == 1 else ('SHORT' if dir_1524 == -1 else None)
+
     return {"status": "PASS" if passed else "FAIL",
-            "date": d, "condA": cond_a, "condB": cond_b, "condC": cond_c, "condD": cond_d}
+            "date": d, "direction": direction if passed else None,
+            "cond1": cond1, "cond2": cond2, "cond3": cond3, "cond4": cond4}
 
 
 def fetch_symbol_rows(symbol):
@@ -232,7 +247,7 @@ def generate_html_report(all_results, scan_time):
 
     if matches:
         matches_html = '<div class="match-list">' + ''.join(
-            f'<div class="match-item">▲ {r["symbol"]} <span class="match-date">(signal day {r["date"]})</span></div>'
+            f'<div class="match-item"><span class="dir-badge {"long" if r["direction"]=="LONG" else "short"}">{r["direction"]}</span> {r["symbol"]} <span class="match-date">(signal day {r["date"]})</span></div>'
             for r in matches
         ) + '</div>'
         banner_class = "banner-pass"
@@ -244,14 +259,16 @@ def generate_html_report(all_results, scan_time):
 
     rows_html = ''
     for r in sorted(checked, key=lambda x: (x['status'] != 'PASS', x['symbol'])):
+        dir_display = r.get('direction') or '—'
         rows_html += f"""
         <tr>
           <td class="sym">{r['symbol']}</td>
           <td>{r.get('date','—')}</td>
-          <td>{cond_badge(r.get('condD'))}</td>
-          <td>{cond_badge(r.get('condA'))}</td>
-          <td>{cond_badge(r.get('condB'))}</td>
-          <td>{cond_badge(r.get('condC'))}</td>
+          <td>{dir_display}</td>
+          <td>{cond_badge(r.get('cond1'))}</td>
+          <td>{cond_badge(r.get('cond2'))}</td>
+          <td>{cond_badge(r.get('cond3'))}</td>
+          <td>{cond_badge(r.get('cond4'))}</td>
           <td class="{'overall-pass' if r['status']=='PASS' else 'overall-fail'}">{r['status']}</td>
         </tr>"""
 
@@ -277,6 +294,9 @@ def generate_html_report(all_results, scan_time):
   .match-list {{ margin-top: 10px; font-weight: 400; }}
   .match-item {{ padding: 6px 0; font-size: 14px; }}
   .match-date {{ color: #666; font-weight: 400; font-size: 12.5px; }}
+  .dir-badge {{ display: inline-block; font-size: 10.5px; font-weight: 700; padding: 2px 6px; border-radius: 4px; margin-right: 6px; }}
+  .dir-badge.long {{ background: #e6f7ec; color: #0a7a3d; }}
+  .dir-badge.short {{ background: #fbe9e9; color: #b3261e; }}
   .none-text {{ margin: 10px 0 0; font-weight: 400; font-size: 14px; }}
   table {{ width: 100%; border-collapse: collapse; font-size: 13px; background: #fff; border-radius: 8px; overflow: hidden; border: 1px solid #e5e5e2; }}
   th {{ text-align: left; background: #efefec; padding: 10px 12px; font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.03em; color: #666; }}
@@ -302,17 +322,17 @@ def generate_html_report(all_results, scan_time):
   </div>
 
   <table>
-    <tr><th>Symbol</th><th>Signal day</th><th>9:15/9:16 green (1m)</th><th>9:15/9:18 green (3m)</th><th>15:24/15:27 green, vol-up</th><th>15:28/15:29 green, vol-down</th><th>Result</th></tr>
+    <tr><th>Symbol</th><th>Signal day</th><th>Direction</th><th>15:24/27 opp,vol</th><th>9:15/18 match</th><th>15:28 match</th><th>9:15/16 match</th><th>Result</th></tr>
     {rows_html}
   </table>
 
   {skipped_html}
 
   <p class="rule-note">
-    Rule: 1-min 9:15 &amp; 9:16 both green · 3-min 9:15 &amp; 9:18 both green · 3-min 15:24 &amp; 15:27 both green with
-    15:27 volume &gt; 15:24 · 1-min 15:28 &amp; 15:29 both green with 15:28 volume &gt; 15:29. A PASS is a
-    candidate for a long entry at the next 9:15 open, exit 15:27. Re-run the script to regenerate this page
-    with fresh data. Scanned {len(all_results)} stocks this run.
+    Rule: 3-min 15:24 &amp; 15:27 opposite trends with 15:24 volume &gt; 15:27 · 3-min 9:15 &amp; 9:18 both match
+    15:24's direction · 1-min 15:28 matches 15:24's direction · 1-min 9:15 &amp; 9:16 both match 15:28's direction.
+    A PASS results in a LONG or SHORT entry at the next 9:15 open (direction shown per stock), exit 15:27.
+    Re-run the script to regenerate this page with fresh data. Scanned {len(all_results)} stocks this run.
   </p>
 </div>
 </body>
@@ -340,7 +360,7 @@ def main():
             result['symbol'] = symbol
             all_results.append(result)
             if result['status'] == 'PASS':
-                print(f"[{i}/{len(STOCK_UNIVERSE)}] {symbol:<15} MATCH  (signal day {result['date']})")
+                print(f"[{i}/{len(STOCK_UNIVERSE)}] {symbol:<15} MATCH ({result['direction']})  (signal day {result['date']})")
             elif result['status'] == 'FAIL':
                 print(f"[{i}/{len(STOCK_UNIVERSE)}] {symbol:<15} no match")
             else:
@@ -355,9 +375,9 @@ def main():
 
     print("\n" + "=" * 60)
     if matches:
-        print(f"MATCHES FOUND ({len(matches)}) — candidates for LONG entry at next 9:15 open:")
+        print(f"MATCHES FOUND ({len(matches)}) — candidates for entry at next 9:15 open:")
         for r in matches:
-            print(f"  {r['symbol']}  (signal day: {r['date']})")
+            print(f"  {r['symbol']}  {r['direction']}  (signal day: {r['date']})")
     else:
         print("NO MATCHES today.")
     print("=" * 60)
