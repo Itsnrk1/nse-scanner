@@ -4,8 +4,8 @@ NSE Daily Scanner — runs automatically on GitHub's servers via GitHub Actions.
 It checks each stock's most recently completed trading day against:
   1) 3-min candles 15:24 & 15:27 -> opposite trends, 15:24 volume > 15:27 volume
   2) 3-min candles 9:15 & 9:18   -> both match 15:24's direction
-  3) 1-min candles 15:28 & 15:29 -> both match 15:24's direction
-  4) 1-min candles 9:15 & 9:16   -> both match 15:28's direction
+  3) 1-min candle 15:29          -> matches 15:24's direction, 15:29 volume > 15:28 volume (15:28's own trend not checked)
+  4) 1-min candles 9:15 & 9:16   -> both match 15:29's direction
 This rule is DIRECTIONAL: a PASS results in either a LONG or SHORT entry at
 tomorrow's 9:15 open (exit at 15:27), depending on which way 15:24 went.
 
@@ -211,15 +211,15 @@ def evaluate_rows(rows):
     dir_918_3m = sign(m[920]['close'] - m[918]['open'])
     cond2 = (dir_915_3m == dir_1524) and (dir_918_3m == dir_1524)
 
-    # cond3: 1-min 15:28 AND 15:29 both match dir_1524
-    dir_1528_1m = sign(m[1528]['close'] - m[1528]['open'])
+    # cond3: 1-min 15:29 matches dir_1524 (15:28's own trend not checked here),
+    # and 15:29 volume > 15:28 volume
     dir_1529_1m = sign(m[1529]['close'] - m[1529]['open'])
-    cond3 = (dir_1528_1m == dir_1524) and (dir_1529_1m == dir_1524)
+    cond3 = (dir_1529_1m == dir_1524) and (m[1529]['volume'] > m[1528]['volume'])
 
-    # cond4: 1-min 9:15 & 9:16 both match dir_1528_1m (== dir_1524)
+    # cond4: 1-min 9:15 & 9:16 both match dir_1529_1m (== dir_1524)
     dir_915_1m = sign(m[915]['close'] - m[915]['open'])
     dir_916_1m = sign(m[916]['close'] - m[916]['open'])
-    cond4 = (dir_915_1m == dir_1528_1m) and (dir_916_1m == dir_1528_1m)
+    cond4 = (dir_915_1m == dir_1529_1m) and (dir_916_1m == dir_1529_1m)
 
     passed = cond1 and cond2 and cond3 and cond4
     direction = 'LONG' if dir_1524 == 1 else ('SHORT' if dir_1524 == -1 else None)
@@ -345,7 +345,7 @@ def generate_html_report(all_results, scan_time):
   </div>
 
   <table>
-    <tr><th>Symbol</th><th>Signal day</th><th>Direction</th><th>15:24/27 opp,vol</th><th>9:15/18 match</th><th>15:28/29 match</th><th>9:15/16 match</th><th>Result</th></tr>
+    <tr><th>Symbol</th><th>Signal day</th><th>Direction</th><th>15:24/27 opp,vol</th><th>9:15/18 match</th><th>15:29 match+vol</th><th>9:15/16 match</th><th>Result</th></tr>
     {rows_html}
   </table>
 
@@ -353,7 +353,8 @@ def generate_html_report(all_results, scan_time):
 
   <p class="rule-note">
     Rule: 3-min 15:24 &amp; 15:27 opposite trends with 15:24 volume &gt; 15:27 · 3-min 9:15 &amp; 9:18 both match
-    15:24's direction · 1-min 15:28 &amp; 15:29 both match 15:24's direction · 1-min 9:15 &amp; 9:16 both match 15:28's direction.
+    15:24's direction · 1-min 15:29 matches 15:24's direction with 15:29 volume &gt; 15:28 volume (15:28's own trend
+    doesn't matter) · 1-min 9:15 &amp; 9:16 both match 15:29's direction.
     A PASS results in a LONG or SHORT entry at the next 9:15 open (direction shown per stock), exit 15:27.
     Re-run the script to regenerate this page with fresh data. Scanned {len(all_results)} stocks this run.
   </p>
