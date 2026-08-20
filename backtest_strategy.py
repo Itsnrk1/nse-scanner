@@ -31,7 +31,7 @@ def direction(open_price, close_price):
 
 
 # ============================================================
-# DOWNLOAD DATA
+# DOWNLOAD DATASET
 # ============================================================
 
 def download_dataset():
@@ -49,7 +49,10 @@ def download_dataset():
     response.raise_for_status()
 
     total = int(
-        response.headers.get("content-length", 0)
+        response.headers.get(
+            "content-length",
+            0
+        )
     )
 
     downloaded = 0
@@ -74,7 +77,14 @@ def download_dataset():
 
     print()
 
-    return b"".join(chunks)
+    data = b"".join(chunks)
+
+    print(
+        f"Downloaded: "
+        f"{len(data) / (1024 * 1024):.1f} MB"
+    )
+
+    return data
 
 
 # ============================================================
@@ -96,7 +106,7 @@ def load_stock(z, filename):
             return None
 
         # ----------------------------------------------------
-        # Convert UTC timestamp to IST
+        # Convert timestamp to Indian Standard Time
         # ----------------------------------------------------
 
         df["datetime"] = pd.to_datetime(
@@ -140,10 +150,13 @@ def load_stock(z, filename):
             return None
 
         # ----------------------------------------------------
-        # Prices
+        # Price columns
         # ----------------------------------------------------
 
-        for column in ["open", "close"]:
+        for column in [
+            "open",
+            "close"
+        ]:
 
             if column not in df.columns:
                 return None
@@ -184,7 +197,10 @@ def load_stock(z, filename):
 # BUILD 5-MINUTE CANDLE
 # ============================================================
 
-def five_minute_candle(day, start_minute):
+def five_minute_candle(
+    day,
+    start_minute
+):
 
     hour, minute = map(
         int,
@@ -192,11 +208,8 @@ def five_minute_candle(day, start_minute):
     )
 
     times = [
-        f"{hour:02d}:{minute:02d}",
-        f"{hour:02d}:{minute + 1:02d}",
-        f"{hour:02d}:{minute + 2:02d}",
-        f"{hour:02d}:{minute + 3:02d}",
-        f"{hour:02d}:{minute + 4:02d}"
+        f"{hour:02d}:{minute + i:02d}"
+        for i in range(5)
     ]
 
     rows = []
@@ -227,13 +240,13 @@ def five_minute_candle(day, start_minute):
 
 
 # ============================================================
-# STRATEGY
+# EVALUATE STRATEGY
 # ============================================================
 
 def evaluate_signal_day(day):
 
     # ========================================================
-    # 5-MINUTE 15:20
+    # 5-MINUTE 15:20 CANDLE
     #
     # 15:20 - 15:24
     # ========================================================
@@ -244,7 +257,7 @@ def evaluate_signal_day(day):
     )
 
     # ========================================================
-    # 5-MINUTE 15:25
+    # 5-MINUTE 15:25 CANDLE
     #
     # 15:25 - 15:29
     # ========================================================
@@ -262,7 +275,7 @@ def evaluate_signal_day(day):
         return None
 
     # ========================================================
-    # TREND
+    # TRENDS
     # ========================================================
 
     dir_1520 = direction(
@@ -294,7 +307,8 @@ def evaluate_signal_day(day):
     # ========================================================
     # CONDITION 2
     #
-    # 15:25 VOLUME > 15:20 VOLUME
+    # 5-MINUTE 15:25 VOLUME
+    # MUST BE GREATER THAN 15:20
     # ========================================================
 
     if not (
@@ -305,13 +319,13 @@ def evaluate_signal_day(day):
         return None
 
     # ========================================================
-    # CONDITION 3
-    #
-    # 1-MINUTE 15:28 MUST MATCH
-    # THE 5-MINUTE 15:20 TREND
+    # 1-MINUTE 15:28
     # ========================================================
 
     if "15:28" not in day:
+        return None
+
+    if "15:29" not in day:
         return None
 
     dir_1528 = direction(
@@ -322,7 +336,39 @@ def evaluate_signal_day(day):
     if dir_1528 == 0:
         return None
 
+    # ========================================================
+    # CONDITION 3
+    #
+    # 1-MINUTE 15:28 TREND
+    # MUST MATCH 5-MINUTE 15:20 TREND
+    # ========================================================
+
     if dir_1528 != dir_1520:
+        return None
+
+    # ========================================================
+    # CONDITION 4
+    #
+    # 1-MINUTE 15:28 VOLUME
+    # MUST BE GREATER THAN 15:29 VOLUME
+    #
+    # IMPORTANT:
+    # NO CONDITION is imposed on the TREND
+    # of 15:29.
+    # ========================================================
+
+    volume_1528 = float(
+        day["15:28"]["volume"]
+    )
+
+    volume_1529 = float(
+        day["15:29"]["volume"]
+    )
+
+    if not (
+        volume_1528 >
+        volume_1529
+    ):
         return None
 
     # ========================================================
@@ -346,7 +392,10 @@ def evaluate_signal_day(day):
 # BACKTEST ONE STOCK
 # ============================================================
 
-def backtest_stock(z, filename):
+def backtest_stock(
+    z,
+    filename
+):
 
     df = load_stock(
         z,
@@ -364,7 +413,7 @@ def backtest_stock(z, filename):
     )
 
     # --------------------------------------------------------
-    # Group by date
+    # Group by trading date
     # --------------------------------------------------------
 
     grouped = {
@@ -387,7 +436,6 @@ def backtest_stock(z, filename):
         dates
     ):
 
-        # Need following trading day
         if i + 1 >= len(dates):
             break
 
@@ -402,7 +450,7 @@ def backtest_stock(z, filename):
         ]
 
         # ----------------------------------------------------
-        # Build signal-day dictionary
+        # Signal-day dictionary
         # ----------------------------------------------------
 
         day = {}
@@ -412,7 +460,7 @@ def backtest_stock(z, filename):
             day[row["hm"]] = row.to_dict()
 
         # ----------------------------------------------------
-        # Evaluate strategy
+        # Check strategy
         # ----------------------------------------------------
 
         signal = evaluate_signal_day(
@@ -423,7 +471,7 @@ def backtest_stock(z, filename):
             continue
 
         # ----------------------------------------------------
-        # Build next-day dictionary
+        # Next-day dictionary
         # ----------------------------------------------------
 
         next_day = {}
@@ -462,7 +510,7 @@ def backtest_stock(z, filename):
             continue
 
         # ====================================================
-        # CALCULATE RETURN
+        # RETURN
         # ====================================================
 
         if signal["direction"] == "LONG":
@@ -495,7 +543,7 @@ def backtest_stock(z, filename):
 
             "entry_09:15_open": entry_price,
 
-            "exit_close": exit_price,
+            "exit_15:29_close": exit_price,
 
             "return_pct": return_pct,
 
@@ -513,7 +561,9 @@ def backtest_stock(z, filename):
 # STATISTICS
 # ============================================================
 
-def calculate_statistics(results):
+def calculate_statistics(
+    results
+):
 
     total = len(results)
 
@@ -599,26 +649,44 @@ def main():
 
     print("\n")
     print("=" * 70)
-    print("NEW 5-MINUTE + 1-MINUTE STRATEGY BACKTEST")
+    print("5-MINUTE + 1-MINUTE VOLUME CONFIRMATION BACKTEST")
     print("=" * 70)
 
-    print("\nSTRATEGY CONDITIONS:")
+    print("\nCONDITIONS:")
+
     print(
         "1. 5m 15:20 and 15:25 = SAME TREND"
     )
+
     print(
         "2. 5m 15:25 volume > 15:20 volume"
     )
+
     print(
         "3. 1m 15:28 = 5m 15:20 TREND"
     )
 
+    print(
+        "4. 1m 15:28 volume > 15:29 volume"
+    )
+
+    print(
+        "\nIMPORTANT:"
+    )
+
+    print(
+        "15:28 and 15:29 DO NOT need to "
+        "have the same trend."
+    )
+
     print("\nTRADE:")
+
     print(
         "Entry = NEXT TRADING DAY 09:15 OPEN"
     )
+
     print(
-        "Exit  = NEXT TRADING DAY MARKET CLOSE"
+        "Exit  = NEXT TRADING DAY 15:29 CLOSE"
     )
 
     # ========================================================
@@ -739,7 +807,7 @@ def main():
     )
 
     # ========================================================
-    # LONG / SHORT
+    # LONG / SHORT BREAKDOWN
     # ========================================================
 
     print("\n")
@@ -747,7 +815,10 @@ def main():
     print("LONG / SHORT BREAKDOWN")
     print("=" * 70)
 
-    for side in ["LONG", "SHORT"]:
+    for side in [
+        "LONG",
+        "SHORT"
+    ]:
 
         subset = results[
             results["direction"] == side
@@ -760,7 +831,9 @@ def main():
             subset
         )
 
-        print(f"\n{side}:")
+        print(
+            f"\n{side}:"
+        )
 
         print(
             f"  Trades       : "
@@ -819,7 +892,9 @@ def main():
             yearly
         )
 
-        print(f"\n{year}:")
+        print(
+            f"\n{year}:"
+        )
 
         print(
             f"  Trades     : "
@@ -856,7 +931,7 @@ def main():
     # ========================================================
 
     output_file = (
-        "simple_5m_1m_backtest.csv"
+        "5m_1m_volume_confirmation_backtest.csv"
     )
 
     results.to_csv(
