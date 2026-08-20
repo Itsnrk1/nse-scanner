@@ -31,7 +31,7 @@ def direction(open_price, close_price):
 
 
 # ============================================================
-# DOWNLOAD DATASET
+# DOWNLOAD DATA
 # ============================================================
 
 def download_dataset():
@@ -105,10 +105,7 @@ def load_stock(z, filename):
         if df.empty:
             return None
 
-        # ----------------------------------------------------
-        # Convert timestamp to IST
-        # ----------------------------------------------------
-
+        # Convert UTC to IST
         df["datetime"] = pd.to_datetime(
             df["time"],
             unit="s",
@@ -127,10 +124,7 @@ def load_stock(z, filename):
             .dt.strftime("%H:%M")
         )
 
-        # ----------------------------------------------------
         # Volume
-        # ----------------------------------------------------
-
         if "Volume" in df.columns:
 
             df["volume"] = pd.to_numeric(
@@ -149,10 +143,7 @@ def load_stock(z, filename):
 
             return None
 
-        # ----------------------------------------------------
         # Prices
-        # ----------------------------------------------------
-
         for column in [
             "open",
             "close"
@@ -286,23 +277,19 @@ def five_minute_candle(
 
 
 # ============================================================
-# EVALUATE SIGNAL DAY
+# EVALUATE SIGNAL
 # ============================================================
 
 def evaluate_signal_day(day):
 
     # ========================================================
-    # 5-MINUTE 15:20
+    # 5-MINUTE
     # ========================================================
 
     candle_1520 = five_minute_candle(
         day,
         "15:20"
     )
-
-    # ========================================================
-    # 5-MINUTE 15:25
-    # ========================================================
 
     candle_1525 = five_minute_candle(
         day,
@@ -315,10 +302,6 @@ def evaluate_signal_day(day):
         candle_1525 is None
     ):
         return None
-
-    # ========================================================
-    # 5-MINUTE TRENDS
-    # ========================================================
 
     dir_1520 = direction(
         candle_1520["open"],
@@ -333,7 +316,7 @@ def evaluate_signal_day(day):
     # ========================================================
     # CONDITION 1
     #
-    # 15:20 AND 15:25 SAME TREND
+    # 5m 15:20 = 5m 15:25 TREND
     # ========================================================
 
     if dir_1520 == 0:
@@ -348,7 +331,7 @@ def evaluate_signal_day(day):
     # ========================================================
     # CONDITION 2
     #
-    # 15:25 VOLUME > 15:20 VOLUME
+    # 5m 15:25 VOLUME > 15:20 VOLUME
     # ========================================================
 
     if not (
@@ -359,17 +342,13 @@ def evaluate_signal_day(day):
         return None
 
     # ========================================================
-    # 3-MINUTE 15:24
+    # 3-MINUTE
     # ========================================================
 
     candle_1524 = three_minute_candle(
         day,
         "15:24"
     )
-
-    # ========================================================
-    # 3-MINUTE 15:27
-    # ========================================================
 
     candle_1527 = three_minute_candle(
         day,
@@ -383,10 +362,6 @@ def evaluate_signal_day(day):
     ):
         return None
 
-    # ========================================================
-    # 3-MINUTE 15:24 TREND
-    # ========================================================
-
     dir_1524 = direction(
         candle_1524["open"],
         candle_1524["close"]
@@ -398,8 +373,16 @@ def evaluate_signal_day(day):
     # ========================================================
     # CONDITION 3
     #
-    # 3-MINUTE 15:24 VOLUME
-    # > 3-MINUTE 15:27 VOLUME
+    # 3m 15:24 MUST MATCH 5m TREND
+    # ========================================================
+
+    if dir_1524 != dir_1520:
+        return None
+
+    # ========================================================
+    # CONDITION 4
+    #
+    # 3m 15:24 VOLUME > 15:27 VOLUME
     # ========================================================
 
     if not (
@@ -410,7 +393,7 @@ def evaluate_signal_day(day):
         return None
 
     # ========================================================
-    # 1-MINUTE 15:28
+    # 1-MINUTE
     # ========================================================
 
     if "15:28" not in day:
@@ -428,42 +411,39 @@ def evaluate_signal_day(day):
         return None
 
     # ========================================================
-    # CONDITION 4
+    # CONDITION 5
     #
-    # 1-MINUTE 15:28 TREND
-    # = 3-MINUTE 15:24 TREND
+    # 1m 15:28 MUST MATCH 3m 15:24
+    #
+    # Therefore:
+    #
+    # 5m 15:20
+    #     =
+    # 5m 15:25
+    #     =
+    # 3m 15:24
+    #     =
+    # 1m 15:28
     # ========================================================
 
     if dir_1528 != dir_1524:
         return None
 
     # ========================================================
-    # CONDITION 5
+    # CONDITION 6
     #
-    # 1-MINUTE 15:28 VOLUME
-    # > 15:29 VOLUME
+    # 1m 15:28 VOLUME > 15:29 VOLUME
     # ========================================================
 
-    volume_1528 = float(
-        day["15:28"]["volume"]
-    )
-
-    volume_1529 = float(
-        day["15:29"]["volume"]
-    )
-
     if not (
-        volume_1528
+        float(day["15:28"]["volume"])
         >
-        volume_1529
+        float(day["15:29"]["volume"])
     ):
         return None
 
     # ========================================================
-    # FINAL SIGNAL
-    #
-    # Direction = 3-minute 15:24
-    #              and 1-minute 15:28
+    # SIGNAL
     # ========================================================
 
     if dir_1524 == 1:
@@ -537,7 +517,7 @@ def backtest_stock(
         ]
 
         # ----------------------------------------------------
-        # Build signal-day dictionary
+        # Signal day dictionary
         # ----------------------------------------------------
 
         day = {}
@@ -547,7 +527,7 @@ def backtest_stock(
             day[row["hm"]] = row.to_dict()
 
         # ----------------------------------------------------
-        # Evaluate signal
+        # Check signal
         # ----------------------------------------------------
 
         signal = evaluate_signal_day(
@@ -558,7 +538,7 @@ def backtest_stock(
             continue
 
         # ----------------------------------------------------
-        # Build next-day dictionary
+        # Next trading day
         # ----------------------------------------------------
 
         next_day = {}
@@ -580,24 +560,8 @@ def backtest_stock(
             next_day["09:15"]["open"]
         )
 
-        if entry_price <= 0:
-            continue
-
         # ====================================================
-        # EXIT A
-        #
-        # NEXT DAY 09:20 CLOSE
-        # ====================================================
-
-        if "09:20" not in next_day:
-            continue
-
-        exit_0920 = float(
-            next_day["09:20"]["close"]
-        )
-
-        # ====================================================
-        # EXIT B
+        # EXIT
         #
         # NEXT DAY 15:29 CLOSE
         # ====================================================
@@ -605,48 +569,33 @@ def backtest_stock(
         if "15:29" not in next_day:
             continue
 
-        exit_1529 = float(
+        exit_price = float(
             next_day["15:29"]["close"]
         )
 
+        if entry_price <= 0:
+            continue
+
         # ====================================================
-        # RETURN — 09:20 EXIT
+        # RETURN
         # ====================================================
 
         if signal["direction"] == "LONG":
 
-            return_0920 = (
-                exit_0920 -
+            return_pct = (
+                exit_price -
                 entry_price
             ) / entry_price * 100
 
         else:
 
-            return_0920 = (
+            return_pct = (
                 entry_price -
-                exit_0920
+                exit_price
             ) / entry_price * 100
 
         # ====================================================
-        # RETURN — 15:29 EXIT
-        # ====================================================
-
-        if signal["direction"] == "LONG":
-
-            return_1529 = (
-                exit_1529 -
-                entry_price
-            ) / entry_price * 100
-
-        else:
-
-            return_1529 = (
-                entry_price -
-                exit_1529
-            ) / entry_price * 100
-
-        # ====================================================
-        # SAVE BOTH RESULTS
+        # SAVE
         # ====================================================
 
         trades.append({
@@ -659,27 +608,18 @@ def backtest_stock(
 
             "direction": signal["direction"],
 
-            "entry_09:15_open": entry_price,
+            "entry_09:15_open":
+                entry_price,
 
-            "exit_09:20_close": exit_0920,
+            "exit_15:29_close":
+                exit_price,
 
-            "return_09:20_pct":
-                return_0920,
+            "return_pct":
+                return_pct,
 
-            "result_09:20": (
+            "result": (
                 "WIN"
-                if return_0920 > 0
-                else "LOSS"
-            ),
-
-            "exit_15:29_close": exit_1529,
-
-            "return_15:29_pct":
-                return_1529,
-
-            "result_15:29": (
-                "WIN"
-                if return_1529 > 0
+                if return_pct > 0
                 else "LOSS"
             )
         })
@@ -692,16 +632,10 @@ def backtest_stock(
 # ============================================================
 
 def calculate_statistics(
-    returns
+    results
 ):
 
-    returns = pd.Series(
-        returns
-    ).dropna()
-
-    total = len(
-        returns
-    )
+    total = len(results)
 
     if total == 0:
 
@@ -719,11 +653,11 @@ def calculate_statistics(
         }
 
     wins = (
-        returns > 0
+        results["result"] == "WIN"
     ).sum()
 
     losses = (
-        returns <= 0
+        results["result"] == "LOSS"
     ).sum()
 
     win_rate = (
@@ -733,32 +667,34 @@ def calculate_statistics(
     )
 
     average = (
-        returns.mean()
+        results["return_pct"].mean()
     )
 
     median = (
-        returns.median()
+        results["return_pct"].median()
     )
 
     total_return = (
-        returns.sum()
+        results["return_pct"].sum()
     )
 
     best = (
-        returns.max()
+        results["return_pct"].max()
     )
 
     worst = (
-        returns.min()
+        results["return_pct"].min()
     )
 
-    gross_profit = returns[
-        returns > 0
+    gross_profit = results.loc[
+        results["return_pct"] > 0,
+        "return_pct"
     ].sum()
 
     gross_loss = abs(
-        returns[
-            returns <= 0
+        results.loc[
+            results["return_pct"] < 0,
+            "return_pct"
         ].sum()
     )
 
@@ -793,11 +729,11 @@ def calculate_statistics(
 
 def print_statistics(
     title,
-    returns
+    results
 ):
 
     stats = calculate_statistics(
-        returns
+        results
     )
 
     print("\n")
@@ -857,18 +793,16 @@ def print_statistics(
 
 
 # ============================================================
-# PRINT LONG / SHORT
+# LONG / SHORT BREAKDOWN
 # ============================================================
 
-def print_direction_statistics(
-    results,
-    return_column,
-    title
+def print_direction_breakdown(
+    results
 ):
 
     print("\n")
     print("=" * 70)
-    print(title)
+    print("LONG / SHORT BREAKDOWN")
     print("=" * 70)
 
     for side in [
@@ -877,16 +811,12 @@ def print_direction_statistics(
     ]:
 
         subset = results[
-            results["direction"]
-            == side
+            results["direction"] == side
         ]
-
-        if subset.empty:
-            continue
 
         print_statistics(
             side,
-            subset[return_column]
+            subset
         )
 
 
@@ -898,54 +828,52 @@ def main():
 
     print("\n")
     print("=" * 70)
-    print("NEW STRATEGY — TWO EXIT BACKTEST")
+    print("ALIGNED 5M + 3M + 1M STRATEGY BACKTEST")
     print("=" * 70)
 
-    print("\n5-MINUTE CONDITIONS:")
+    print("\nCORE LOGIC:")
 
     print(
-        "15:20 and 15:25 = SAME TREND"
+        "5m 15:20 = 5m 15:25 trend"
     )
 
     print(
-        "15:25 volume > 15:20 volume"
-    )
-
-    print("\n3-MINUTE CONDITIONS:")
-
-    print(
-        "15:24 volume > 15:27 volume"
+        "5m 15:25 volume > 5m 15:20"
     )
 
     print(
-        "15:24 = REFERENCE TREND"
-    )
-
-    print("\n1-MINUTE CONDITIONS:")
-
-    print(
-        "15:28 trend = 3-minute 15:24 trend"
+        "3m 15:24 = 5m trend"
     )
 
     print(
-        "15:28 volume > 15:29 volume"
-    )
-
-    print("\nTRADE DIRECTION:")
-
-    print(
-        "Direction = 3-minute 15:24 "
-        "and 1-minute 15:28 trend"
-    )
-
-    print("\nEXIT TESTS:")
-
-    print(
-        "TEST A: 09:15 OPEN -> 09:20 CLOSE"
+        "3m 15:24 volume > 3m 15:27"
     )
 
     print(
-        "TEST B: 09:15 OPEN -> 15:29 CLOSE"
+        "1m 15:28 = 3m 15:24 trend"
+    )
+
+    print(
+        "1m 15:28 volume > 1m 15:29"
+    )
+
+    print("\nFINAL TREND ALIGNMENT:")
+
+    print(
+        "5m 15:20"
+        " = 5m 15:25"
+        " = 3m 15:24"
+        " = 1m 15:28"
+    )
+
+    print("\nTRADE:")
+
+    print(
+        "ENTRY = NEXT TRADING DAY 09:15 OPEN"
+    )
+
+    print(
+        "EXIT  = NEXT TRADING DAY 15:29 CLOSE"
     )
 
     # ========================================================
@@ -998,7 +926,7 @@ def main():
     print("\n")
 
     # ========================================================
-    # CHECK
+    # NO TRADES
     # ========================================================
 
     if not all_trades:
@@ -1014,103 +942,56 @@ def main():
     )
 
     # ========================================================
-    # TEST A — 09:20
+    # OVERALL
     # ========================================================
 
     print_statistics(
-        "TEST A — 09:15 ENTRY / 09:20 EXIT",
-        results["return_09:20_pct"]
-    )
-
-    print_direction_statistics(
-        results,
-        "return_09:20_pct",
-        "TEST A — LONG / SHORT"
+        "FINAL BACKTEST RESULTS",
+        results
     )
 
     # ========================================================
-    # TEST B — 15:29
+    # LONG / SHORT
     # ========================================================
 
-    print_statistics(
-        "TEST B — 09:15 ENTRY / 15:29 EXIT",
-        results["return_15:29_pct"]
-    )
-
-    print_direction_statistics(
-        results,
-        "return_15:29_pct",
-        "TEST B — LONG / SHORT"
+    print_direction_breakdown(
+        results
     )
 
     # ========================================================
-    # DIRECT COMPARISON
+    # YEARLY BREAKDOWN
     # ========================================================
 
-    stats_0920 = calculate_statistics(
-        results["return_09:20_pct"]
-    )
-
-    stats_1529 = calculate_statistics(
-        results["return_15:29_pct"]
+    results["year"] = (
+        results["trade_date"]
+        .astype(str)
+        .str[:4]
     )
 
     print("\n")
     print("=" * 70)
-    print("EXIT COMPARISON")
+    print("YEARLY BREAKDOWN")
     print("=" * 70)
 
-    print(
-        "\n"
-        f"{'METRIC':<25}"
-        f"{'09:20 EXIT':>18}"
-        f"{'15:29 EXIT':>18}"
-    )
+    for year in sorted(
+        results["year"].unique()
+    ):
 
-    print("-" * 65)
+        yearly = results[
+            results["year"] == year
+        ]
 
-    print(
-        f"{'Trades':<25}"
-        f"{stats_0920['trades']:>18}"
-        f"{stats_1529['trades']:>18}"
-    )
-
-    print(
-        f"{'Win rate':<25}"
-        f"{stats_0920['win_rate']:>17.2f}%"
-        f"{stats_1529['win_rate']:>17.2f}%"
-    )
-
-    print(
-        f"{'Average trade':<25}"
-        f"{stats_0920['average']:>17.4f}%"
-        f"{stats_1529['average']:>17.4f}%"
-    )
-
-    print(
-        f"{'Median trade':<25}"
-        f"{stats_0920['median']:>17.4f}%"
-        f"{stats_1529['median']:>17.4f}%"
-    )
-
-    print(
-        f"{'Profit factor':<25}"
-        f"{stats_0920['profit_factor']:>18.3f}"
-        f"{stats_1529['profit_factor']:>18.3f}"
-    )
-
-    print(
-        f"{'Total raw return':<25}"
-        f"{stats_0920['total_return']:>17.2f}%"
-        f"{stats_1529['total_return']:>17.2f}%"
-    )
+        print_statistics(
+            str(year),
+            yearly
+        )
 
     # ========================================================
     # SAVE
     # ========================================================
 
     output_file = (
-        "new_strategy_two_exit_backtest.csv"
+        "aligned_5m_3m_1m_backtest.csv"
     )
 
     results.to_csv(
