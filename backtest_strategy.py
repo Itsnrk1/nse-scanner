@@ -16,7 +16,7 @@ DATA_URL = (
 
 
 # ============================================================
-# DIRECTION
+# CANDLE DIRECTION
 # ============================================================
 
 def direction(open_price, close_price):
@@ -194,17 +194,63 @@ def load_stock(z, filename):
 
 
 # ============================================================
+# BUILD 3-MINUTE CANDLE
+# ============================================================
+
+def three_minute_candle(
+    day,
+    start_time
+):
+
+    hour, minute = map(
+        int,
+        start_time.split(":")
+    )
+
+    times = [
+        f"{hour:02d}:{minute + i:02d}"
+        for i in range(3)
+    ]
+
+    rows = []
+
+    for t in times:
+
+        if t not in day:
+            return None
+
+        rows.append(
+            day[t]
+        )
+
+    return {
+        "open": float(
+            rows[0]["open"]
+        ),
+
+        "close": float(
+            rows[-1]["close"]
+        ),
+
+        "volume": sum(
+            float(row["volume"])
+            for row in rows
+        )
+    }
+
+
+# ============================================================
 # BUILD 5-MINUTE CANDLE
 # ============================================================
 
 def five_minute_candle(
     day,
-    start_minute
+    start_time
 ):
 
     hour, minute = map(
         int,
-        start_minute.split(":")
+        start_time.split(":")
     )
 
     times = [
@@ -240,7 +286,7 @@ def five_minute_candle(
 
 
 # ============================================================
-# EVALUATE SIGNAL
+# EVALUATE SIGNAL DAY
 # ============================================================
 
 def evaluate_signal_day(day):
@@ -313,7 +359,58 @@ def evaluate_signal_day(day):
         return None
 
     # ========================================================
-    # 1-MINUTE 15:28 AND 15:29
+    # 3-MINUTE 15:24
+    # ========================================================
+
+    candle_1524 = three_minute_candle(
+        day,
+        "15:24"
+    )
+
+    # ========================================================
+    # 3-MINUTE 15:27
+    # ========================================================
+
+    candle_1527 = three_minute_candle(
+        day,
+        "15:27"
+    )
+
+    if (
+        candle_1524 is None
+        or
+        candle_1527 is None
+    ):
+        return None
+
+    # ========================================================
+    # 3-MINUTE 15:24 TREND
+    # ========================================================
+
+    dir_1524 = direction(
+        candle_1524["open"],
+        candle_1524["close"]
+    )
+
+    if dir_1524 == 0:
+        return None
+
+    # ========================================================
+    # CONDITION 3
+    #
+    # 3-MINUTE 15:24 VOLUME
+    # > 3-MINUTE 15:27 VOLUME
+    # ========================================================
+
+    if not (
+        candle_1524["volume"]
+        >
+        candle_1527["volume"]
+    ):
+        return None
+
+    # ========================================================
+    # 1-MINUTE 15:28
     # ========================================================
 
     if "15:28" not in day:
@@ -327,44 +424,49 @@ def evaluate_signal_day(day):
         day["15:28"]["close"]
     )
 
-    dir_1529 = direction(
-        day["15:29"]["open"],
-        day["15:29"]["close"]
-    )
-
     if dir_1528 == 0:
-        return None
-
-    if dir_1529 == 0:
-        return None
-
-    # ========================================================
-    # CONDITION 3
-    #
-    # 15:28 MUST MATCH 5-MIN 15:20
-    # ========================================================
-
-    if dir_1528 != dir_1520:
         return None
 
     # ========================================================
     # CONDITION 4
     #
-    # 15:28 VOLUME > 15:29 VOLUME
+    # 1-MINUTE 15:28 TREND
+    # = 3-MINUTE 15:24 TREND
     # ========================================================
 
+    if dir_1528 != dir_1524:
+        return None
+
+    # ========================================================
+    # CONDITION 5
+    #
+    # 1-MINUTE 15:28 VOLUME
+    # > 15:29 VOLUME
+    # ========================================================
+
+    volume_1528 = float(
+        day["15:28"]["volume"]
+    )
+
+    volume_1529 = float(
+        day["15:29"]["volume"]
+    )
+
     if not (
-        float(day["15:28"]["volume"])
+        volume_1528
         >
-        float(day["15:29"]["volume"])
+        volume_1529
     ):
         return None
 
     # ========================================================
-    # DETERMINE DIRECTION
+    # FINAL SIGNAL
+    #
+    # Direction = 3-minute 15:24
+    #              and 1-minute 15:28
     # ========================================================
 
-    if dir_1520 == 1:
+    if dir_1524 == 1:
 
         trade_direction = "LONG"
 
@@ -372,22 +474,8 @@ def evaluate_signal_day(day):
 
         trade_direction = "SHORT"
 
-    # ========================================================
-    # DETERMINE 15:28 / 15:29 RELATIONSHIP
-    # ========================================================
-
-    if dir_1528 == dir_1529:
-
-        candle_relationship = "SAME"
-
-    else:
-
-        candle_relationship = "OPPOSITE"
-
     return {
-        "direction": trade_direction,
-        "candle_relationship":
-            candle_relationship
+        "direction": trade_direction
     }
 
 
@@ -414,10 +502,6 @@ def backtest_stock(
         "_1m.csv.gz",
         ""
     )
-
-    # --------------------------------------------------------
-    # Group by date
-    # --------------------------------------------------------
 
     grouped = {
         date: group
@@ -496,8 +580,24 @@ def backtest_stock(
             next_day["09:15"]["open"]
         )
 
+        if entry_price <= 0:
+            continue
+
         # ====================================================
-        # EXIT
+        # EXIT A
+        #
+        # NEXT DAY 09:20 CLOSE
+        # ====================================================
+
+        if "09:20" not in next_day:
+            continue
+
+        exit_0920 = float(
+            next_day["09:20"]["close"]
+        )
+
+        # ====================================================
+        # EXIT B
         #
         # NEXT DAY 15:29 CLOSE
         # ====================================================
@@ -505,33 +605,48 @@ def backtest_stock(
         if "15:29" not in next_day:
             continue
 
-        exit_price = float(
+        exit_1529 = float(
             next_day["15:29"]["close"]
         )
 
-        if entry_price <= 0:
-            continue
-
         # ====================================================
-        # CALCULATE RETURN
+        # RETURN — 09:20 EXIT
         # ====================================================
 
         if signal["direction"] == "LONG":
 
-            return_pct = (
-                exit_price -
+            return_0920 = (
+                exit_0920 -
                 entry_price
             ) / entry_price * 100
 
         else:
 
-            return_pct = (
+            return_0920 = (
                 entry_price -
-                exit_price
+                exit_0920
             ) / entry_price * 100
 
         # ====================================================
-        # SAVE TRADE
+        # RETURN — 15:29 EXIT
+        # ====================================================
+
+        if signal["direction"] == "LONG":
+
+            return_1529 = (
+                exit_1529 -
+                entry_price
+            ) / entry_price * 100
+
+        else:
+
+            return_1529 = (
+                entry_price -
+                exit_1529
+            ) / entry_price * 100
+
+        # ====================================================
+        # SAVE BOTH RESULTS
         # ====================================================
 
         trades.append({
@@ -544,18 +659,27 @@ def backtest_stock(
 
             "direction": signal["direction"],
 
-            "relationship":
-                signal["candle_relationship"],
+            "entry_09:15_open": entry_price,
 
-            "entry": entry_price,
+            "exit_09:20_close": exit_0920,
 
-            "exit": exit_price,
+            "return_09:20_pct":
+                return_0920,
 
-            "return_pct": return_pct,
-
-            "result": (
+            "result_09:20": (
                 "WIN"
-                if return_pct > 0
+                if return_0920 > 0
+                else "LOSS"
+            ),
+
+            "exit_15:29_close": exit_1529,
+
+            "return_15:29_pct":
+                return_1529,
+
+            "result_15:29": (
+                "WIN"
+                if return_1529 > 0
                 else "LOSS"
             )
         })
@@ -568,10 +692,16 @@ def backtest_stock(
 # ============================================================
 
 def calculate_statistics(
-    results
+    returns
 ):
 
-    total = len(results)
+    returns = pd.Series(
+        returns
+    ).dropna()
+
+    total = len(
+        returns
+    )
 
     if total == 0:
 
@@ -589,46 +719,46 @@ def calculate_statistics(
         }
 
     wins = (
-        results["result"] == "WIN"
+        returns > 0
     ).sum()
 
     losses = (
-        results["result"] == "LOSS"
+        returns <= 0
     ).sum()
 
     win_rate = (
-        wins / total * 100
+        wins /
+        total *
+        100
     )
 
     average = (
-        results["return_pct"].mean()
+        returns.mean()
     )
 
     median = (
-        results["return_pct"].median()
+        returns.median()
     )
 
     total_return = (
-        results["return_pct"].sum()
+        returns.sum()
     )
 
     best = (
-        results["return_pct"].max()
+        returns.max()
     )
 
     worst = (
-        results["return_pct"].min()
+        returns.min()
     )
 
-    gross_profit = results.loc[
-        results["return_pct"] > 0,
-        "return_pct"
+    gross_profit = returns[
+        returns > 0
     ].sum()
 
     gross_loss = abs(
-        results.loc[
-            results["return_pct"] < 0,
-            "return_pct"
+        returns[
+            returns <= 0
         ].sum()
     )
 
@@ -663,17 +793,17 @@ def calculate_statistics(
 
 def print_statistics(
     title,
-    results
+    returns
 ):
 
     stats = calculate_statistics(
-        results
+        returns
     )
 
     print("\n")
-    print("-" * 70)
+    print("=" * 70)
     print(title)
-    print("-" * 70)
+    print("=" * 70)
 
     print(
         f"Trades        : "
@@ -727,6 +857,40 @@ def print_statistics(
 
 
 # ============================================================
+# PRINT LONG / SHORT
+# ============================================================
+
+def print_direction_statistics(
+    results,
+    return_column,
+    title
+):
+
+    print("\n")
+    print("=" * 70)
+    print(title)
+    print("=" * 70)
+
+    for side in [
+        "LONG",
+        "SHORT"
+    ]:
+
+        subset = results[
+            results["direction"]
+            == side
+        ]
+
+        if subset.empty:
+            continue
+
+        print_statistics(
+            side,
+            subset[return_column]
+        )
+
+
+# ============================================================
 # MAIN
 # ============================================================
 
@@ -734,51 +898,54 @@ def main():
 
     print("\n")
     print("=" * 70)
-    print("SHORT / LONG + 15:28 / 15:29 RELATIONSHIP TEST")
+    print("NEW STRATEGY — TWO EXIT BACKTEST")
     print("=" * 70)
 
-    print("\nCORE CONDITIONS:")
+    print("\n5-MINUTE CONDITIONS:")
+
     print(
-        "1. 5m 15:20 and 15:25 = SAME TREND"
+        "15:20 and 15:25 = SAME TREND"
     )
 
     print(
-        "2. 5m 15:25 volume > 15:20 volume"
+        "15:25 volume > 15:20 volume"
+    )
+
+    print("\n3-MINUTE CONDITIONS:")
+
+    print(
+        "15:24 volume > 15:27 volume"
     )
 
     print(
-        "3. 1m 15:28 = 5m 15:20 TREND"
+        "15:24 = REFERENCE TREND"
+    )
+
+    print("\n1-MINUTE CONDITIONS:")
+
+    print(
+        "15:28 trend = 3-minute 15:24 trend"
     )
 
     print(
-        "4. 1m 15:28 volume > 15:29 volume"
+        "15:28 volume > 15:29 volume"
     )
 
-    print("\nSPLIT INTO FOUR TESTS:")
+    print("\nTRADE DIRECTION:")
 
     print(
-        "A. SHORT + 15:28/15:29 SAME"
+        "Direction = 3-minute 15:24 "
+        "and 1-minute 15:28 trend"
     )
 
-    print(
-        "B. SHORT + 15:28/15:29 OPPOSITE"
-    )
+    print("\nEXIT TESTS:")
 
     print(
-        "C. LONG + 15:28/15:29 SAME"
-    )
-
-    print(
-        "D. LONG + 15:28/15:29 OPPOSITE"
-    )
-
-    print("\nTRADE:")
-    print(
-        "Entry = NEXT TRADING DAY 09:15 OPEN"
+        "TEST A: 09:15 OPEN -> 09:20 CLOSE"
     )
 
     print(
-        "Exit  = NEXT TRADING DAY 15:29 CLOSE"
+        "TEST B: 09:15 OPEN -> 15:29 CLOSE"
     )
 
     # ========================================================
@@ -798,11 +965,12 @@ def main():
     ]
 
     print(
-        f"\nStock files found: {len(files)}"
+        f"\nStock files found: "
+        f"{len(files)}"
     )
 
     # ========================================================
-    # PROCESS ALL STOCKS ONCE
+    # PROCESS
     # ========================================================
 
     all_trades = []
@@ -846,157 +1014,103 @@ def main():
     )
 
     # ========================================================
-    # OVERALL
+    # TEST A — 09:20
     # ========================================================
 
     print_statistics(
-        "ALL TRADES",
-        results
+        "TEST A — 09:15 ENTRY / 09:20 EXIT",
+        results["return_09:20_pct"]
+    )
+
+    print_direction_statistics(
+        results,
+        "return_09:20_pct",
+        "TEST A — LONG / SHORT"
     )
 
     # ========================================================
-    # SHORT - SAME
+    # TEST B — 15:29
     # ========================================================
-
-    short_same = results[
-        (
-            results["direction"]
-            == "SHORT"
-        )
-        &
-        (
-            results["relationship"]
-            == "SAME"
-        )
-    ]
 
     print_statistics(
-        "SHORT — 15:28 & 15:29 SAME TREND",
-        short_same
+        "TEST B — 09:15 ENTRY / 15:29 EXIT",
+        results["return_15:29_pct"]
+    )
+
+    print_direction_statistics(
+        results,
+        "return_15:29_pct",
+        "TEST B — LONG / SHORT"
     )
 
     # ========================================================
-    # SHORT - OPPOSITE
+    # DIRECT COMPARISON
     # ========================================================
 
-    short_opposite = results[
-        (
-            results["direction"]
-            == "SHORT"
-        )
-        &
-        (
-            results["relationship"]
-            == "OPPOSITE"
-        )
-    ]
-
-    print_statistics(
-        "SHORT — 15:28 & 15:29 OPPOSITE TREND",
-        short_opposite
+    stats_0920 = calculate_statistics(
+        results["return_09:20_pct"]
     )
 
-    # ========================================================
-    # LONG - SAME
-    # ========================================================
-
-    long_same = results[
-        (
-            results["direction"]
-            == "LONG"
-        )
-        &
-        (
-            results["relationship"]
-            == "SAME"
-        )
-    ]
-
-    print_statistics(
-        "LONG — 15:28 & 15:29 SAME TREND",
-        long_same
+    stats_1529 = calculate_statistics(
+        results["return_15:29_pct"]
     )
-
-    # ========================================================
-    # LONG - OPPOSITE
-    # ========================================================
-
-    long_opposite = results[
-        (
-            results["direction"]
-            == "LONG"
-        )
-        &
-        (
-            results["relationship"]
-            == "OPPOSITE"
-        )
-    ]
-
-    print_statistics(
-        "LONG — 15:28 & 15:29 OPPOSITE TREND",
-        long_opposite
-    )
-
-    # ========================================================
-    # COMPARISON TABLE
-    # ========================================================
 
     print("\n")
     print("=" * 70)
-    print("FOUR-WAY COMPARISON")
+    print("EXIT COMPARISON")
     print("=" * 70)
-
-    groups = [
-        (
-            "SHORT SAME",
-            short_same
-        ),
-        (
-            "SHORT OPPOSITE",
-            short_opposite
-        ),
-        (
-            "LONG SAME",
-            long_same
-        ),
-        (
-            "LONG OPPOSITE",
-            long_opposite
-        )
-    ]
 
     print(
         "\n"
-        f"{'SETUP':<25}"
-        f"{'TRADES':>10}"
-        f"{'WIN%':>10}"
-        f"{'AVG%':>12}"
-        f"{'PF':>10}"
+        f"{'METRIC':<25}"
+        f"{'09:20 EXIT':>18}"
+        f"{'15:29 EXIT':>18}"
     )
 
-    print("-" * 70)
+    print("-" * 65)
 
-    for name, subset in groups:
+    print(
+        f"{'Trades':<25}"
+        f"{stats_0920['trades']:>18}"
+        f"{stats_1529['trades']:>18}"
+    )
 
-        stats = calculate_statistics(
-            subset
-        )
+    print(
+        f"{'Win rate':<25}"
+        f"{stats_0920['win_rate']:>17.2f}%"
+        f"{stats_1529['win_rate']:>17.2f}%"
+    )
 
-        print(
-            f"{name:<25}"
-            f"{stats['trades']:>10}"
-            f"{stats['win_rate']:>9.2f}%"
-            f"{stats['average']:>11.4f}%"
-            f"{stats['profit_factor']:>10.3f}"
-        )
+    print(
+        f"{'Average trade':<25}"
+        f"{stats_0920['average']:>17.4f}%"
+        f"{stats_1529['average']:>17.4f}%"
+    )
+
+    print(
+        f"{'Median trade':<25}"
+        f"{stats_0920['median']:>17.4f}%"
+        f"{stats_1529['median']:>17.4f}%"
+    )
+
+    print(
+        f"{'Profit factor':<25}"
+        f"{stats_0920['profit_factor']:>18.3f}"
+        f"{stats_1529['profit_factor']:>18.3f}"
+    )
+
+    print(
+        f"{'Total raw return':<25}"
+        f"{stats_0920['total_return']:>17.2f}%"
+        f"{stats_1529['total_return']:>17.2f}%"
+    )
 
     # ========================================================
-    # SAVE RESULTS
+    # SAVE
     # ========================================================
 
     output_file = (
-        "four_way_short_long_backtest.csv"
+        "new_strategy_two_exit_backtest.csv"
     )
 
     results.to_csv(
