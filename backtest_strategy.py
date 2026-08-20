@@ -17,23 +17,35 @@ DATA_URL = (
 EXIT_TIME = "15:27"
 
 REQUIRED_TIMES = [
+    # Morning
     "09:15",
     "09:16",
     "09:17",
     "09:18",
     "09:19",
     "09:20",
+
+    # 3-minute EOD candles
+    "15:15",
+    "15:16",
+    "15:17",
+    "15:18",
+    "15:19",
+    "15:20",
+    "15:21",
+    "15:22",
+    "15:23",
     "15:24",
     "15:25",
     "15:26",
     "15:27",
     "15:28",
-    "15:29",
+    "15:29"
 ]
 
 
 # ============================================================
-# DOWNLOAD DATASET
+# DOWNLOAD DATA
 # ============================================================
 
 def download_dataset():
@@ -41,9 +53,6 @@ def download_dataset():
     print("=" * 70)
     print("DOWNLOADING NSE 1-MINUTE DATASET")
     print("=" * 70)
-
-    print("\nSource:")
-    print(DATA_URL)
 
     response = requests.get(
         DATA_URL,
@@ -74,15 +83,10 @@ def download_dataset():
 
             if total:
 
-                percent = (
-                    downloaded /
-                    total *
-                    100
-                )
+                percent = downloaded / total * 100
 
                 print(
-                    f"\rDownloaded: "
-                    f"{percent:.1f}%",
+                    f"\rDownloaded: {percent:.1f}%",
                     end=""
                 )
 
@@ -201,7 +205,7 @@ def load_stock(z, filename):
             return None
 
         # ----------------------------------------------------
-        # Price columns
+        # Prices
         # ----------------------------------------------------
 
         for column in [
@@ -245,13 +249,46 @@ def load_stock(z, filename):
 
 
 # ============================================================
-# EVALUATE NEW STRATEGY
+# COUNT MATCHING CANDLES
+# ============================================================
+
+def count_matching_directions(
+    day,
+    times,
+    reference_direction
+):
+
+    count = 0
+
+    for t in times:
+
+        if t not in day:
+            continue
+
+        candle_direction = direction(
+            day[t]["open"],
+            day[t]["close"]
+        )
+
+        if (
+            candle_direction != 0
+            and
+            candle_direction ==
+            reference_direction
+        ):
+            count += 1
+
+    return count
+
+
+# ============================================================
+# EVALUATE STRATEGY
 # ============================================================
 
 def evaluate_signal_day(day):
 
     # --------------------------------------------------------
-    # Make sure every required 1-minute candle exists
+    # Make sure all required candles exist
     # --------------------------------------------------------
 
     for required_time in REQUIRED_TIMES:
@@ -260,10 +297,14 @@ def evaluate_signal_day(day):
             return None
 
     # ========================================================
-    # 3-MINUTE 15:24 CANDLE
-    #
-    # 15:24 + 15:25 + 15:26
+    # 3-MINUTE EOD CANDLES
     # ========================================================
+
+    # --------------------------------------------------------
+    # Highlighted/reference candle = 15:24
+    #
+    # 15:24 = 15:24 + 15:25 + 15:26
+    # --------------------------------------------------------
 
     candle_1524 = three_minute(
         day,
@@ -274,11 +315,11 @@ def evaluate_signal_day(day):
         ]
     )
 
-    # ========================================================
-    # 3-MINUTE 15:27 CANDLE
+    # --------------------------------------------------------
+    # 15:27 candle
     #
     # 15:27 + 15:28 + 15:29
-    # ========================================================
+    # --------------------------------------------------------
 
     candle_1527 = three_minute(
         day,
@@ -296,10 +337,6 @@ def evaluate_signal_day(day):
     ):
         return None
 
-    # --------------------------------------------------------
-    # Direction of 15:24 and 15:27
-    # --------------------------------------------------------
-
     dir_1524 = direction(
         candle_1524["open"],
         candle_1524["close"]
@@ -313,11 +350,11 @@ def evaluate_signal_day(day):
     # ========================================================
     # CONDITION 1
     #
-    # 15:24 and 15:27 must be opposite trends.
+    # 15:24 and 15:27 must be opposite.
     #
-    # NEW volume rule:
+    # ORIGINAL FIRST BACKTEST VOLUME RULE:
     #
-    # 15:27 volume > 15:24 volume
+    # 15:24 volume > 15:27 volume
     # ========================================================
 
     condition_1 = (
@@ -327,21 +364,80 @@ def evaluate_signal_day(day):
         and
         dir_1524 != dir_1527
         and
-        candle_1527["volume"]
-        >
         candle_1524["volume"]
+        >
+        candle_1527["volume"]
     )
 
     if not condition_1:
         return None
 
     # ========================================================
-    # CONDITION 2
+    # NEW CONDITION 2
     #
-    # Same-day 3-minute:
+    # Five 3-minute candles:
     #
-    # 09:15 must match 15:27
-    # 09:18 must match 15:27
+    # 15:15
+    # 15:18
+    # 15:21
+    # 15:24  <-- HIGHLIGHTED
+    # 15:27
+    #
+    # At least TWO of the OTHER FOUR must match 15:24.
+    # ========================================================
+
+    three_minute_reference_times = [
+        "15:15",
+        "15:18",
+        "15:21",
+        "15:27"
+    ]
+
+    matching_3m = 0
+
+    for start_time in three_minute_reference_times:
+
+        # Convert HH:MM to following two minutes
+        hour, minute = map(
+            int,
+            start_time.split(":")
+        )
+
+        t1 = f"{hour:02d}:{minute:02d}"
+        t2 = f"{hour:02d}:{minute + 1:02d}"
+        t3 = f"{hour:02d}:{minute + 2:02d}"
+
+        candle = three_minute(
+            day,
+            [t1, t2, t3]
+        )
+
+        if candle is None:
+            continue
+
+        candle_dir = direction(
+            candle["open"],
+            candle["close"]
+        )
+
+        if (
+            candle_dir != 0
+            and
+            candle_dir == dir_1524
+        ):
+            matching_3m += 1
+
+    condition_2 = (
+        matching_3m >= 2
+    )
+
+    if not condition_2:
+        return None
+
+    # ========================================================
+    # MORNING 3-MINUTE CONFIRMATION
+    #
+    # 09:15 and 09:18 must match 15:24.
     # ========================================================
 
     candle_0915_3m = three_minute(
@@ -372,51 +468,98 @@ def evaluate_signal_day(day):
         candle_0918_3m["close"]
     )
 
-    condition_2 = (
-        dir_0915_3m == dir_1527
-        and
-        dir_0918_3m == dir_1527
-    )
-
-    if not condition_2:
-        return None
-
-    # ========================================================
-    # CONDITION 3
-    #
-    # 1-minute 15:29 must match
-    # 3-minute 15:27.
-    #
-    # NEW volume rule:
-    #
-    # 15:29 volume > 15:28 volume
-    # ========================================================
-
-    dir_1529 = direction(
-        day["15:29"]["open"],
-        day["15:29"]["close"]
-    )
-
     condition_3 = (
-        dir_1529 != 0
+        dir_0915_3m == dir_1524
         and
-        dir_1529 == dir_1527
-        and
-        float(day["15:29"]["volume"])
-        >
-        float(day["15:28"]["volume"])
+        dir_0918_3m == dir_1524
     )
 
     if not condition_3:
         return None
 
     # ========================================================
+    # 1-MINUTE EOD
+    #
+    # Highlighted/reference candle = 15:28
+    # ========================================================
+
+    dir_1528 = direction(
+        day["15:28"]["open"],
+        day["15:28"]["close"]
+    )
+
+    # ========================================================
     # CONDITION 4
     #
-    # Same-day 1-minute:
+    # 15:28 must match 3-min 15:24.
     #
-    # 09:15 must match 15:29
-    # 09:16 must match 15:29
+    # ORIGINAL FIRST BACKTEST:
+    #
+    # 15:28 trend = 15:24 trend
+    # 15:28 volume > 15:29 volume
+    # ========================================================
+
+    condition_4 = (
+        dir_1528 != 0
+        and
+        dir_1528 == dir_1524
+        and
+        float(day["15:28"]["volume"])
+        >
+        float(day["15:29"]["volume"])
+    )
+
+    if not condition_4:
+        return None
+
+    # ========================================================
+    # NEW CONDITION 5
+    #
+    # Five 1-minute candles:
+    #
+    # 15:25
+    # 15:26
+    # 15:27
+    # 15:28  <-- HIGHLIGHTED
+    # 15:29
+    #
+    # At least TWO of the OTHER FOUR must match 15:28.
+    # ========================================================
+
+    one_minute_reference_times = [
+        "15:25",
+        "15:26",
+        "15:27",
+        "15:29"
+    ]
+
+    matching_1m = 0
+
+    for t in one_minute_reference_times:
+
+        candle_dir = direction(
+            day[t]["open"],
+            day[t]["close"]
+        )
+
+        if (
+            candle_dir != 0
+            and
+            candle_dir == dir_1528
+        ):
+            matching_1m += 1
+
+    condition_5 = (
+        matching_1m >= 2
+    )
+
+    if not condition_5:
+        return None
+
+    # ========================================================
+    # MORNING 1-MINUTE CONFIRMATION
+    #
+    # 09:15 and 09:16 must match 15:28.
     # ========================================================
 
     dir_0915_1m = direction(
@@ -429,20 +572,20 @@ def evaluate_signal_day(day):
         day["09:16"]["close"]
     )
 
-    condition_4 = (
-        dir_0915_1m == dir_1529
+    condition_6 = (
+        dir_0915_1m == dir_1528
         and
-        dir_0916_1m == dir_1529
+        dir_0916_1m == dir_1528
     )
 
-    if not condition_4:
+    if not condition_6:
         return None
 
     # ========================================================
-    # SIGNAL PASSED
+    # FINAL SIGNAL
     # ========================================================
 
-    if dir_1527 == 1:
+    if dir_1524 == 1:
 
         trade_direction = "LONG"
 
@@ -451,7 +594,9 @@ def evaluate_signal_day(day):
         trade_direction = "SHORT"
 
     return {
-        "direction": trade_direction
+        "direction": trade_direction,
+        "matching_3m": matching_3m,
+        "matching_1m": matching_1m
     }
 
 
@@ -476,10 +621,6 @@ def backtest_stock(z, filename):
         ""
     )
 
-    # --------------------------------------------------------
-    # Group data by trading date
-    # --------------------------------------------------------
-
     grouped = {
         date: group
         for date, group
@@ -493,14 +634,14 @@ def backtest_stock(z, filename):
     trades = []
 
     # --------------------------------------------------------
-    # Every signal day needs a following
-    # trading day.
+    # Every signal day
     # --------------------------------------------------------
 
     for i, signal_date in enumerate(
         dates
     ):
 
+        # Need next trading day
         if i + 1 >= len(dates):
             break
 
@@ -525,7 +666,7 @@ def backtest_stock(z, filename):
             day[row["hm"]] = row.to_dict()
 
         # ----------------------------------------------------
-        # Evaluate new strategy
+        # Evaluate signal
         # ----------------------------------------------------
 
         signal = evaluate_signal_day(
@@ -546,7 +687,7 @@ def backtest_stock(z, filename):
             next_day[row["hm"]] = row.to_dict()
 
         # ----------------------------------------------------
-        # Need next-day 09:15 and 15:27
+        # Required next-day candles
         # ----------------------------------------------------
 
         if "09:15" not in next_day:
@@ -579,7 +720,7 @@ def backtest_stock(z, filename):
             continue
 
         # ====================================================
-        # CALCULATE RETURN
+        # RETURN
         # ====================================================
 
         if signal["direction"] == "LONG":
@@ -610,6 +751,14 @@ def backtest_stock(z, filename):
 
             "direction": signal["direction"],
 
+            "3m_matching_candles": signal[
+                "matching_3m"
+            ],
+
+            "1m_matching_candles": signal[
+                "matching_1m"
+            ],
+
             "entry_09:15_open": entry_price,
 
             "exit_15:27_close": exit_price,
@@ -637,35 +786,67 @@ def main():
     print("UPDATED STRATEGY BACKTEST")
     print("=" * 70)
 
-    print("\nNEW RULES:")
+    print("\nCORE LOGIC:")
+
     print(
-        "3-min 15:24 vs 15:27 = opposite"
-    )
-    print(
-        "15:27 volume > 15:24 volume"
-    )
-    print(
-        "3-min 09:15 & 09:18 = 15:27 trend"
-    )
-    print(
-        "1-min 15:29 = 15:27 trend"
-    )
-    print(
-        "15:29 volume > 15:28 volume"
-    )
-    print(
-        "1-min 09:15 & 09:16 = 15:29 trend"
-    )
-    print(
-        "Entry = next trading day 09:15 OPEN"
-    )
-    print(
-        "Exit = next trading day 15:27 CLOSE"
+        "3-min highlighted candle = 15:24"
     )
 
-    # --------------------------------------------------------
-    # Download
-    # --------------------------------------------------------
+    print(
+        "3-min 15:24 and 15:27 = opposite"
+    )
+
+    print(
+        "3-min 15:24 volume > 15:27 volume"
+    )
+
+    print(
+        "3-min 09:15 & 09:18 = 15:24 trend"
+    )
+
+    print(
+        "1-min highlighted candle = 15:28"
+    )
+
+    print(
+        "1-min 15:28 = 3-min 15:24 trend"
+    )
+
+    print(
+        "1-min 15:28 volume > 15:29 volume"
+    )
+
+    print(
+        "1-min 09:15 & 09:16 = 15:28 trend"
+    )
+
+    print("\nNEW CONDITIONS:")
+
+    print(
+        "3-min: at least 2 of "
+        "15:15, 15:18, 15:21, 15:27 "
+        "match 15:24"
+    )
+
+    print(
+        "1-min: at least 2 of "
+        "15:25, 15:26, 15:27, 15:29 "
+        "match 15:28"
+    )
+
+    print("\nTRADE:")
+
+    print(
+        "Entry = NEXT trading day 09:15 OPEN"
+    )
+
+    print(
+        "Exit = NEXT trading day 15:27 CLOSE"
+    )
+
+    # ========================================================
+    # DOWNLOAD
+    # ========================================================
 
     zip_bytes = download_dataset()
 
@@ -683,9 +864,9 @@ def main():
         f"\nStock files found: {len(files)}"
     )
 
-    # --------------------------------------------------------
-    # Process all stocks
-    # --------------------------------------------------------
+    # ========================================================
+    # PROCESS ALL STOCKS
+    # ========================================================
 
     all_trades = []
 
@@ -711,9 +892,9 @@ def main():
 
     print("\n")
 
-    # --------------------------------------------------------
-    # Check results
-    # --------------------------------------------------------
+    # ========================================================
+    # CHECK
+    # ========================================================
 
     if not all_trades:
 
@@ -727,9 +908,9 @@ def main():
         all_trades
     )
 
-    # --------------------------------------------------------
-    # Statistics
-    # --------------------------------------------------------
+    # ========================================================
+    # STATISTICS
+    # ========================================================
 
     total_trades = len(
         results
@@ -769,9 +950,9 @@ def main():
         results["return_pct"].min()
     )
 
-    # --------------------------------------------------------
-    # Profit factor
-    # --------------------------------------------------------
+    # ========================================================
+    # PROFIT FACTOR
+    # ========================================================
 
     gross_profit = results.loc[
         results["return_pct"] > 0,
@@ -846,7 +1027,7 @@ def main():
     )
 
     # ========================================================
-    # LONG / SHORT
+    # LONG / SHORT BREAKDOWN
     # ========================================================
 
     print("\n")
@@ -1010,11 +1191,11 @@ def main():
         )
 
     # ========================================================
-    # SAVE RESULTS
+    # SAVE CSV
     # ========================================================
 
     output_file = (
-        "updated_strategy_backtest.csv"
+        "majority_confirmation_backtest.csv"
     )
 
     results.to_csv(
