@@ -16,7 +16,7 @@ DATA_URL = (
 
 
 # ============================================================
-# CANDLE DIRECTION
+# DIRECTION
 # ============================================================
 
 def direction(open_price, close_price):
@@ -31,7 +31,7 @@ def direction(open_price, close_price):
 
 
 # ============================================================
-# DOWNLOAD DATASET
+# DOWNLOAD DATA
 # ============================================================
 
 def download_dataset():
@@ -200,63 +200,7 @@ def load_stock(z, filename):
 
 
 # ============================================================
-# BUILD 5-MINUTE CANDLE
-# ============================================================
-
-def five_minute_candle(
-    day,
-    start_time
-):
-
-    hour, minute = map(
-        int,
-        start_time.split(":")
-    )
-
-    times = [
-        f"{hour:02d}:{minute + i:02d}"
-        for i in range(5)
-    ]
-
-    rows = []
-
-    for t in times:
-
-        if t not in day:
-            return None
-
-        rows.append(
-            day[t]
-        )
-
-    return {
-        "open": float(
-            rows[0]["open"]
-        ),
-
-        "high": max(
-            float(row["high"])
-            for row in rows
-        ),
-
-        "low": min(
-            float(row["low"])
-            for row in rows
-        ),
-
-        "close": float(
-            rows[-1]["close"]
-        ),
-
-        "volume": sum(
-            float(row["volume"])
-            for row in rows
-        )
-    }
-
-
-# ============================================================
-# BUILD 15-MINUTE CANDLE
+# BUILD 15-MINUTE CANDLE FROM 1-MINUTE DATA
 # ============================================================
 
 def fifteen_minute_candle(
@@ -285,7 +229,13 @@ def fifteen_minute_candle(
             day[t]
         )
 
+    # IMPORTANT:
+    # Open = first 1-minute candle open
+    # Close = last 1-minute candle close
+    # Volume = sum of all 15 one-minute volumes
+
     return {
+
         "open": float(
             rows[0]["open"]
         ),
@@ -312,92 +262,83 @@ def fifteen_minute_candle(
 
 
 # ============================================================
-# EVALUATE SIGNAL DAY
+# EVALUATE COMMON CONDITIONS
 # ============================================================
 
-def evaluate_signal_day(day):
+def get_common_signal(day):
 
     # ========================================================
-    # 5-MINUTE 15:20
-    # 15:20 - 15:24
+    # REQUIRED 1-MINUTE CANDLES
     # ========================================================
 
-    candle_1520 = five_minute_candle(
-        day,
-        "15:20"
-    )
-
-    # ========================================================
-    # 5-MINUTE 15:25
-    # 15:25 - 15:29
-    # ========================================================
-
-    candle_1525 = five_minute_candle(
-        day,
-        "15:25"
-    )
-
-    if (
-        candle_1520 is None
-        or
-        candle_1525 is None
-    ):
+    if "15:28" not in day:
         return None
 
-    dir_1520 = direction(
-        candle_1520["open"],
-        candle_1520["close"]
-    )
-
-    dir_1525 = direction(
-        candle_1525["open"],
-        candle_1525["close"]
-    )
+    if "15:29" not in day:
+        return None
 
     # ========================================================
-    # CONDITION 1
+    # 1-MINUTE 15:28
+    # ========================================================
+
+    dir_1528 = direction(
+        day["15:28"]["open"],
+        day["15:28"]["close"]
+    )
+
+    if dir_1528 == 0:
+        return None
+
+    # ========================================================
+    # 1-MINUTE 15:29
+    # ========================================================
+
+    dir_1529 = direction(
+        day["15:29"]["open"],
+        day["15:29"]["close"]
+    )
+
+    if dir_1529 == 0:
+        return None
+
+    # ========================================================
+    # COMMON CONDITION 1
     #
-    # 5m 15:20 AND 15:25 SAME TREND
+    # 15:28 AND 15:29
+    # MUST BE SAME TREND
     # ========================================================
 
-    if dir_1520 == 0:
-        return None
-
-    if dir_1525 == 0:
-        return None
-
-    if dir_1520 != dir_1525:
+    if dir_1528 != dir_1529:
         return None
 
     # ========================================================
-    # CONDITION 2
+    # COMMON CONDITION 2
     #
-    # 5m 15:25 VOLUME > 15:20 VOLUME
+    # 15:28 VOLUME > 15:29 VOLUME
     # ========================================================
+
+    volume_1528 = float(
+        day["15:28"]["volume"]
+    )
+
+    volume_1529 = float(
+        day["15:29"]["volume"]
+    )
 
     if not (
-        candle_1525["volume"]
-        >
-        candle_1520["volume"]
+        volume_1528 >
+        volume_1529
     ):
         return None
 
     # ========================================================
-    # 15-MINUTE 15:00
-    #
-    # 15:00 - 15:14
+    # BUILD 15-MINUTE CANDLES
     # ========================================================
 
     candle_1500 = fifteen_minute_candle(
         day,
         "15:00"
     )
-
-    # ========================================================
-    # 15-MINUTE 15:15
-    #
-    # 15:15 - 15:29
-    # ========================================================
 
     candle_1515 = fifteen_minute_candle(
         day,
@@ -411,6 +352,10 @@ def evaluate_signal_day(day):
     ):
         return None
 
+    # ========================================================
+    # 15-MINUTE TRENDS
+    # ========================================================
+
     dir_1500 = direction(
         candle_1500["open"],
         candle_1500["close"]
@@ -421,81 +366,30 @@ def evaluate_signal_day(day):
         candle_1515["close"]
     )
 
-    # ========================================================
-    # CONDITION 3
-    #
-    # 15m 15:00 AND 15:15 SAME TREND
-    # ========================================================
-
     if dir_1500 == 0:
         return None
 
     if dir_1515 == 0:
         return None
 
-    if dir_1500 != dir_1515:
-        return None
-
     # ========================================================
-    # 1-MINUTE 15:28
-    # ========================================================
-
-    if "15:28" not in day:
-        return None
-
-    if "15:29" not in day:
-        return None
-
-    dir_1528 = direction(
-        day["15:28"]["open"],
-        day["15:28"]["close"]
-    )
-
-    if dir_1528 == 0:
-        return None
-
-    # ========================================================
-    # CONDITION 4
+    # COMMON CONDITION 3
     #
-    # 1m 15:28 VOLUME > 15:29 VOLUME
+    # 15:15 VOLUME > 15:00 VOLUME
     # ========================================================
 
     if not (
-        float(day["15:28"]["volume"])
+        candle_1515["volume"]
         >
-        float(day["15:29"]["volume"])
+        candle_1500["volume"]
     ):
         return None
 
-    # ========================================================
-    # FINAL TRADE DIRECTION
-    #
-    # IMPORTANT:
-    # Direction comes ONLY from 1m 15:28.
-    #
-    # There is NO requirement that:
-    #
-    # 5m trend = 15m trend
-    # 5m trend = 1m trend
-    # 15m trend = 1m trend
-    # ========================================================
-
-    if dir_1528 == 1:
-
-        trade_direction = "LONG"
-
-    else:
-
-        trade_direction = "SHORT"
-
     return {
-        "direction": trade_direction,
-
-        "trend_5m": dir_1520,
-
-        "trend_15m": dir_1500,
-
-        "trend_1m": dir_1528
+        "dir_1528": dir_1528,
+        "dir_1529": dir_1529,
+        "dir_1500": dir_1500,
+        "dir_1515": dir_1515
     }
 
 
@@ -523,6 +417,10 @@ def backtest_stock(
         ""
     )
 
+    # --------------------------------------------------------
+    # Group by date
+    # --------------------------------------------------------
+
     grouped = {
         date: group
         for date, group
@@ -533,7 +431,7 @@ def backtest_stock(
         grouped.keys()
     )
 
-    trades = []
+    results = []
 
     # ========================================================
     # LOOP THROUGH SIGNAL DAYS
@@ -557,7 +455,7 @@ def backtest_stock(
         ]
 
         # ----------------------------------------------------
-        # Signal day dictionary
+        # Build signal-day dictionary
         # ----------------------------------------------------
 
         day = {}
@@ -567,19 +465,19 @@ def backtest_stock(
             day[row["hm"]] = row.to_dict()
 
         # ----------------------------------------------------
-        # Evaluate signal
+        # Common conditions
         # ----------------------------------------------------
 
-        signal = evaluate_signal_day(
+        signal = get_common_signal(
             day
         )
 
         if signal is None:
             continue
 
-        # ----------------------------------------------------
-        # Next trading day
-        # ----------------------------------------------------
+        # ====================================================
+        # BUILD NEXT DAY
+        # ====================================================
 
         next_day = {}
 
@@ -589,8 +487,6 @@ def backtest_stock(
 
         # ====================================================
         # ENTRY
-        #
-        # NEXT DAY 09:15 OPEN
         # ====================================================
 
         if "09:15" not in next_day:
@@ -600,10 +496,11 @@ def backtest_stock(
             next_day["09:15"]["open"]
         )
 
+        if entry_price <= 0:
+            continue
+
         # ====================================================
         # EXIT
-        #
-        # NEXT DAY 15:29 CLOSE
         # ====================================================
 
         if "15:29" not in next_day:
@@ -613,14 +510,16 @@ def backtest_stock(
             next_day["15:29"]["close"]
         )
 
-        if entry_price <= 0:
-            continue
-
         # ====================================================
-        # CALCULATE RETURN
+        # DIRECTION
+        #
+        # Trade direction is the aligned
+        # 1-minute 15:28 / 15:29 trend.
         # ====================================================
 
-        if signal["direction"] == "LONG":
+        if signal["dir_1528"] == 1:
+
+            trade_direction = "LONG"
 
             return_pct = (
                 exit_price -
@@ -629,51 +528,150 @@ def backtest_stock(
 
         else:
 
+            trade_direction = "SHORT"
+
             return_pct = (
                 entry_price -
                 exit_price
             ) / entry_price * 100
 
         # ====================================================
-        # SAVE TRADE
+        # BACKTEST 1
+        #
+        # BOTH 15-MINUTE CANDLES MUST ALIGN
+        #
+        # 1m 15:28
+        #     =
+        # 1m 15:29
+        #     =
+        # 15m 15:00
+        #     =
+        # 15m 15:15
         # ====================================================
 
-        trades.append({
+        both_align = (
+            signal["dir_1528"]
+            ==
+            signal["dir_1500"]
+            ==
+            signal["dir_1515"]
+        )
 
-            "symbol": symbol,
+        # ====================================================
+        # BACKTEST 2
+        #
+        # ONLY 15:15 MUST ALIGN
+        #
+        # 1m 15:28
+        #     =
+        # 1m 15:29
+        #     =
+        # 15m 15:15
+        #
+        # 15m 15:00 trend can be different.
+        # ====================================================
 
-            "signal_date": signal_date,
+        only_1515_align = (
+            signal["dir_1528"]
+            ==
+            signal["dir_1515"]
+        )
 
-            "trade_date": trade_date,
+        # ====================================================
+        # SAVE ONLY WHEN APPLICABLE
+        # ====================================================
 
-            "direction": signal["direction"],
+        if both_align:
 
-            "5m_trend":
-                signal["trend_5m"],
+            results.append({
 
-            "15m_trend":
-                signal["trend_15m"],
+                "test": "BOTH_15M_ALIGN",
 
-            "1m_15:28_trend":
-                signal["trend_1m"],
+                "symbol": symbol,
 
-            "entry_09:15_open":
-                entry_price,
+                "signal_date":
+                    signal_date,
 
-            "exit_15:29_close":
-                exit_price,
+                "trade_date":
+                    trade_date,
 
-            "return_pct":
-                return_pct,
+                "direction":
+                    trade_direction,
 
-            "result": (
-                "WIN"
-                if return_pct > 0
-                else "LOSS"
-            )
-        })
+                "1m_15:28_trend":
+                    signal["dir_1528"],
 
-    return trades
+                "1m_15:29_trend":
+                    signal["dir_1529"],
+
+                "15m_15:00_trend":
+                    signal["dir_1500"],
+
+                "15m_15:15_trend":
+                    signal["dir_1515"],
+
+                "entry_09:15_open":
+                    entry_price,
+
+                "exit_15:29_close":
+                    exit_price,
+
+                "return_pct":
+                    return_pct,
+
+                "result": (
+                    "WIN"
+                    if return_pct > 0
+                    else "LOSS"
+                )
+            })
+
+        elif only_1515_align:
+
+            results.append({
+
+                "test": "ONLY_15M_15:15_ALIGN",
+
+                "symbol": symbol,
+
+                "signal_date":
+                    signal_date,
+
+                "trade_date":
+                    trade_date,
+
+                "direction":
+                    trade_direction,
+
+                "1m_15:28_trend":
+                    signal["dir_1528"],
+
+                "1m_15:29_trend":
+                    signal["dir_1529"],
+
+                "15m_15:00_trend":
+                    signal["dir_1500"],
+
+                "15m_15:15_trend":
+                    signal["dir_1515"],
+
+                "entry_09:15_open":
+                    entry_price,
+
+                "exit_15:29_close":
+                    exit_price,
+
+                "return_pct":
+                    return_pct,
+
+                "result": (
+                    "WIN"
+                    if return_pct > 0
+                    else "LOSS"
+                )
+            })
+
+    return results
 
 
 # ============================================================
@@ -849,11 +847,6 @@ def print_direction_breakdown(
     results
 ):
 
-    print("\n")
-    print("=" * 70)
-    print("LONG / SHORT BREAKDOWN")
-    print("=" * 70)
-
     for side in [
         "LONG",
         "SHORT"
@@ -877,52 +870,40 @@ def main():
 
     print("\n")
     print("=" * 70)
-    print("5M + 15M + 1M STRATEGY BACKTEST")
+    print("15-MINUTE + 1-MINUTE TWO-WAY ALIGNMENT BACKTEST")
     print("=" * 70)
 
-    print("\n5-MINUTE CONDITIONS:")
+    print("\nCOMMON CONDITIONS:")
 
     print(
-        "15:20 and 15:25 = SAME TREND"
+        "1. 1m 15:28 and 15:29 = SAME TREND"
     )
 
     print(
-        "15:25 volume > 15:20 volume"
-    )
-
-    print("\n15-MINUTE CONDITIONS:")
-
-    print(
-        "15:00 and 15:15 = SAME TREND"
+        "2. 1m 15:28 volume > 15:29 volume"
     )
 
     print(
-        "NO 15-MINUTE VOLUME CONDITION"
+        "3. 15m 15:15 volume > 15m 15:00 volume"
     )
 
-    print("\n1-MINUTE CONDITIONS:")
+    print("\nBACKTEST 1:")
 
     print(
-        "15:28 = TRADE DIRECTION"
+        "1m 15:28 = 1m 15:29 "
+        "= 15m 15:00 = 15m 15:15"
     )
 
-    print(
-        "15:28 volume > 15:29 volume"
-    )
-
-    print("\nIMPORTANT:")
+    print("\nBACKTEST 2:")
 
     print(
-        "3-MINUTE CONDITIONS REMOVED"
-    )
-
-    print(
-        "NO CROSS-TIMEFRAME TREND ALIGNMENT"
+        "1m 15:28 = 1m 15:29 "
+        "= 15m 15:15"
     )
 
     print(
-        "1m 15:28 DOES NOT need to match "
-        "5m or 15m trend"
+        "15m 15:00 trend is NOT required "
+        "to align in Backtest 2"
     )
 
     print("\nTRADE:")
@@ -960,7 +941,7 @@ def main():
     # PROCESS
     # ========================================================
 
-    all_trades = []
+    all_results = []
 
     for number, filename in enumerate(
         files,
@@ -978,17 +959,17 @@ def main():
             filename
         )
 
-        all_trades.extend(
+        all_results.extend(
             trades
         )
 
     print("\n")
 
     # ========================================================
-    # NO TRADES
+    # NO RESULTS
     # ========================================================
 
-    if not all_trades:
+    if not all_results:
 
         print("=" * 70)
         print("NO TRADES FOUND")
@@ -997,77 +978,124 @@ def main():
         return
 
     results = pd.DataFrame(
-        all_trades
+        all_results
     )
 
     # ========================================================
-    # OVERALL RESULTS
+    # SPLIT TESTS
+    # ========================================================
+
+    both_align = results[
+        results["test"]
+        ==
+        "BOTH_15M_ALIGN"
+    ]
+
+    only_1515 = results[
+        results["test"]
+        ==
+        "ONLY_15M_15:15_ALIGN"
+    ]
+
+    # ========================================================
+    # TEST 1
     # ========================================================
 
     print_statistics(
-        "FINAL BACKTEST RESULTS",
-        results
+        "BACKTEST 1 — BOTH 15-MINUTE CANDLES ALIGN",
+        both_align
     )
 
-    # ========================================================
-    # LONG / SHORT
-    # ========================================================
+    print("\nLONG / SHORT:")
 
     print_direction_breakdown(
-        results
+        both_align
     )
 
     # ========================================================
-    # TREND RELATIONSHIP ANALYSIS
-    #
-    # This does NOT affect trade selection.
-    # It is only reported so we can see what happened.
+    # TEST 2
     # ========================================================
+
+    print_statistics(
+        "BACKTEST 2 — ONLY 15:15 ALIGNS",
+        only_1515
+    )
+
+    print("\nLONG / SHORT:")
+
+    print_direction_breakdown(
+        only_1515
+    )
+
+    # ========================================================
+    # COMPARISON
+    # ========================================================
+
+    stats_1 = calculate_statistics(
+        both_align
+    )
+
+    stats_2 = calculate_statistics(
+        only_1515
+    )
 
     print("\n")
     print("=" * 70)
-    print("TREND RELATIONSHIP")
+    print("TWO-BACKTEST COMPARISON")
     print("=" * 70)
 
-    results["5m_vs_15m"] = (
-        results["5m_trend"]
-        ==
-        results["15m_trend"]
+    print(
+        f"\n{'METRIC':<25}"
+        f"{'BOTH ALIGN':>18}"
+        f"{'ONLY 15:15':>18}"
     )
 
-    results["15m_vs_1m"] = (
-        results["15m_trend"]
-        ==
-        results["1m_15:28_trend"]
-    )
+    print("-" * 65)
 
-    results["5m_vs_1m"] = (
-        results["5m_trend"]
-        ==
-        results["1m_15:28_trend"]
+    print(
+        f"{'Trades':<25}"
+        f"{stats_1['trades']:>18}"
+        f"{stats_2['trades']:>18}"
     )
 
     print(
-        "5m and 15m same: "
-        f"{results['5m_vs_15m'].sum()} / "
-        f"{len(results)}"
+        f"{'Win rate':<25}"
+        f"{stats_1['win_rate']:>17.2f}%"
+        f"{stats_2['win_rate']:>17.2f}%"
     )
 
     print(
-        "15m and 1m same: "
-        f"{results['15m_vs_1m'].sum()} / "
-        f"{len(results)}"
+        f"{'Average trade':<25}"
+        f"{stats_1['average']:>17.4f}%"
+        f"{stats_2['average']:>17.4f}%"
     )
 
     print(
-        "5m and 1m same: "
-        f"{results['5m_vs_1m'].sum()} / "
-        f"{len(results)}"
+        f"{'Median trade':<25}"
+        f"{stats_1['median']:>17.4f}%"
+        f"{stats_2['median']:>17.4f}%"
+    )
+
+    print(
+        f"{'Profit factor':<25}"
+        f"{stats_1['profit_factor']:>18.3f}"
+        f"{stats_2['profit_factor']:>18.3f}"
+    )
+
+    print(
+        f"{'Total raw return':<25}"
+        f"{stats_1['total_return']:>17.2f}%"
+        f"{stats_2['total_return']:>17.2f}%"
     )
 
     # ========================================================
     # YEARLY BREAKDOWN
     # ========================================================
+
+    print("\n")
+    print("=" * 70)
+    print("YEARLY BREAKDOWN")
+    print("=" * 70)
 
     results["year"] = (
         results["trade_date"]
@@ -1075,30 +1103,46 @@ def main():
         .str[:4]
     )
 
-    print("\n")
-    print("=" * 70)
-    print("YEARLY BREAKDOWN")
-    print("=" * 70)
+    for test_name in [
+        "BOTH_15M_ALIGN",
+        "ONLY_15M_15:15_ALIGN"
+    ]:
 
-    for year in sorted(
-        results["year"].unique()
-    ):
-
-        yearly = results[
-            results["year"] == year
+        test_data = results[
+            results["test"] == test_name
         ]
 
-        print_statistics(
-            str(year),
-            yearly
+        print("\n")
+        print(
+            f"--- {test_name} ---"
         )
+
+        for year in sorted(
+            test_data["year"].unique()
+        ):
+
+            yearly = test_data[
+                test_data["year"] == year
+            ]
+
+            stats = calculate_statistics(
+                yearly
+            )
+
+            print(
+                f"{year}: "
+                f"Trades={stats['trades']} | "
+                f"Win={stats['win_rate']:.2f}% | "
+                f"Avg={stats['average']:.4f}% | "
+                f"PF={stats['profit_factor']:.3f}"
+            )
 
     # ========================================================
     # SAVE RESULTS
     # ========================================================
 
     output_file = (
-        "5m_15m_1m_strategy_backtest.csv"
+        "15m_1m_two_alignment_backtest.csv"
     )
 
     results.to_csv(
