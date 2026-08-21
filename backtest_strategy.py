@@ -17,41 +17,36 @@ DATA_URL = (
 
 TRAIN_PERCENT = 0.70
 
-# A pattern must have at least this many observations
-# in the training set before it can be considered.
 MIN_TRAIN_TRADES = 500
 
-# Show the best candidates
-TOP_PATTERNS = 30
+TOP_PER_TIMEFRAME = 15
 
-# Target we're searching for
 TARGET_WIN_RATE = 85.0
 
 
 # ============================================================
-# TREND
+# TIMEFRAMES
 # ============================================================
 
-def direction(open_price, close_price):
-
-    if close_price > open_price:
-        return "BULL"
-
-    if close_price < open_price:
-        return "BEAR"
-
-    return "DOJI"
+TIMEFRAMES = {
+    "1m": 1,
+    "2m": 2,
+    "3m": 3,
+    "5m": 5,
+    "10m": 10,
+    "15m": 15
+}
 
 
 # ============================================================
-# DOWNLOAD DATA
+# DOWNLOAD
 # ============================================================
 
 def download_dataset():
 
-    print("=" * 75)
+    print("=" * 80)
     print("DOWNLOADING NSE 1-MINUTE DATA")
-    print("=" * 75)
+    print("=" * 80)
 
     response = requests.get(
         DATA_URL,
@@ -118,10 +113,6 @@ def load_stock(z, filename):
         if df.empty:
             return None
 
-        # ----------------------------------------------------
-        # TIME
-        # ----------------------------------------------------
-
         df["datetime"] = pd.to_datetime(
             df["time"],
             unit="s",
@@ -140,28 +131,20 @@ def load_stock(z, filename):
             .dt.strftime("%H:%M")
         )
 
-        # ----------------------------------------------------
-        # OHLC
-        # ----------------------------------------------------
-
-        for column in [
+        for col in [
             "open",
             "high",
             "low",
             "close"
         ]:
 
-            if column not in df.columns:
+            if col not in df.columns:
                 return None
 
-            df[column] = pd.to_numeric(
-                df[column],
+            df[col] = pd.to_numeric(
+                df[col],
                 errors="coerce"
             )
-
-        # ----------------------------------------------------
-        # VOLUME
-        # ----------------------------------------------------
 
         if "Volume" in df.columns:
 
@@ -209,26 +192,58 @@ def load_stock(z, filename):
 
 
 # ============================================================
-# BUILD MULTI-MINUTE CANDLE
+# CREATE MINUTE LOOKUP
+# ============================================================
+
+def make_day_lookup(group):
+
+    lookup = {}
+
+    for _, row in group.iterrows():
+
+        lookup[row["hm"]] = {
+            "open":
+                float(row["open"]),
+
+            "high":
+                float(row["high"]),
+
+            "low":
+                float(row["low"]),
+
+            "close":
+                float(row["close"]),
+
+            "volume":
+                float(row["volume"])
+        }
+
+    return lookup
+
+
+# ============================================================
+# BUILD TIMEFRAME CANDLE
 # ============================================================
 
 def build_candle(
     day,
-    start_time,
+    start_minute,
     minutes
 ):
 
-    hour, minute = map(
-        int,
-        start_time.split(":")
-    )
+    hour = 15
 
     rows = []
 
     for i in range(minutes):
 
+        total_minute = (
+            start_minute + i
+        )
+
         timestamp = (
-            f"{hour:02d}:{minute + i:02d}"
+            f"{hour:02d}:"
+            f"{total_minute:02d}"
         )
 
         if timestamp not in day:
@@ -238,30 +253,33 @@ def build_candle(
             day[timestamp]
         )
 
+    if not rows:
+        return None
+
     return {
 
         "open":
-            float(rows[0]["open"]),
+            rows[0]["open"],
 
         "high":
             max(
-                float(x["high"])
-                for x in rows
+                r["high"]
+                for r in rows
             ),
 
         "low":
             min(
-                float(x["low"])
-                for x in rows
+                r["low"]
+                for r in rows
             ),
 
         "close":
-            float(rows[-1]["close"]),
+            rows[-1]["close"],
 
         "volume":
             sum(
-                float(x["volume"])
-                for x in rows
+                r["volume"]
+                for r in rows
             )
     }
 
@@ -270,17 +288,19 @@ def build_candle(
 # CANDLE STRUCTURE
 # ============================================================
 
-def candle_structure(candle):
+def structure(c):
 
-    open_price = candle["open"]
-    high = candle["high"]
-    low = candle["low"]
-    close = candle["close"]
+    if c is None:
+        return None
 
-    candle_range = high - low
+    candle_range = (
+        c["high"] -
+        c["low"]
+    )
 
     body = abs(
-        close - open_price
+        c["close"] -
+        c["open"]
     )
 
     if candle_range > 0:
@@ -291,24 +311,34 @@ def candle_structure(candle):
         )
 
         close_position = (
-            close - low
+            c["close"] -
+            c["low"]
         ) / candle_range
 
         upper_wick = (
-            high -
-            max(open_price, close)
+            c["high"] -
+            max(
+                c["open"],
+                c["close"]
+            )
         ) / candle_range
 
         lower_wick = (
-            min(open_price, close) -
-            low
+            min(
+                c["open"],
+                c["close"]
+            ) -
+            c["low"]
         ) / candle_range
 
     else:
 
         body_ratio = 0
+
         close_position = 0.5
+
         upper_wick = 0
+
         lower_wick = 0
 
     return {
@@ -325,458 +355,305 @@ def candle_structure(candle):
         "close_position":
             close_position,
 
-        "upper_wick_ratio":
+        "upper_wick":
             upper_wick,
 
-        "lower_wick_ratio":
+        "lower_wick":
             lower_wick
     }
 
 
 # ============================================================
-# FEATURES
+# DIRECTION
+# ============================================================
+
+def direction(c):
+
+    if c["close"] > c["open"]:
+        return "BULL"
+
+    if c["close"] < c["open"]:
+        return "BEAR"
+
+    return "DOJI"
+
+
+# ============================================================
+# BUILD TIMEFRAME CANDLES
+# ============================================================
+
+def build_timeframe_candles(
+    day,
+    minutes
+):
+
+    candles = {}
+
+    # We only need the final part of the day.
+    #
+    # Generate candles ending around 15:29.
+    #
+    # Each timeframe is aligned to NSE session-style
+    # minute boundaries ending before 15:30.
+
+    starts = []
+
+    if minutes == 1:
+
+        starts = [
+            25,
+            26,
+            27,
+            28,
+            29
+        ]
+
+    elif minutes == 2:
+
+        starts = [
+            19,
+            21,
+            23,
+            25,
+            27
+        ]
+
+    elif minutes == 3:
+
+        starts = [
+            15,
+            18,
+            21,
+            24,
+            27
+        ]
+
+    elif minutes == 5:
+
+        starts = [
+            10,
+            15,
+            20,
+            25
+        ]
+
+    elif minutes == 10:
+
+        starts = [
+            0,
+            10,
+            20
+        ]
+
+    elif minutes == 15:
+
+        starts = [
+            0,
+            15
+        ]
+
+    for start in starts:
+
+        candle = build_candle(
+            day,
+            start,
+            minutes
+        )
+
+        if candle is not None:
+
+            candles[start] = candle
+
+    return candles
+
+
+# ============================================================
+# BUILD FEATURES FOR ALL TIMEFRAMES
 # ============================================================
 
 def build_features(day):
 
-    # --------------------------------------------------------
-    # MAIN CANDLES
-    # --------------------------------------------------------
+    result = {}
 
-    c5_1520 = build_candle(
-        day,
-        "15:20",
-        5
-    )
+    for tf, minutes in TIMEFRAMES.items():
 
-    c5_1525 = build_candle(
-        day,
-        "15:25",
-        5
-    )
-
-    c3_1524 = build_candle(
-        day,
-        "15:24",
-        3
-    )
-
-    c3_1527 = build_candle(
-        day,
-        "15:27",
-        3
-    )
-
-    c1_1528 = build_candle(
-        day,
-        "15:28",
-        1
-    )
-
-    c1_1529 = build_candle(
-        day,
-        "15:29",
-        1
-    )
-
-    # --------------------------------------------------------
-    # PREVIOUS 3-MINUTE CANDLES
-    #
-    # Used to determine whether 15:24 is unusually large.
-    # --------------------------------------------------------
-
-    c3_1515 = build_candle(
-        day,
-        "15:15",
-        3
-    )
-
-    c3_1518 = build_candle(
-        day,
-        "15:18",
-        3
-    )
-
-    c3_1521 = build_candle(
-        day,
-        "15:21",
-        3
-    )
-
-    candles = [
-        c5_1520,
-        c5_1525,
-        c3_1524,
-        c3_1527,
-        c1_1528,
-        c1_1529,
-        c3_1515,
-        c3_1518,
-        c3_1521
-    ]
-
-    if any(
-        x is None
-        for x in candles
-    ):
-        return None
-
-    # --------------------------------------------------------
-    # DIRECTIONS
-    # --------------------------------------------------------
-
-    d5_1520 = direction(
-        c5_1520["open"],
-        c5_1520["close"]
-    )
-
-    d5_1525 = direction(
-        c5_1525["open"],
-        c5_1525["close"]
-    )
-
-    d3_1524 = direction(
-        c3_1524["open"],
-        c3_1524["close"]
-    )
-
-    d3_1527 = direction(
-        c3_1527["open"],
-        c3_1527["close"]
-    )
-
-    d1_1528 = direction(
-        c1_1528["open"],
-        c1_1528["close"]
-    )
-
-    d1_1529 = direction(
-        c1_1529["open"],
-        c1_1529["close"]
-    )
-
-    # --------------------------------------------------------
-    # STRUCTURE
-    # --------------------------------------------------------
-
-    s5_1520 = candle_structure(
-        c5_1520
-    )
-
-    s5_1525 = candle_structure(
-        c5_1525
-    )
-
-    s3_1524 = candle_structure(
-        c3_1524
-    )
-
-    s3_1527 = candle_structure(
-        c3_1527
-    )
-
-    s1_1528 = candle_structure(
-        c1_1528
-    )
-
-    s1_1529 = candle_structure(
-        c1_1529
-    )
-
-    s3_1515 = candle_structure(
-        c3_1515
-    )
-
-    s3_1518 = candle_structure(
-        c3_1518
-    )
-
-    s3_1521 = candle_structure(
-        c3_1521
-    )
-
-    # --------------------------------------------------------
-    # AVERAGE PREVIOUS 3M RANGE
-    # --------------------------------------------------------
-
-    previous_3m_ranges = [
-        s3_1515["range"],
-        s3_1518["range"],
-        s3_1521["range"]
-    ]
-
-    average_previous_range = np.mean(
-        previous_3m_ranges
-    )
-
-    # --------------------------------------------------------
-    # RELATIVE VOLUME
-    # --------------------------------------------------------
-
-    avg_previous_3m_volume = np.mean([
-        c3_1515["volume"],
-        c3_1518["volume"],
-        c3_1521["volume"]
-    ])
-
-    avg_previous_5m_volume = (
-        (
-            c5_1520["volume"] +
-            c5_1525["volume"]
-        ) / 2
-    )
-
-    # --------------------------------------------------------
-    # VOLUME RATIOS
-    # --------------------------------------------------------
-
-    v3_ratio = (
-        c3_1524["volume"] /
-        c3_1527["volume"]
-        if c3_1527["volume"] > 0
-        else 0
-    )
-
-    v1_ratio = (
-        c1_1528["volume"] /
-        c1_1529["volume"]
-        if c1_1529["volume"] > 0
-        else 0
-    )
-
-    v5_ratio = (
-        c5_1520["volume"] /
-        c5_1525["volume"]
-        if c5_1525["volume"] > 0
-        else 0
-    )
-
-    relative_3m_volume = (
-        c3_1524["volume"] /
-        avg_previous_3m_volume
-        if avg_previous_3m_volume > 0
-        else 0
-    )
-
-    # --------------------------------------------------------
-    # RANGE RATIO
-    # --------------------------------------------------------
-
-    range_ratio_3m = (
-        s3_1524["range"] /
-        average_previous_range
-        if average_previous_range > 0
-        else 0
-    )
-
-    # --------------------------------------------------------
-    # MOMENTUM
-    #
-    # Close of 15:24 relative to its open.
-    # --------------------------------------------------------
-
-    if c3_1524["open"] > 0:
-
-        momentum_3m = (
-            (
-                c3_1524["close"] -
-                c3_1524["open"]
-            )
-            /
-            c3_1524["open"]
-            *
-            100
+        candles = build_timeframe_candles(
+            day,
+            minutes
         )
 
-    else:
+        if len(candles) < 2:
+            continue
 
-        momentum_3m = 0
+        starts = sorted(
+            candles.keys()
+        )
 
-    # --------------------------------------------------------
-    # RETURN ALL FEATURES
-    # --------------------------------------------------------
+        # Last two completed candles
+        last_start = starts[-1]
 
-    return {
+        second_last_start = starts[-2]
 
-        # ----------------------------------------------------
-        # DIRECTIONS
-        # ----------------------------------------------------
+        last = candles[
+            last_start
+        ]
 
-        "5m_1520":
-            d5_1520,
+        second_last = candles[
+            second_last_start
+        ]
 
-        "5m_1525":
-            d5_1525,
+        s_last = structure(
+            last
+        )
 
-        "3m_1524":
-            d3_1524,
+        s_second = structure(
+            second_last
+        )
 
-        "3m_1527":
-            d3_1527,
+        d_last = direction(
+            last
+        )
 
-        "1m_1528":
-            d1_1528,
+        d_second = direction(
+            second_last
+        )
 
-        "1m_1529":
-            d1_1529,
+        # Average range/volume of previous candles
+        previous = [
+            candles[x]
+            for x in starts[:-1]
+        ]
 
-        # ----------------------------------------------------
-        # 3M 15:24 STRUCTURE
-        # ----------------------------------------------------
+        if previous:
 
-        "3m_body_ratio":
-            s3_1524["body_ratio"],
+            avg_range = np.mean([
+                structure(x)["range"]
+                for x in previous
+            ])
 
-        "3m_close_position":
-            s3_1524["close_position"],
+            avg_volume = np.mean([
+                x["volume"]
+                for x in previous
+            ])
 
-        "3m_upper_wick":
-            s3_1524["upper_wick_ratio"],
+        else:
 
-        "3m_lower_wick":
-            s3_1524["lower_wick_ratio"],
+            avg_range = 0
+            avg_volume = 0
 
-        "3m_range":
-            s3_1524["range"],
+        if avg_range > 0:
 
-        "3m_body":
-            s3_1524["body"],
-
-        # ----------------------------------------------------
-        # OTHER STRUCTURE
-        # ----------------------------------------------------
-
-        "5m_body_ratio":
-            s5_1520["body_ratio"],
-
-        "1m_body_ratio":
-            s1_1528["body_ratio"],
-
-        # ----------------------------------------------------
-        # RELATIVE RANGE
-        # ----------------------------------------------------
-
-        "3m_range_ratio":
-            range_ratio_3m,
-
-        # ----------------------------------------------------
-        # VOLUME
-        # ----------------------------------------------------
-
-        "3m_volume_ratio":
-            v3_ratio,
-
-        "1m_volume_ratio":
-            v1_ratio,
-
-        "5m_volume_ratio":
-            v5_ratio,
-
-        "3m_relative_volume":
-            relative_3m_volume,
-
-        # ----------------------------------------------------
-        # MOMENTUM
-        # ----------------------------------------------------
-
-        "3m_momentum":
-            momentum_3m,
-
-        # ----------------------------------------------------
-        # RELATIONSHIPS
-        # ----------------------------------------------------
-
-        "5m_same":
-            (
-                d5_1520 ==
-                d5_1525
-                and
-                d5_1520 != "DOJI"
-            ),
-
-        "5m_opposite":
-            (
-                d5_1520 !=
-                d5_1525
-                and
-                d5_1520 != "DOJI"
-                and
-                d5_1525 != "DOJI"
-            ),
-
-        "3m_same":
-            (
-                d3_1524 ==
-                d3_1527
-                and
-                d3_1524 != "DOJI"
-            ),
-
-        "3m_opposite":
-            (
-                d3_1524 !=
-                d3_1527
-                and
-                d3_1524 != "DOJI"
-                and
-                d3_1527 != "DOJI"
-            ),
-
-        "1m_same":
-            (
-                d1_1528 ==
-                d1_1529
-                and
-                d1_1528 != "DOJI"
-            ),
-
-        "1m_opposite":
-            (
-                d1_1528 !=
-                d1_1529
-                and
-                d1_1528 != "DOJI"
-                and
-                d1_1529 != "DOJI"
-            ),
-
-        "5m3m_same":
-            (
-                d5_1520 ==
-                d3_1524
-                and
-                d5_1520 != "DOJI"
-            ),
-
-        "5m1m_same":
-            (
-                d5_1520 ==
-                d1_1528
-                and
-                d5_1520 != "DOJI"
-            ),
-
-        "3m1m_same":
-            (
-                d3_1524 ==
-                d1_1528
-                and
-                d3_1524 != "DOJI"
-            ),
-
-        "all_three_same":
-            (
-                d5_1520 ==
-                d3_1524 ==
-                d1_1528
-                and
-                d5_1520 != "DOJI"
+            range_ratio = (
+                s_last["range"] /
+                avg_range
             )
-    }
+
+        else:
+
+            range_ratio = 0
+
+        if avg_volume > 0:
+
+            relative_volume = (
+                last["volume"] /
+                avg_volume
+            )
+
+        else:
+
+            relative_volume = 0
+
+        if second_last["volume"] > 0:
+
+            volume_ratio = (
+                last["volume"] /
+                second_last["volume"]
+            )
+
+        else:
+
+            volume_ratio = 0
+
+        if last["open"] > 0:
+
+            momentum = (
+                (
+                    last["close"] -
+                    last["open"]
+                )
+                /
+                last["open"]
+                *
+                100
+            )
+
+        else:
+
+            momentum = 0
+
+        prefix = tf
+
+        result[
+            f"{prefix}_last"
+        ] = d_last
+
+        result[
+            f"{prefix}_second"
+        ] = d_second
+
+        result[
+            f"{prefix}_same"
+        ] = (
+            d_last ==
+            d_second
+            and
+            d_last != "DOJI"
+        )
+
+        result[
+            f"{prefix}_opposite"
+        ] = (
+            d_last !=
+            d_second
+            and
+            d_last != "DOJI"
+            and
+            d_second != "DOJI"
+        )
+
+        result[
+            f"{prefix}_body_ratio"
+        ] = s_last[
+            "body_ratio"
+        ]
+
+        result[
+            f"{prefix}_close_position"
+        ] = s_last[
+            "close_position"
+        ]
+
+        result[
+            f"{prefix}_range_ratio"
+        ] = range_ratio
+
+        result[
+            f"{prefix}_relative_volume"
+        ] = relative_volume
+
+        result[
+            f"{prefix}_volume_ratio"
+        ] = volume_ratio
+
+        result[
+            f"{prefix}_momentum"
+        ] = momentum
+
+    return result
 
 
 # ============================================================
-# EXTRACT STOCK DATA
+# EXTRACT STOCK OBSERVATIONS
 # ============================================================
 
 def extract_stock(
@@ -818,69 +695,54 @@ def extract_stock(
         if i + 1 >= len(dates):
             break
 
-        trade_date = dates[i + 1]
-
-        signal_group = grouped[
-            signal_date
+        trade_date = dates[
+            i + 1
         ]
 
-        trade_group = grouped[
-            trade_date
-        ]
-
-        day = {}
-
-        for _, row in signal_group.iterrows():
-
-            day[row["hm"]] = row.to_dict()
+        signal_day = make_day_lookup(
+            grouped[
+                signal_date
+            ]
+        )
 
         features = build_features(
-            day
+            signal_day
         )
 
-        if features is None:
+        if not features:
             continue
 
-        next_day = {}
-
-        for _, row in trade_group.iterrows():
-
-            next_day[row["hm"]] = row.to_dict()
-
-        if not all(
-            x in next_day
-            for x in [
-                "09:15",
-                "15:27",
-                "15:29"
+        trade_day = make_day_lookup(
+            grouped[
+                trade_date
             ]
-        ):
+        )
+
+        if "09:15" not in trade_day:
             continue
 
-        entry = float(
-            next_day["09:15"]["open"]
-        )
+        if "15:29" not in trade_day:
+            continue
 
-        exit_1527 = float(
-            next_day["15:27"]["open"]
-        )
+        entry = trade_day[
+            "09:15"
+        ]["open"]
 
-        exit_1529 = float(
-            next_day["15:29"]["close"]
-        )
+        exit_price = trade_day[
+            "15:29"
+        ]["close"]
 
         if entry <= 0:
             continue
 
-        long_1527 = (
-            exit_1527 -
+        long_return = (
+            exit_price -
             entry
         ) / entry * 100
 
-        long_1529 = (
-            exit_1529 -
-            entry
-        ) / entry * 100
+        short_return = (
+            -long_return
+        )
 
         rows.append({
 
@@ -895,24 +757,18 @@ def extract_stock(
 
             **features,
 
-            "long_1527":
-                long_1527,
+            "long_return":
+                long_return,
 
-            "long_1529":
-                long_1529,
-
-            "short_1527":
-                -long_1527,
-
-            "short_1529":
-                -long_1529
+            "short_return":
+                short_return
         })
 
     return rows
 
 
 # ============================================================
-# CREATE PATTERN MASKS
+# GENERATE PATTERNS
 # ============================================================
 
 def generate_patterns(df):
@@ -920,321 +776,392 @@ def generate_patterns(df):
     patterns = {}
 
     # ========================================================
-    # BASE DIRECTION
+    # EACH TIMEFRAME INDEPENDENTLY
     # ========================================================
 
-    patterns[
-        "3m_15:24_BEAR"
-    ] = (
-        df["3m_1524"] ==
-        "BEAR"
-    )
+    for tf in TIMEFRAMES.keys():
 
-    patterns[
-        "3m_15:24_BULL"
-    ] = (
-        df["3m_1524"] ==
-        "BULL"
-    )
+        last = f"{tf}_last"
+        second = f"{tf}_second"
 
-    patterns[
-        "5m_15:20_BEAR"
-    ] = (
-        df["5m_1520"] ==
-        "BEAR"
-    )
+        same = f"{tf}_same"
+        opposite = f"{tf}_opposite"
 
-    patterns[
-        "5m_15:20_BULL"
-    ] = (
-        df["5m_1520"] ==
-        "BULL"
-    )
+        body = f"{tf}_body_ratio"
 
-    patterns[
-        "1m_15:28_BEAR"
-    ] = (
-        df["1m_1528"] ==
-        "BEAR"
-    )
+        close = f"{tf}_close_position"
 
-    patterns[
-        "1m_15:28_BULL"
-    ] = (
-        df["1m_1528"] ==
-        "BULL"
-    )
+        range_ratio = (
+            f"{tf}_range_ratio"
+        )
 
-    # ========================================================
-    # CANDLE BODY STRENGTH
-    # ========================================================
+        relative_volume = (
+            f"{tf}_relative_volume"
+        )
 
-    body_levels = [
-        0.50,
-        0.60,
-        0.70,
-        0.80,
-        0.90
-    ]
+        volume_ratio = (
+            f"{tf}_volume_ratio"
+        )
 
-    for level in body_levels:
+        momentum = (
+            f"{tf}_momentum"
+        )
+
+        # ----------------------------------------------------
+        # Direction
+        # ----------------------------------------------------
 
         patterns[
-            f"3m_BEAR_body>={level:.2f}"
+            f"{tf}_LAST_BEAR"
         ] = (
-            (df["3m_1524"] == "BEAR")
-            &
-            (df["3m_body_ratio"] >= level)
+            df[last] == "BEAR"
         )
 
         patterns[
-            f"3m_BULL_body>={level:.2f}"
+            f"{tf}_LAST_BULL"
         ] = (
-            (df["3m_1524"] == "BULL")
-            &
-            (df["3m_body_ratio"] >= level)
+            df[last] == "BULL"
         )
 
-    # ========================================================
-    # CLOSE POSITION
-    # ========================================================
-
-    close_levels = [
-        0.10,
-        0.20,
-        0.30,
-        0.40
-    ]
-
-    for level in close_levels:
+        # ----------------------------------------------------
+        # Same / opposite
+        # ----------------------------------------------------
 
         patterns[
-            f"3m_BEAR_close<={level:.2f}"
-        ] = (
-            (df["3m_1524"] == "BEAR")
-            &
-            (df["3m_close_position"] <= level)
-        )
+            f"{tf}_SAME"
+        ] = df[same]
 
         patterns[
-            f"3m_BULL_close>={1-level:.2f}"
-        ] = (
-            (df["3m_1524"] == "BULL")
-            &
-            (df["3m_close_position"] >= 1-level)
-        )
+            f"{tf}_OPPOSITE"
+        ] = df[opposite]
 
-    # ========================================================
-    # RELATIVE RANGE
-    # ========================================================
-
-    range_levels = [
-        1.25,
-        1.50,
-        1.75,
-        2.00,
-        2.50,
-        3.00
-    ]
-
-    for level in range_levels:
+        # ----------------------------------------------------
+        # Direction + same/opposite
+        # ----------------------------------------------------
 
         patterns[
-            f"3m_BEAR_range>={level:.2f}x"
+            f"{tf}_BEAR_SAME"
         ] = (
-            (df["3m_1524"] == "BEAR")
+            (df[last] == "BEAR")
             &
-            (df["3m_range_ratio"] >= level)
+            df[same]
         )
 
         patterns[
-            f"3m_BULL_range>={level:.2f}x"
+            f"{tf}_BULL_SAME"
         ] = (
-            (df["3m_1524"] == "BULL")
+            (df[last] == "BULL")
             &
-            (df["3m_range_ratio"] >= level)
-        )
-
-    # ========================================================
-    # RELATIVE VOLUME
-    # ========================================================
-
-    volume_levels = [
-        1.25,
-        1.50,
-        1.75,
-        2.00,
-        2.50,
-        3.00
-    ]
-
-    for level in volume_levels:
-
-        patterns[
-            f"3m_BEAR_relative_volume>={level:.2f}x"
-        ] = (
-            (df["3m_1524"] == "BEAR")
-            &
-            (df["3m_relative_volume"] >= level)
+            df[same]
         )
 
         patterns[
-            f"3m_BULL_relative_volume>={level:.2f}x"
+            f"{tf}_BEAR_OPPOSITE"
         ] = (
-            (df["3m_1524"] == "BULL")
+            (df[last] == "BEAR")
             &
-            (df["3m_relative_volume"] >= level)
+            df[opposite]
         )
 
         patterns[
-            f"3m_BEAR_15:24_vs_15:27_volume>={level:.2f}x"
+            f"{tf}_BULL_OPPOSITE"
         ] = (
-            (df["3m_1524"] == "BEAR")
+            (df[last] == "BULL")
             &
-            (df["3m_volume_ratio"] >= level)
+            df[opposite]
         )
 
-        patterns[
-            f"3m_BULL_15:24_vs_15:27_volume>={level:.2f}x"
-        ] = (
-            (df["3m_1524"] == "BULL")
-            &
-            (df["3m_volume_ratio"] >= level)
-        )
+        # ----------------------------------------------------
+        # Body strength
+        # ----------------------------------------------------
 
-    # ========================================================
-    # MOMENTUM
-    # ========================================================
-
-    momentum_levels = [
-        0.05,
-        0.10,
-        0.15,
-        0.20,
-        0.30,
-        0.50
-    ]
-
-    for level in momentum_levels:
-
-        patterns[
-            f"3m_BEAR_momentum<={-level:.2f}%"
-        ] = (
-            (df["3m_1524"] == "BEAR")
-            &
-            (df["3m_momentum"] <= -level)
-        )
-
-        patterns[
-            f"3m_BULL_momentum>={level:.2f}%"
-        ] = (
-            (df["3m_1524"] == "BULL")
-            &
-            (df["3m_momentum"] >= level)
-        )
-
-    # ========================================================
-    # RELATIONSHIPS
-    # ========================================================
-
-    patterns[
-        "3m_BEAR + 5m_BEAR"
-    ] = (
-        (df["3m_1524"] == "BEAR")
-        &
-        (df["5m_1520"] == "BEAR")
-    )
-
-    patterns[
-        "3m_BEAR + 1m_BEAR"
-    ] = (
-        (df["3m_1524"] == "BEAR")
-        &
-        (df["1m_1528"] == "BEAR")
-    )
-
-    patterns[
-        "3m_BEAR + 5m_BEAR + 1m_BEAR"
-    ] = (
-        (df["3m_1524"] == "BEAR")
-        &
-        (df["5m_1520"] == "BEAR")
-        &
-        (df["1m_1528"] == "BEAR")
-    )
-
-    patterns[
-        "3m_BEAR + 3m_OPPOSITE"
-    ] = (
-        (df["3m_1524"] == "BEAR")
-        &
-        (
-            df["3m_1524"] !=
-            df["3m_1527"]
-        )
-    )
-
-    # ========================================================
-    # HIGH-CONVICTION COMBINATIONS
-    # ========================================================
-
-    for body in [
-        0.60,
-        0.70,
-        0.80
-    ]:
-
-        for volume in [
-            1.25,
-            1.50,
-            2.00
+        for level in [
+            0.50,
+            0.60,
+            0.70,
+            0.80,
+            0.90
         ]:
 
             patterns[
-                (
-                    f"BEAR + body>={body:.2f} "
-                    f"+ relative_volume>={volume:.2f}x"
-                )
+                f"{tf}_BEAR_BODY>={level:.2f}"
             ] = (
-                (df["3m_1524"] == "BEAR")
+                (df[last] == "BEAR")
                 &
-                (df["3m_body_ratio"] >= body)
-                &
-                (df["3m_relative_volume"] >= volume)
+                (df[body] >= level)
             )
 
-    # ========================================================
-    # EXTREME COMBINATIONS
-    # ========================================================
+            patterns[
+                f"{tf}_BULL_BODY>={level:.2f}"
+            ] = (
+                (df[last] == "BULL")
+                &
+                (df[body] >= level)
+            )
 
-    for body in [
-        0.60,
-        0.70,
-        0.80
-    ]:
+        # ----------------------------------------------------
+        # Range expansion
+        # ----------------------------------------------------
 
-        for volume in [
+        for level in [
+            1.25,
             1.50,
-            2.00
+            1.75,
+            2.00,
+            2.50,
+            3.00
         ]:
 
             patterns[
-                (
-                    f"BEAR + body>={body:.2f} "
-                    f"+ volume>={volume:.2f}x "
-                    f"+ 3m OPPOSITE"
-                )
+                f"{tf}_BEAR_RANGE>={level:.2f}x"
             ] = (
-                (df["3m_1524"] == "BEAR")
+                (df[last] == "BEAR")
                 &
-                (df["3m_body_ratio"] >= body)
+                (df[range_ratio] >= level)
+            )
+
+            patterns[
+                f"{tf}_BULL_RANGE>={level:.2f}x"
+            ] = (
+                (df[last] == "BULL")
                 &
-                (df["3m_relative_volume"] >= volume)
+                (df[range_ratio] >= level)
+            )
+
+        # ----------------------------------------------------
+        # Relative volume
+        # ----------------------------------------------------
+
+        for level in [
+            1.25,
+            1.50,
+            1.75,
+            2.00,
+            2.50,
+            3.00
+        ]:
+
+            patterns[
+                f"{tf}_BEAR_REL_VOL>={level:.2f}x"
+            ] = (
+                (df[last] == "BEAR")
                 &
                 (
-                    df["3m_1524"] !=
-                    df["3m_1527"]
+                    df[relative_volume]
+                    >= level
                 )
+            )
+
+            patterns[
+                f"{tf}_BULL_REL_VOL>={level:.2f}x"
+            ] = (
+                (df[last] == "BULL")
+                &
+                (
+                    df[relative_volume]
+                    >= level
+                )
+            )
+
+            patterns[
+                f"{tf}_BEAR_VOL_RATIO>={level:.2f}x"
+            ] = (
+                (df[last] == "BEAR")
+                &
+                (
+                    df[volume_ratio]
+                    >= level
+                )
+            )
+
+            patterns[
+                f"{tf}_BULL_VOL_RATIO>={level:.2f}x"
+            ] = (
+                (df[last] == "BULL")
+                &
+                (
+                    df[volume_ratio]
+                    >= level
+                )
+            )
+
+        # ----------------------------------------------------
+        # Momentum
+        # ----------------------------------------------------
+
+        for level in [
+            0.05,
+            0.10,
+            0.15,
+            0.20,
+            0.30,
+            0.50
+        ]:
+
+            patterns[
+                f"{tf}_BEAR_MOM<={-level:.2f}%"
+            ] = (
+                (df[last] == "BEAR")
+                &
+                (
+                    df[momentum]
+                    <= -level
+                )
+            )
+
+            patterns[
+                f"{tf}_BULL_MOM>={level:.2f}%"
+            ] = (
+                (df[last] == "BULL")
+                &
+                (
+                    df[momentum]
+                    >= level
+                )
+            )
+
+        # ----------------------------------------------------
+        # High conviction combinations
+        # ----------------------------------------------------
+
+        for body_level in [
+            0.60,
+            0.70,
+            0.80
+        ]:
+
+            for volume_level in [
+                1.25,
+                1.50,
+                2.00
+            ]:
+
+                patterns[
+                    (
+                        f"{tf}_BEAR_"
+                        f"BODY>={body_level:.2f}_"
+                        f"REL_VOL>={volume_level:.2f}"
+                    )
+                ] = (
+                    (df[last] == "BEAR")
+                    &
+                    (
+                        df[body]
+                        >= body_level
+                    )
+                    &
+                    (
+                        df[relative_volume]
+                        >= volume_level
+                    )
+                )
+
+                patterns[
+                    (
+                        f"{tf}_BULL_"
+                        f"BODY>={body_level:.2f}_"
+                        f"REL_VOL>={volume_level:.2f}"
+                    )
+                ] = (
+                    (df[last] == "BULL")
+                    &
+                    (
+                        df[body]
+                        >= body_level
+                    )
+                    &
+                    (
+                        df[relative_volume]
+                        >= volume_level
+                    )
+                )
+
+        # ----------------------------------------------------
+        # Body + volume + same/opposite
+        # ----------------------------------------------------
+
+        for body_level in [
+            0.60,
+            0.70,
+            0.80
+        ]:
+
+            for volume_level in [
+                1.50,
+                2.00
+            ]:
+
+                patterns[
+                    (
+                        f"{tf}_BEAR_"
+                        f"BODY>={body_level:.2f}_"
+                        f"VOL>={volume_level:.2f}_"
+                        f"OPPOSITE"
+                    )
+                ] = (
+                    (df[last] == "BEAR")
+                    &
+                    (
+                        df[body]
+                        >= body_level
+                    )
+                    &
+                    (
+                        df[relative_volume]
+                        >= volume_level
+                    )
+                    &
+                    df[opposite]
+                )
+
+                patterns[
+                    (
+                        f"{tf}_BULL_"
+                        f"BODY>={body_level:.2f}_"
+                        f"VOL>={volume_level:.2f}_"
+                        f"OPPOSITE"
+                    )
+                ] = (
+                    (df[last] == "BULL")
+                    &
+                    (
+                        df[body]
+                        >= body_level
+                    )
+                    &
+                    (
+                        df[relative_volume]
+                        >= volume_level
+                    )
+                    &
+                    df[opposite]
+                )
+
+    # ========================================================
+    # CROSS-TIMEFRAME ALIGNMENT
+    # ========================================================
+
+    for tf1 in TIMEFRAMES.keys():
+
+        for tf2 in TIMEFRAMES.keys():
+
+            if tf1 == tf2:
+                continue
+
+            patterns[
+                f"{tf1}_BEAR = {tf2}_BEAR"
+            ] = (
+                (df[f"{tf1}_last"] == "BEAR")
+                &
+                (df[f"{tf2}_last"] == "BEAR")
+            )
+
+            patterns[
+                f"{tf1}_BULL = {tf2}_BULL"
+            ] = (
+                (df[f"{tf1}_last"] == "BULL")
+                &
+                (df[f"{tf2}_last"] == "BULL")
             )
 
     return patterns
@@ -1244,7 +1171,7 @@ def generate_patterns(df):
 # STATISTICS
 # ============================================================
 
-def statistics(series):
+def stats(series):
 
     if len(series) == 0:
         return None
@@ -1273,22 +1200,19 @@ def statistics(series):
 
     if gross_loss > 0:
 
-        profit_factor = (
+        pf = (
             gross_profit /
             gross_loss
         )
 
     else:
 
-        profit_factor = float("inf")
+        pf = float("inf")
 
     return {
 
         "trades":
             len(series),
-
-        "wins":
-            wins,
 
         "win_rate":
             win_rate,
@@ -1296,84 +1220,54 @@ def statistics(series):
         "average":
             series.mean(),
 
-        "median":
-            series.median(),
-
         "profit_factor":
-            profit_factor,
+            pf,
 
         "total":
-            series.sum(),
-
-        "best":
-            series.max(),
-
-        "worst":
-            series.min()
+            series.sum()
     }
 
 
 # ============================================================
-# EVALUATE PATTERN
+# EVALUATE TRAINING PATTERN
 # ============================================================
 
-def evaluate_pattern(
+def evaluate_training(
     df,
     mask
 ):
 
     subset = df[
         mask
-    ].copy()
+    ]
 
     if len(subset) < MIN_TRAIN_TRADES:
         return None
 
-    # --------------------------------------------------------
-    # Determine direction ONLY from training data
-    # --------------------------------------------------------
-
-    long_avg = (
-        subset["long_1529"]
-        .mean()
+    long_stats = stats(
+        subset["long_return"]
     )
 
-    short_avg = (
-        subset["short_1529"]
-        .mean()
+    short_stats = stats(
+        subset["short_return"]
     )
 
-    if long_avg >= short_avg:
+    # Select direction ONLY from training data.
+    if (
+        long_stats["average"]
+        >=
+        short_stats["average"]
+    ):
 
         side = "LONG"
 
-        r1527 = (
-            subset["long_1527"]
-        )
-
-        r1529 = (
-            subset["long_1529"]
-        )
+        selected = long_stats
 
     else:
 
         side = "SHORT"
 
-        r1527 = (
-            subset["short_1527"]
-        )
-
-        r1529 = (
-            subset["short_1529"]
-        )
-
-    s27 = statistics(
-        r1527
-    )
-
-    s29 = statistics(
-        r1529
-    )
+        selected = short_stats
 
     return {
 
@@ -1381,36 +1275,27 @@ def evaluate_pattern(
             side,
 
         "trades":
-            s29["trades"],
+            selected["trades"],
 
-        "win_rate_15:27":
-            s27["win_rate"],
+        "win_rate":
+            selected["win_rate"],
 
-        "avg_15:27":
-            s27["average"],
+        "average":
+            selected["average"],
 
-        "pf_15:27":
-            s27["profit_factor"],
+        "profit_factor":
+            selected["profit_factor"],
 
-        "win_rate_15:29":
-            s29["win_rate"],
-
-        "avg_15:29":
-            s29["average"],
-
-        "pf_15:29":
-            s29["profit_factor"],
-
-        "total_15:29":
-            s29["total"]
+        "total":
+            selected["total"]
     }
 
 
 # ============================================================
-# OUT-OF-SAMPLE TEST
+# VALIDATE ON UNSEEN DATA
 # ============================================================
 
-def validate_pattern(
+def validate(
     df,
     mask,
     side
@@ -1418,65 +1303,26 @@ def validate_pattern(
 
     subset = df[
         mask
-    ].copy()
+    ]
 
     if len(subset) == 0:
         return None
 
     if side == "LONG":
 
-        r27 = (
-            subset["long_1527"]
-        )
-
-        r29 = (
-            subset["long_1529"]
+        returns = (
+            subset["long_return"]
         )
 
     else:
 
-        r27 = (
-            subset["short_1527"]
+        returns = (
+            subset["short_return"]
         )
 
-        r29 = (
-            subset["short_1529"]
-        )
-
-    s27 = statistics(
-        r27
+    return stats(
+        returns
     )
-
-    s29 = statistics(
-        r29
-    )
-
-    return {
-
-        "test_trades":
-            s29["trades"],
-
-        "test_15:27_win_rate":
-            s27["win_rate"],
-
-        "test_15:27_average":
-            s27["average"],
-
-        "test_15:27_pf":
-            s27["profit_factor"],
-
-        "test_15:29_win_rate":
-            s29["win_rate"],
-
-        "test_15:29_average":
-            s29["average"],
-
-        "test_15:29_pf":
-            s29["profit_factor"],
-
-        "test_15:29_total":
-            s29["total"]
-    }
 
 
 # ============================================================
@@ -1486,25 +1332,32 @@ def validate_pattern(
 def main():
 
     print("\n")
-    print("=" * 75)
+    print("=" * 80)
     print(
-        "HIGH-WIN-RATE PATTERN DISCOVERY"
+        "MULTI-TIMEFRAME HIGH-WIN-RATE SCANNER"
     )
-    print("=" * 75)
+    print("=" * 80)
 
     print(
-        "\nTARGET WIN RATE: "
-        f"{TARGET_WIN_RATE:.0f}%"
+        "\nTimeframes:"
     )
 
     print(
-        f"MINIMUM TRAINING TRADES: "
+        "1m | 2m | 3m | 5m | 10m | 15m"
+    )
+
+    print(
+        f"\nTarget: "
+        f"{TARGET_WIN_RATE:.0f}%+"
+    )
+
+    print(
+        f"Minimum training trades: "
         f"{MIN_TRAIN_TRADES}"
     )
 
     print(
-        "\nThe scanner searches candle structure, "
-        "relative volume, range and momentum."
+        "70% training / 30% unseen test"
     )
 
     # ========================================================
@@ -1529,7 +1382,7 @@ def main():
     )
 
     # ========================================================
-    # PROCESS STOCKS
+    # PROCESS
     # ========================================================
 
     all_rows = []
@@ -1559,7 +1412,7 @@ def main():
     if not all_rows:
 
         print(
-            "No usable observations."
+            "No observations."
         )
 
         return
@@ -1578,7 +1431,7 @@ def main():
     )
 
     # ========================================================
-    # TIME SPLIT
+    # SPLIT DATA
     # ========================================================
 
     dates = sorted(
@@ -1637,19 +1490,19 @@ def main():
     )
 
     print(
-        f"\nPatterns being tested: "
+        f"\nTotal patterns tested: "
         f"{len(train_patterns)}"
     )
 
     # ========================================================
-    # DISCOVER
+    # SEARCH
     # ========================================================
 
     discovered = []
 
     for name, mask in train_patterns.items():
 
-        result = evaluate_pattern(
+        result = evaluate_training(
             train,
             mask
         )
@@ -1657,7 +1510,22 @@ def main():
         if result is None:
             continue
 
+        # Determine timeframe from name
+        timeframe = "mixed"
+
+        for tf in TIMEFRAMES:
+
+            if name.startswith(
+                tf + "_"
+            ):
+
+                timeframe = tf
+
+                break
+
         result["pattern"] = name
+
+        result["timeframe"] = timeframe
 
         discovered.append(
             result
@@ -1666,8 +1534,7 @@ def main():
     if not discovered:
 
         print(
-            "No patterns passed the "
-            "minimum trade requirement."
+            "No qualifying patterns."
         )
 
         return
@@ -1676,110 +1543,174 @@ def main():
         discovered
     )
 
-    # --------------------------------------------------------
-    # Sort by win rate first
-    # --------------------------------------------------------
+    # ========================================================
+    # TOP BY TIMEFRAME
+    # ========================================================
 
-    discovered_df = (
-        discovered_df
-        .sort_values(
+    print("\n")
+    print("=" * 80)
+    print(
+        "BEST TRAINING PATTERN "
+        "FOR EACH TIMEFRAME"
+    )
+    print("=" * 80)
+
+    for tf in TIMEFRAMES.keys():
+
+        subset = discovered_df[
+            discovered_df[
+                "timeframe"
+            ] == tf
+        ]
+
+        if subset.empty:
+            continue
+
+        best = subset.sort_values(
             [
-                "win_rate_15:29",
-                "trades",
-                "pf_15:29"
+                "win_rate",
+                "trades"
             ],
             ascending=[
                 False,
+                False
+            ]
+        ).iloc[0]
+
+        print(
+            f"\n{tf}"
+        )
+
+        print(
+            f"  Pattern: "
+            f"{best['pattern']}"
+        )
+
+        print(
+            f"  Direction: "
+            f"{best['direction']}"
+        )
+
+        print(
+            f"  Trades: "
+            f"{int(best['trades'])}"
+        )
+
+        print(
+            f"  Win rate: "
+            f"{best['win_rate']:.2f}%"
+        )
+
+        print(
+            f"  Average: "
+            f"{best['average']:.4f}%"
+        )
+
+        print(
+            f"  PF: "
+            f"{best['profit_factor']:.3f}"
+        )
+
+    # ========================================================
+    # TOP OVERALL
+    # ========================================================
+
+    top_overall = (
+        discovered_df
+        .sort_values(
+            [
+                "win_rate",
+                "trades"
+            ],
+            ascending=[
                 False,
                 False
             ]
         )
+        .head(
+            TOP_PER_TIMEFRAME
+            * len(TIMEFRAMES)
+        )
     )
-
-    # ========================================================
-    # TOP TRAINING PATTERNS
-    # ========================================================
 
     print("\n")
-    print("=" * 75)
+    print("=" * 80)
     print(
         "TOP TRAINING PATTERNS "
-        "BY WIN RATE"
+        "ACROSS ALL TIMEFRAMES"
     )
-    print("=" * 75)
+    print("=" * 80)
 
     print(
-        discovered_df[
+        top_overall[
             [
+                "timeframe",
                 "pattern",
                 "trades",
                 "direction",
-                "win_rate_15:29",
-                "avg_15:29",
-                "pf_15:29"
+                "win_rate",
+                "average",
+                "profit_factor"
             ]
-        ]
-        .head(TOP_PATTERNS)
-        .to_string(
+        ].to_string(
             index=False
         )
     )
 
     # ========================================================
-    # FIND PATTERNS CLOSE TO 85%
+    # 85% TRAINING PATTERNS
     # ========================================================
 
-    high_win = discovered_df[
+    high_training = discovered_df[
         discovered_df[
-            "win_rate_15:29"
+            "win_rate"
         ] >= TARGET_WIN_RATE
     ]
 
     print("\n")
-    print("=" * 75)
+    print("=" * 80)
     print(
-        f"PATTERNS REACHING "
-        f"{TARGET_WIN_RATE:.0f}%+ "
-        "IN TRAINING"
+        "85%+ TRAINING PATTERNS"
     )
-    print("=" * 75)
+    print("=" * 80)
 
-    if high_win.empty:
+    if high_training.empty:
 
         print(
-            "NONE reached the target "
-            "with the required sample size."
+            "NONE reached 85% with "
+            f"{MIN_TRAIN_TRADES}+ trades."
         )
 
     else:
 
         print(
-            high_win[
+            high_training[
                 [
+                    "timeframe",
                     "pattern",
                     "trades",
                     "direction",
-                    "win_rate_15:29",
-                    "avg_15:29",
-                    "pf_15:29"
+                    "win_rate",
+                    "average",
+                    "profit_factor"
                 ]
             ]
+            .sort_values(
+                "win_rate",
+                ascending=False
+            )
             .to_string(
                 index=False
             )
         )
 
     # ========================================================
-    # VALIDATE TOP 30
+    # VALIDATE TOP PATTERNS
     # ========================================================
-
-    top = discovered_df.head(
-        TOP_PATTERNS
-    )
 
     validation = []
 
-    for _, row in top.iterrows():
+    for _, row in top_overall.iterrows():
 
         name = row[
             "pattern"
@@ -1789,13 +1720,12 @@ def main():
             "direction"
         ]
 
-        test_mask = test_patterns[
-            name
-        ]
+        if name not in test_patterns:
+            continue
 
-        result = validate_pattern(
+        result = validate(
             test,
-            test_mask,
+            test_patterns[name],
             side
         )
 
@@ -1803,6 +1733,9 @@ def main():
             continue
 
         validation.append({
+
+            "timeframe":
+                row["timeframe"],
 
             "pattern":
                 name,
@@ -1814,15 +1747,28 @@ def main():
                 row["trades"],
 
             "train_win_rate":
-                row["win_rate_15:29"],
+                row["win_rate"],
 
             "train_average":
-                row["avg_15:29"],
+                row["average"],
 
             "train_pf":
-                row["pf_15:29"],
+                row["profit_factor"],
 
-            **result
+            "test_trades":
+                result["trades"],
+
+            "test_win_rate":
+                result["win_rate"],
+
+            "test_average":
+                result["average"],
+
+            "test_pf":
+                result["profit_factor"],
+
+            "test_total":
+                result["total"]
         })
 
     validation_df = pd.DataFrame(
@@ -1830,15 +1776,15 @@ def main():
     )
 
     # ========================================================
-    # VALIDATION
+    # UNSEEN RESULTS
     # ========================================================
 
     print("\n")
-    print("=" * 75)
+    print("=" * 80)
     print(
-        "UNSEEN TEST — TOP PATTERNS"
+        "UNSEEN TEST RESULTS"
     )
-    print("=" * 75)
+    print("=" * 80)
 
     if validation_df.empty:
 
@@ -1851,19 +1797,25 @@ def main():
         print(
             validation_df[
                 [
+                    "timeframe",
                     "pattern",
                     "direction",
                     "train_win_rate",
-                    "train_pf",
                     "test_trades",
-                    "test_15:29_win_rate",
-                    "test_15:29_average",
-                    "test_15:29_pf"
+                    "test_win_rate",
+                    "test_average",
+                    "test_pf"
                 ]
             ]
             .sort_values(
-                "test_15:29_win_rate",
-                ascending=False
+                [
+                    "test_win_rate",
+                    "test_trades"
+                ],
+                ascending=[
+                    False,
+                    False
+                ]
             )
             .to_string(
                 index=False
@@ -1871,65 +1823,53 @@ def main():
         )
 
     # ========================================================
-    # PATTERNS THAT SURVIVE
+    # 85% UNSEEN RESULTS
     # ========================================================
 
     if not validation_df.empty:
 
-        survivors = validation_df[
+        high_test = validation_df[
             (
                 validation_df[
-                    "test_15:29_win_rate"
-                ] >= 60
+                    "test_win_rate"
+                ] >= TARGET_WIN_RATE
             )
-            &
-            (
-                validation_df[
-                    "test_15:29_average"
-                ] > 0
-            )
-            &
-            (
-                validation_df[
-                    "test_15:29_pf"
-                ] > 1
-            )
-        ].copy()
+        ]
 
     else:
 
-        survivors = pd.DataFrame()
+        high_test = pd.DataFrame()
 
     print("\n")
-    print("=" * 75)
+    print("=" * 80)
     print(
-        "POSITIVE OUT-OF-SAMPLE "
-        "CANDIDATES"
+        "85%+ UNSEEN PATTERNS"
     )
-    print("=" * 75)
+    print("=" * 80)
 
-    if survivors.empty:
+    if high_test.empty:
 
         print(
-            "No strong positive "
-            "out-of-sample candidates."
+            "NONE of the tested top patterns "
+            "reached 85% on unseen data."
         )
 
     else:
 
         print(
-            survivors[
+            high_test[
                 [
+                    "timeframe",
                     "pattern",
                     "direction",
                     "test_trades",
-                    "test_15:29_win_rate",
-                    "test_15:29_average",
-                    "test_15:29_pf"
+                    "test_win_rate",
+                    "test_average",
+                    "test_pf"
                 ]
             ]
             .sort_values(
-                "test_15:29_win_rate",
+                "test_win_rate",
                 ascending=False
             )
             .to_string(
@@ -1938,53 +1878,116 @@ def main():
         )
 
     # ========================================================
-    # SAVE
+    # BEST TIMEFRAME OUT OF SAMPLE
+    # ========================================================
+
+    if not validation_df.empty:
+
+        print("\n")
+        print("=" * 80)
+        print(
+            "BEST OUT-OF-SAMPLE "
+            "PATTERN BY TIMEFRAME"
+        )
+        print("=" * 80)
+
+        for tf in TIMEFRAMES.keys():
+
+            subset = validation_df[
+                validation_df[
+                    "timeframe"
+                ] == tf
+            ]
+
+            if subset.empty:
+                continue
+
+            best = subset.sort_values(
+                [
+                    "test_win_rate",
+                    "test_trades"
+                ],
+                ascending=[
+                    False,
+                    False
+                ]
+            ).iloc[0]
+
+            print(
+                f"\n{tf}"
+            )
+
+            print(
+                f"  Pattern: "
+                f"{best['pattern']}"
+            )
+
+            print(
+                f"  Direction: "
+                f"{best['direction']}"
+            )
+
+            print(
+                f"  Test trades: "
+                f"{int(best['test_trades'])}"
+            )
+
+            print(
+                f"  Test win rate: "
+                f"{best['test_win_rate']:.2f}%"
+            )
+
+            print(
+                f"  Test average: "
+                f"{best['test_average']:.4f}%"
+            )
+
+            print(
+                f"  Test PF: "
+                f"{best['test_pf']:.3f}"
+            )
+
+    # ========================================================
+    # SAVE RESULTS
     # ========================================================
 
     discovered_df.to_csv(
-        "structure_training_results.csv",
+        "all_timeframe_training_results.csv",
         index=False
     )
 
     validation_df.to_csv(
-        "structure_out_of_sample_results.csv",
+        "all_timeframe_unseen_results.csv",
         index=False
     )
 
-    # ========================================================
-    # DONE
-    # ========================================================
-
     print("\n")
-    print("=" * 75)
+    print("=" * 80)
     print(
-        "HIGH-WIN-RATE SCAN COMPLETE"
+        "SCAN COMPLETE"
     )
-    print("=" * 75)
+    print("=" * 80)
 
     print(
         "\nCreated:"
     )
 
     print(
-        "structure_training_results.csv"
+        "all_timeframe_training_results.csv"
     )
 
     print(
-        "structure_out_of_sample_results.csv"
+        "all_timeframe_unseen_results.csv"
     )
 
     print(
-        "\nIMPORTANT:"
+        "\nRemember:"
     )
 
     print(
-        "An 85% training result is NOT enough."
-    )
-
-    print(
-        "The pattern must also survive "
-        "the unseen test period."
+        "An 85% result is only interesting "
+        "if it also survives the unseen period "
+        "with a meaningful number of trades."
     )
 
 
