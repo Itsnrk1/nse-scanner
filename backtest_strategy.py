@@ -1,9 +1,9 @@
 import pandas as pd
+import numpy as np
 import requests
 import zipfile
 import io
 import os
-from itertools import combinations
 
 
 # ============================================================
@@ -15,7 +15,11 @@ DATA_URL = (
     "releases/download/v1.0.0/stocks_1m_csvs.zip"
 )
 
-MIN_TRADES = 100
+MIN_TRAIN_TRADES = 200
+TOP_PATTERNS = 10
+
+# 70% training / 30% unseen test
+TRAIN_PERCENT = 0.70
 
 
 # ============================================================
@@ -34,7 +38,7 @@ def direction(open_price, close_price):
 
 
 # ============================================================
-# DOWNLOAD DATA
+# DOWNLOAD
 # ============================================================
 
 def download_dataset():
@@ -108,10 +112,6 @@ def load_stock(z, filename):
         if df.empty:
             return None
 
-        # ----------------------------------------------------
-        # TIME
-        # ----------------------------------------------------
-
         df["datetime"] = pd.to_datetime(
             df["time"],
             unit="s",
@@ -130,10 +130,6 @@ def load_stock(z, filename):
             .dt.strftime("%H:%M")
         )
 
-        # ----------------------------------------------------
-        # OHLC
-        # ----------------------------------------------------
-
         for column in [
             "open",
             "high",
@@ -148,10 +144,6 @@ def load_stock(z, filename):
                 df[column],
                 errors="coerce"
             )
-
-        # ----------------------------------------------------
-        # VOLUME
-        # ----------------------------------------------------
 
         if "Volume" in df.columns:
 
@@ -202,7 +194,11 @@ def load_stock(z, filename):
 # BUILD CANDLE
 # ============================================================
 
-def build_candle(day, start_time, minutes):
+def build_candle(
+    day,
+    start_time,
+    minutes
+):
 
     hour, minute = map(
         int,
@@ -253,14 +249,10 @@ def build_candle(day, start_time, minutes):
 
 
 # ============================================================
-# BUILD DAILY FEATURE SET
+# FEATURES
 # ============================================================
 
 def build_features(day):
-
-    # --------------------------------------------------------
-    # 5-MINUTE
-    # --------------------------------------------------------
 
     c5_1520 = build_candle(
         day,
@@ -274,10 +266,6 @@ def build_features(day):
         5
     )
 
-    # --------------------------------------------------------
-    # 3-MINUTE
-    # --------------------------------------------------------
-
     c3_1524 = build_candle(
         day,
         "15:24",
@@ -289,10 +277,6 @@ def build_features(day):
         "15:27",
         3
     )
-
-    # --------------------------------------------------------
-    # 1-MINUTE
-    # --------------------------------------------------------
 
     c1_1528 = build_candle(
         day,
@@ -306,7 +290,7 @@ def build_features(day):
         1
     )
 
-    required = [
+    candles = [
         c5_1520,
         c5_1525,
         c3_1524,
@@ -317,13 +301,9 @@ def build_features(day):
 
     if any(
         x is None
-        for x in required
+        for x in candles
     ):
         return None
-
-    # --------------------------------------------------------
-    # DIRECTIONS
-    # --------------------------------------------------------
 
     d5_1520 = direction(
         c5_1520["open"],
@@ -355,35 +335,6 @@ def build_features(day):
         c1_1529["close"]
     )
 
-    # --------------------------------------------------------
-    # VOLUME RATIOS
-    # --------------------------------------------------------
-
-    v5_ratio = (
-        c5_1520["volume"] /
-        c5_1525["volume"]
-        if c5_1525["volume"] > 0
-        else None
-    )
-
-    v3_ratio = (
-        c3_1524["volume"] /
-        c3_1527["volume"]
-        if c3_1527["volume"] > 0
-        else None
-    )
-
-    v1_ratio = (
-        c1_1528["volume"] /
-        c1_1529["volume"]
-        if c1_1529["volume"] > 0
-        else None
-    )
-
-    # --------------------------------------------------------
-    # FEATURE ROW
-    # --------------------------------------------------------
-
     return {
 
         "5m_1520": d5_1520,
@@ -396,87 +347,135 @@ def build_features(day):
         "1m_1529": d1_1529,
 
         "5m_same":
-            d5_1520 == d5_1525,
+            (
+                d5_1520 == d5_1525
+                and d5_1520 != "DOJI"
+            ),
 
         "5m_opposite":
             (
                 d5_1520 != d5_1525
-                and
-                d5_1520 != "DOJI"
-                and
-                d5_1525 != "DOJI"
+                and d5_1520 != "DOJI"
+                and d5_1525 != "DOJI"
             ),
 
         "3m_same":
-            d3_1524 == d3_1527,
+            (
+                d3_1524 == d3_1527
+                and d3_1524 != "DOJI"
+            ),
 
         "3m_opposite":
             (
                 d3_1524 != d3_1527
-                and
-                d3_1524 != "DOJI"
-                and
-                d3_1527 != "DOJI"
+                and d3_1524 != "DOJI"
+                and d3_1527 != "DOJI"
             ),
 
         "1m_same":
-            d1_1528 == d1_1529,
+            (
+                d1_1528 == d1_1529
+                and d1_1528 != "DOJI"
+            ),
 
         "1m_opposite":
             (
                 d1_1528 != d1_1529
-                and
-                d1_1528 != "DOJI"
-                and
-                d1_1529 != "DOJI"
+                and d1_1528 != "DOJI"
+                and d1_1529 != "DOJI"
             ),
 
-        "5m_1520_volume":
-            c5_1520["volume"],
+        "5m3m_same":
+            (
+                d5_1520 == d3_1524
+                and d5_1520 != "DOJI"
+            ),
 
-        "5m_1525_volume":
-            c5_1525["volume"],
+        "5m3m_opposite":
+            (
+                d5_1520 != d3_1524
+                and d5_1520 != "DOJI"
+                and d3_1524 != "DOJI"
+            ),
 
-        "5m_volume_ratio":
-            v5_ratio,
+        "5m1m_same":
+            (
+                d5_1520 == d1_1528
+                and d5_1520 != "DOJI"
+            ),
 
-        "5m_1520_more_volume":
-            c5_1520["volume"] >
-            c5_1525["volume"],
+        "5m1m_opposite":
+            (
+                d5_1520 != d1_1528
+                and d5_1520 != "DOJI"
+                and d1_1528 != "DOJI"
+            ),
 
-        "3m_1524_volume":
-            c3_1524["volume"],
+        "3m1m_same":
+            (
+                d3_1524 == d1_1528
+                and d3_1524 != "DOJI"
+            ),
 
-        "3m_1527_volume":
-            c3_1527["volume"],
+        "3m1m_opposite":
+            (
+                d3_1524 != d1_1528
+                and d3_1524 != "DOJI"
+                and d1_1528 != "DOJI"
+            ),
 
-        "3m_volume_ratio":
-            v3_ratio,
+        "all_three_same":
+            (
+                d5_1520 ==
+                d3_1524 ==
+                d1_1528
+                and
+                d5_1520 != "DOJI"
+            ),
 
-        "3m_1524_more_volume":
-            c3_1524["volume"] >
-            c3_1527["volume"],
+        "5m_volume_more":
+            (
+                c5_1520["volume"] >
+                c5_1525["volume"]
+            ),
 
-        "1m_1528_volume":
-            c1_1528["volume"],
+        "5m_volume_less":
+            (
+                c5_1520["volume"] <
+                c5_1525["volume"]
+            ),
 
-        "1m_1529_volume":
-            c1_1529["volume"],
+        "3m_volume_more":
+            (
+                c3_1524["volume"] >
+                c3_1527["volume"]
+            ),
 
-        "1m_volume_ratio":
-            v1_ratio,
+        "3m_volume_less":
+            (
+                c3_1524["volume"] <
+                c3_1527["volume"]
+            ),
 
-        "1m_1528_more_volume":
-            c1_1528["volume"] >
-            c1_1529["volume"]
+        "1m_volume_more":
+            (
+                c1_1528["volume"] >
+                c1_1529["volume"]
+            ),
+
+        "1m_volume_less":
+            (
+                c1_1528["volume"] <
+                c1_1529["volume"]
+            )
     }
 
 
 # ============================================================
-# CREATE DAILY DATA
+# EXTRACT ALL OBSERVATIONS
 # ============================================================
 
-def extract_stock_days(
+def extract_stock(
     z,
     filename
 ):
@@ -499,8 +498,6 @@ def extract_stock_days(
         grouped.keys()
     )
 
-    output = []
-
     symbol = os.path.basename(
         filename
     ).replace(
@@ -508,9 +505,7 @@ def extract_stock_days(
         ""
     )
 
-    # --------------------------------------------------------
-    # Each signal day has the NEXT trading day's return
-    # --------------------------------------------------------
+    rows = []
 
     for i, signal_date in enumerate(
         dates
@@ -529,10 +524,6 @@ def extract_stock_days(
             trade_date
         ]
 
-        # ----------------------------------------------------
-        # SIGNAL DAY
-        # ----------------------------------------------------
-
         day = {}
 
         for _, row in signal_group.iterrows():
@@ -546,22 +537,21 @@ def extract_stock_days(
         if features is None:
             continue
 
-        # ----------------------------------------------------
-        # NEXT DAY
-        # ----------------------------------------------------
-
         next_day = {}
 
         for _, row in trade_group.iterrows():
 
             next_day[row["hm"]] = row.to_dict()
 
-        if (
-            "09:15" not in next_day
-            or
-            "15:27" not in next_day
-            or
-            "15:29" not in next_day
+        required = [
+            "09:15",
+            "15:27",
+            "15:29"
+        ]
+
+        if not all(
+            x in next_day
+            for x in required
         ):
             continue
 
@@ -580,13 +570,6 @@ def extract_stock_days(
         if entry <= 0:
             continue
 
-        # ----------------------------------------------------
-        # NEXT-DAY RETURNS
-        #
-        # We calculate BOTH directions so that the scanner
-        # can determine which direction is actually better.
-        # ----------------------------------------------------
-
         long_1527 = (
             exit_1527 - entry
         ) / entry * 100
@@ -595,11 +578,7 @@ def extract_stock_days(
             exit_1529 - entry
         ) / entry * 100
 
-        short_1527 = -long_1527
-
-        short_1529 = -long_1529
-
-        row = {
+        rows.append({
 
             "symbol":
                 symbol,
@@ -612,163 +591,293 @@ def extract_stock_days(
 
             **features,
 
-            "long_1527_return":
+            "long_1527":
                 long_1527,
 
-            "long_1529_return":
+            "long_1529":
                 long_1529,
 
-            "short_1527_return":
-                short_1527,
+            "short_1527":
+                -long_1527,
 
-            "short_1529_return":
-                short_1529
-        }
+            "short_1529":
+                -long_1529
+        })
 
-        output.append(row)
-
-    return output
+    return rows
 
 
 # ============================================================
-# ADD TREND RELATIONSHIP
+# PATTERN DEFINITIONS
 # ============================================================
 
-def add_relationships(df):
+def get_patterns(df):
 
-    # --------------------------------------------------------
-    # 5m 15:20 vs 3m 15:24
-    # --------------------------------------------------------
+    return {
 
-    df["5m3m_same"] = (
-        df["5m_1520"] ==
-        df["3m_1524"]
-    )
+        # ----------------------------------------------------
+        # INDIVIDUAL CANDLES
+        # ----------------------------------------------------
 
-    df["5m3m_opposite"] = (
-        (df["5m_1520"] != df["3m_1524"])
-        &
-        (df["5m_1520"] != "DOJI")
-        &
-        (df["3m_1524"] != "DOJI")
-    )
+        "3m_15:24_BEAR":
+            df["3m_1524"] == "BEAR",
 
-    # --------------------------------------------------------
-    # 5m 15:20 vs 1m 15:28
-    # --------------------------------------------------------
+        "3m_15:24_BULL":
+            df["3m_1524"] == "BULL",
 
-    df["5m1m_same"] = (
-        df["5m_1520"] ==
-        df["1m_1528"]
-    )
+        "3m_15:27_BEAR":
+            df["3m_1527"] == "BEAR",
 
-    df["5m1m_opposite"] = (
-        (df["5m_1520"] != df["1m_1528"])
-        &
-        (df["5m_1520"] != "DOJI")
-        &
-        (df["1m_1528"] != "DOJI")
-    )
+        "3m_15:27_BULL":
+            df["3m_1527"] == "BULL",
 
-    # --------------------------------------------------------
-    # 3m 15:24 vs 1m 15:28
-    # --------------------------------------------------------
+        "5m_15:20_BEAR":
+            df["5m_1520"] == "BEAR",
 
-    df["3m1m_same"] = (
-        df["3m_1524"] ==
-        df["1m_1528"]
-    )
+        "5m_15:20_BULL":
+            df["5m_1520"] == "BULL",
 
-    df["3m1m_opposite"] = (
-        (df["3m_1524"] != df["1m_1528"])
-        &
-        (df["3m_1524"] != "DOJI")
-        &
-        (df["1m_1528"] != "DOJI")
-    )
+        "1m_15:28_BEAR":
+            df["1m_1528"] == "BEAR",
 
-    # --------------------------------------------------------
-    # ALL THREE ALIGNMENT
-    # --------------------------------------------------------
+        "1m_15:28_BULL":
+            df["1m_1528"] == "BULL",
 
-    df["all_three_same"] = (
-        (df["5m_1520"] == df["3m_1524"])
-        &
-        (df["3m_1524"] == df["1m_1528"])
-        &
-        (df["5m_1520"] != "DOJI")
-    )
+        # ----------------------------------------------------
+        # SAME / OPPOSITE
+        # ----------------------------------------------------
 
-    return df
+        "5m_OPPOSITE":
+            df["5m_opposite"],
+
+        "5m_SAME":
+            df["5m_same"],
+
+        "3m_OPPOSITE":
+            df["3m_opposite"],
+
+        "3m_SAME":
+            df["3m_same"],
+
+        "1m_OPPOSITE":
+            df["1m_opposite"],
+
+        "1m_SAME":
+            df["1m_same"],
+
+        # ----------------------------------------------------
+        # TIMEFRAME ALIGNMENT
+        # ----------------------------------------------------
+
+        "5m15:20 = 3m15:24":
+            df["5m3m_same"],
+
+        "5m15:20 != 3m15:24":
+            df["5m3m_opposite"],
+
+        "5m15:20 = 1m15:28":
+            df["5m1m_same"],
+
+        "5m15:20 != 1m15:28":
+            df["5m1m_opposite"],
+
+        "3m15:24 = 1m15:28":
+            df["3m1m_same"],
+
+        "3m15:24 != 1m15:28":
+            df["3m1m_opposite"],
+
+        "ALL THREE SAME":
+            df["all_three_same"],
+
+        # ----------------------------------------------------
+        # VOLUME
+        # ----------------------------------------------------
+
+        "5m_15:20_VOLUME_MORE":
+            df["5m_volume_more"],
+
+        "5m_15:20_VOLUME_LESS":
+            df["5m_volume_less"],
+
+        "3m_15:24_VOLUME_MORE":
+            df["3m_volume_more"],
+
+        "3m_15:24_VOLUME_LESS":
+            df["3m_volume_less"],
+
+        "1m_15:28_VOLUME_MORE":
+            df["1m_volume_more"],
+
+        "1m_15:28_VOLUME_LESS":
+            df["1m_volume_less"],
+
+        # ----------------------------------------------------
+        # IMPORTANT COMBINATIONS
+        # ----------------------------------------------------
+
+        (
+            "3m 15:24 BEAR + "
+            "3m 15:24 VOLUME MORE"
+        ):
+            (
+                (df["3m_1524"] == "BEAR")
+                &
+                df["3m_volume_more"]
+            ),
+
+        (
+            "3m OPPOSITE + "
+            "3m VOLUME MORE"
+        ):
+            (
+                df["3m_opposite"]
+                &
+                df["3m_volume_more"]
+            ),
+
+        (
+            "5m OPPOSITE + "
+            "5m VOLUME MORE"
+        ):
+            (
+                df["5m_opposite"]
+                &
+                df["5m_volume_more"]
+            ),
+
+        (
+            "5m = 3m + "
+            "3m OPPOSITE"
+        ):
+            (
+                df["5m3m_same"]
+                &
+                df["3m_opposite"]
+            ),
+
+        (
+            "5m = 1m + "
+            "1m VOLUME MORE"
+        ):
+            (
+                df["5m1m_same"]
+                &
+                df["1m_volume_more"]
+            ),
+
+        (
+            "3m = 1m + "
+            "1m VOLUME MORE"
+        ):
+            (
+                df["3m1m_same"]
+                &
+                df["1m_volume_more"]
+            ),
+
+        (
+            "ALL THREE SAME + "
+            "1m VOLUME MORE"
+        ):
+            (
+                df["all_three_same"]
+                &
+                df["1m_volume_more"]
+            ),
+
+        (
+            "ALL THREE SAME + "
+            "3m VOLUME MORE"
+        ):
+            (
+                df["all_three_same"]
+                &
+                df["3m_volume_more"]
+            ),
+
+        (
+            "ALL THREE SAME + "
+            "5m VOLUME MORE"
+        ):
+            (
+                df["all_three_same"]
+                &
+                df["5m_volume_more"]
+            ),
+
+        (
+            "ALL THREE SAME + "
+            "ALL VOLUME MORE"
+        ):
+            (
+                df["all_three_same"]
+                &
+                df["5m_volume_more"]
+                &
+                df["3m_volume_more"]
+                &
+                df["1m_volume_more"]
+            )
+    }
 
 
 # ============================================================
-# ANALYZE CONDITION
+# EVALUATE PATTERN
 # ============================================================
 
-def analyze_condition(
+def evaluate_pattern(
     df,
-    condition_name,
-    mask
+    mask,
+    min_trades
 ):
 
-    subset = df[mask].copy()
+    subset = df[
+        mask
+    ].copy()
 
-    trades = len(subset)
-
-    if trades < MIN_TRADES:
+    if len(subset) < min_trades:
         return None
 
     # --------------------------------------------------------
-    # Long
+    # Determine direction ONLY from TRAINING DATA
     # --------------------------------------------------------
 
-    long_returns = subset[
-        "long_1529_return"
-    ]
+    long_avg = (
+        subset["long_1529"]
+        .mean()
+    )
 
-    long_1527 = subset[
-        "long_1527_return"
-    ]
-
-    # --------------------------------------------------------
-    # Short
-    # --------------------------------------------------------
-
-    short_returns = subset[
-        "short_1529_return"
-    ]
-
-    short_1527 = subset[
-        "short_1527_return"
-    ]
-
-    # --------------------------------------------------------
-    # Select better direction automatically
-    # --------------------------------------------------------
-
-    long_avg = long_returns.mean()
-    short_avg = short_returns.mean()
+    short_avg = (
+        subset["short_1529"]
+        .mean()
+    )
 
     if long_avg >= short_avg:
 
-        chosen_direction = "LONG"
+        direction_name = "LONG"
 
-        returns_1529 = long_returns
-        returns_1527 = long_1527
+        r1527 = (
+            subset["long_1527"]
+        )
+
+        r1529 = (
+            subset["long_1529"]
+        )
 
     else:
 
-        chosen_direction = "SHORT"
+        direction_name = "SHORT"
 
-        returns_1529 = short_returns
-        returns_1527 = short_1527
+        r1527 = (
+            subset["short_1527"]
+        )
 
-    # --------------------------------------------------------
-    # Statistics
-    # --------------------------------------------------------
+        r1529 = (
+            subset["short_1529"]
+        )
 
-    def stats(series):
+    def statistics(series):
 
         wins = (
             series > 0
@@ -779,12 +888,148 @@ def analyze_condition(
         ).sum()
 
         win_rate = (
-            wins / len(series) * 100
+            wins /
+            len(series) *
+            100
         )
 
-        gross_profit = series[
+        gross_profit = (
+            series[
+                series > 0
+            ].sum()
+        )
+
+        gross_loss = abs(
+            series[
+                series < 0
+            ].sum()
+        )
+
+        if gross_loss > 0:
+
+            profit_factor = (
+                gross_profit /
+                gross_loss
+            )
+
+        else:
+
+            profit_factor = float("inf")
+
+        return {
+
+            "trades":
+                len(series),
+
+            "win_rate":
+                win_rate,
+
+            "average":
+                series.mean(),
+
+            "median":
+                series.median(),
+
+            "profit_factor":
+                profit_factor,
+
+            "total":
+                series.sum()
+        }
+
+    s1527 = statistics(
+        r1527
+    )
+
+    s1529 = statistics(
+        r1529
+    )
+
+    return {
+
+        "direction":
+            direction_name,
+
+        "trades":
+            len(subset),
+
+        "15:27_win_rate":
+            s1527["win_rate"],
+
+        "15:27_average":
+            s1527["average"],
+
+        "15:27_profit_factor":
+            s1527["profit_factor"],
+
+        "15:29_win_rate":
+            s1529["win_rate"],
+
+        "15:29_average":
+            s1529["average"],
+
+        "15:29_profit_factor":
+            s1529["profit_factor"],
+
+        "15:29_total":
+            s1529["total"]
+    }
+
+
+# ============================================================
+# TEST TOP PATTERN ON UNSEEN DATA
+# ============================================================
+
+def test_pattern(
+    df,
+    pattern_mask,
+    direction_name
+):
+
+    subset = df[
+        pattern_mask
+    ].copy()
+
+    if len(subset) == 0:
+        return None
+
+    if direction_name == "LONG":
+
+        r1527 = (
+            subset["long_1527"]
+        )
+
+        r1529 = (
+            subset["long_1529"]
+        )
+
+    else:
+
+        r1527 = (
+            subset["short_1527"]
+        )
+
+        r1529 = (
+            subset["short_1529"]
+        )
+
+    def stats(series):
+
+        wins = (
             series > 0
-        ].sum()
+        ).sum()
+
+        win_rate = (
+            wins /
+            len(series) *
+            100
+        )
+
+        gross_profit = (
+            series[
+                series > 0
+            ].sum()
+        )
 
         gross_loss = abs(
             series[
@@ -804,6 +1049,7 @@ def analyze_condition(
             pf = float("inf")
 
         return (
+            len(series),
             win_rate,
             series.mean(),
             series.median(),
@@ -811,300 +1057,46 @@ def analyze_condition(
             series.sum()
         )
 
-    (
-        wr_1529,
-        avg_1529,
-        med_1529,
-        pf_1529,
-        total_1529
-    ) = stats(
-        returns_1529
+    a = stats(
+        r1527
     )
 
-    (
-        wr_1527,
-        avg_1527,
-        med_1527,
-        pf_1527,
-        total_1527
-    ) = stats(
-        returns_1527
+    b = stats(
+        r1529
     )
 
     return {
 
-        "condition":
-            condition_name,
-
         "trades":
-            trades,
+            len(subset),
 
         "direction":
-            chosen_direction,
+            direction_name,
 
-        "win_rate_15:29":
-            wr_1529,
+        "15:27_win_rate":
+            a[1],
 
-        "avg_return_15:29":
-            avg_1529,
+        "15:27_average":
+            a[2],
 
-        "median_15:29":
-            med_1529,
+        "15:27_profit_factor":
+            a[4],
 
-        "profit_factor_15:29":
-            pf_1529,
+        "15:27_total":
+            a[5],
 
-        "total_return_15:29":
-            total_1529,
+        "15:29_win_rate":
+            b[1],
 
-        "win_rate_15:27":
-            wr_1527,
+        "15:29_average":
+            b[2],
 
-        "avg_return_15:27":
-            avg_1527,
+        "15:29_profit_factor":
+            b[4],
 
-        "median_15:27":
-            med_1527,
-
-        "profit_factor_15:27":
-            pf_1527,
-
-        "total_return_15:27":
-            total_1527
+        "15:29_total":
+            b[5]
     }
-
-
-# ============================================================
-# GENERATE PATTERN TESTS
-# ============================================================
-
-def generate_tests(df):
-
-    tests = []
-
-    # ========================================================
-    # BASIC CANDLE DIRECTIONS
-    # ========================================================
-
-    directions = [
-        ("5m_1520_BULL",
-         df["5m_1520"] == "BULL"),
-
-        ("5m_1520_BEAR",
-         df["5m_1520"] == "BEAR"),
-
-        ("5m_1525_BULL",
-         df["5m_1525"] == "BULL"),
-
-        ("5m_1525_BEAR",
-         df["5m_1525"] == "BEAR"),
-
-        ("3m_1524_BULL",
-         df["3m_1524"] == "BULL"),
-
-        ("3m_1524_BEAR",
-         df["3m_1524"] == "BEAR"),
-
-        ("3m_1527_BULL",
-         df["3m_1527"] == "BULL"),
-
-        ("3m_1527_BEAR",
-         df["3m_1527"] == "BEAR"),
-
-        ("1m_1528_BULL",
-         df["1m_1528"] == "BULL"),
-
-        ("1m_1528_BEAR",
-         df["1m_1528"] == "BEAR"),
-
-        ("1m_1529_BULL",
-         df["1m_1529"] == "BULL"),
-
-        ("1m_1529_BEAR",
-         df["1m_1529"] == "BEAR")
-    ]
-
-    tests.extend(
-        directions
-    )
-
-    # ========================================================
-    # SAME / OPPOSITE
-    # ========================================================
-
-    relationship_tests = [
-
-        ("5m_same",
-         df["5m_same"]),
-
-        ("5m_opposite",
-         df["5m_opposite"]),
-
-        ("3m_same",
-         df["3m_same"]),
-
-        ("3m_opposite",
-         df["3m_opposite"]),
-
-        ("1m_same",
-         df["1m_same"]),
-
-        ("1m_opposite",
-         df["1m_opposite"]),
-
-        ("5m15:20_3m15:24_same",
-         df["5m3m_same"]),
-
-        ("5m15:20_3m15:24_opposite",
-         df["5m3m_opposite"]),
-
-        ("5m15:20_1m15:28_same",
-         df["5m1m_same"]),
-
-        ("5m15:20_1m15:28_opposite",
-         df["5m1m_opposite"]),
-
-        ("3m15:24_1m15:28_same",
-         df["3m1m_same"]),
-
-        ("3m15:24_1m15:28_opposite",
-         df["3m1m_opposite"]),
-
-        ("ALL_THREE_SAME",
-         df["all_three_same"])
-    ]
-
-    tests.extend(
-        relationship_tests
-    )
-
-    # ========================================================
-    # VOLUME RELATIONSHIPS
-    # ========================================================
-
-    volume_tests = [
-
-        (
-            "5m_15:20_volume_MORE",
-            df["5m_1520_more_volume"]
-        ),
-
-        (
-            "5m_15:20_volume_LESS",
-            ~df["5m_1520_more_volume"]
-        ),
-
-        (
-            "3m_15:24_volume_MORE",
-            df["3m_1524_more_volume"]
-        ),
-
-        (
-            "3m_15:24_volume_LESS",
-            ~df["3m_1524_more_volume"]
-        ),
-
-        (
-            "1m_15:28_volume_MORE",
-            df["1m_1528_more_volume"]
-        ),
-
-        (
-            "1m_15:28_volume_LESS",
-            ~df["1m_1528_more_volume"]
-        )
-    ]
-
-    tests.extend(
-        volume_tests
-    )
-
-    # ========================================================
-    # COMBINATIONS
-    # ========================================================
-
-    combination_tests = [
-
-        (
-            "5m_OPPOSITE + 5m_15:20_volume_MORE",
-            df["5m_opposite"]
-            &
-            df["5m_1520_more_volume"]
-        ),
-
-        (
-            "3m_OPPOSITE + 3m_15:24_volume_MORE",
-            df["3m_opposite"]
-            &
-            df["3m_1524_more_volume"]
-        ),
-
-        (
-            "1m_OPPOSITE + 1m_15:28_volume_MORE",
-            df["1m_opposite"]
-            &
-            df["1m_1528_more_volume"]
-        ),
-
-        (
-            "5m15:20 = 3m15:24 + 3m_OPPOSITE",
-            df["5m3m_same"]
-            &
-            df["3m_opposite"]
-        ),
-
-        (
-            "5m15:20 = 1m15:28 + 1m_VOLUME_MORE",
-            df["5m1m_same"]
-            &
-            df["1m_1528_more_volume"]
-        ),
-
-        (
-            "3m15:24 = 1m15:28 + 1m_VOLUME_MORE",
-            df["3m1m_same"]
-            &
-            df["1m_1528_more_volume"]
-        ),
-
-        (
-            "ALL_THREE_SAME + 1m_VOLUME_MORE",
-            df["all_three_same"]
-            &
-            df["1m_1528_more_volume"]
-        ),
-
-        (
-            "ALL_THREE_SAME + 3m_VOLUME_MORE",
-            df["all_three_same"]
-            &
-            df["3m_1524_more_volume"]
-        ),
-
-        (
-            "ALL_THREE_SAME + 5m_VOLUME_MORE",
-            df["all_three_same"]
-            &
-            df["5m_1520_more_volume"]
-        ),
-
-        (
-            "ALL_THREE_SAME + ALL_VOLUME_MORE",
-            df["all_three_same"]
-            &
-            df["5m_1520_more_volume"]
-            &
-            df["3m_1524_more_volume"]
-            &
-            df["1m_1528_more_volume"]
-        )
-    ]
-
-    tests.extend(
-        combination_tests
-    )
-
-    return tests
 
 
 # ============================================================
@@ -1115,21 +1107,17 @@ def main():
 
     print("\n")
     print("=" * 75)
-    print("NSE MULTI-TIMEFRAME PATTERN SCANNER")
+    print("OUT-OF-SAMPLE EDGE VALIDATION")
     print("=" * 75)
 
     print(
-        f"\nMinimum observations per pattern: "
-        f"{MIN_TRADES}"
+        "\nTraining period: "
+        f"{TRAIN_PERCENT * 100:.0f}%"
     )
 
     print(
-        "\nThe scanner does NOT assume a trading direction."
-    )
-
-    print(
-        "It tests LONG and SHORT and chooses the stronger "
-        "historical direction for each pattern."
+        "Unseen test period: "
+        f"{(1 - TRAIN_PERCENT) * 100:.0f}%"
     )
 
     # ========================================================
@@ -1149,11 +1137,12 @@ def main():
     ]
 
     print(
-        f"\nStock files found: {len(files)}"
+        f"\nStocks found: "
+        f"{len(files)}"
     )
 
     # ========================================================
-    # EXTRACT ALL DAILY DATA
+    # LOAD
     # ========================================================
 
     all_rows = []
@@ -1164,12 +1153,12 @@ def main():
     ):
 
         print(
-            f"\rProcessing stocks "
+            f"\rProcessing "
             f"{number}/{len(files)}",
             end=""
         )
 
-        rows = extract_stock_days(
+        rows = extract_stock(
             z,
             filename
         )
@@ -1180,242 +1169,336 @@ def main():
 
     print("\n")
 
-    if not all_rows:
-
-        print(
-            "No usable data found."
-        )
-
-        return
-
     df = pd.DataFrame(
         all_rows
     )
 
-    print(
-        f"Total signal-day observations: "
-        f"{len(df):,}"
-    )
-
-    # ========================================================
-    # RELATIONSHIPS
-    # ========================================================
-
-    df = add_relationships(
-        df
-    )
-
-    # ========================================================
-    # GENERATE TESTS
-    # ========================================================
-
-    tests = generate_tests(
-        df
-    )
-
-    results = []
-
-    print(
-        f"\nTesting "
-        f"{len(tests)} patterns..."
-    )
-
-    # ========================================================
-    # ANALYZE
-    # ========================================================
-
-    for name, mask in tests:
-
-        result = analyze_condition(
-            df,
-            name,
-            mask
-        )
-
-        if result is not None:
-
-            results.append(
-                result
-            )
-
-    if not results:
+    if df.empty:
 
         print(
-            "No patterns reached "
-            f"the {MIN_TRADES} trade minimum."
+            "No usable observations."
         )
 
         return
 
-    results_df = pd.DataFrame(
-        results
+    df["signal_date"] = pd.to_datetime(
+        df["signal_date"]
     )
 
     # ========================================================
-    # SORT BY AVERAGE RETURN
+    # TIME SPLIT
     # ========================================================
 
-    results_df = results_df.sort_values(
-        by="avg_return_15:29",
-        ascending=False
+    unique_dates = sorted(
+        df["signal_date"]
+        .unique()
     )
 
-    # ========================================================
-    # TOP PATTERNS — 15:29
-    # ========================================================
+    split_index = int(
+        len(unique_dates) *
+        TRAIN_PERCENT
+    )
 
-    print("\n")
-    print("=" * 75)
-    print("TOP 20 PATTERNS — 15:29 EXIT")
-    print("=" * 75)
+    split_date = (
+        unique_dates[
+            split_index
+        ]
+    )
+
+    train = df[
+        df["signal_date"] <
+        split_date
+    ].copy()
+
+    test = df[
+        df["signal_date"] >=
+        split_date
+    ].copy()
 
     print(
-        results_df[
-            [
-                "condition",
-                "trades",
-                "direction",
-                "win_rate_15:29",
-                "avg_return_15:29",
-                "profit_factor_15:29"
-            ]
-        ]
-        .head(20)
-        .to_string(
-            index=False
-        )
+        f"Training observations: "
+        f"{len(train):,}"
     )
-
-    # ========================================================
-    # TOP PATTERNS — 15:27
-    # ========================================================
-
-    results_1527 = results_df.sort_values(
-        by="avg_return_15:27",
-        ascending=False
-    )
-
-    print("\n")
-    print("=" * 75)
-    print("TOP 20 PATTERNS — 15:27 EXIT")
-    print("=" * 75)
 
     print(
-        results_1527[
-            [
-                "condition",
-                "trades",
-                "direction",
-                "win_rate_15:27",
-                "avg_return_15:27",
-                "profit_factor_15:27"
-            ]
-        ]
-        .head(20)
-        .to_string(
-            index=False
-        )
+        f"Test observations: "
+        f"{len(test):,}"
     )
-
-    # ========================================================
-    # TOP BY PROFIT FACTOR
-    # ========================================================
-
-    results_pf = results_df.sort_values(
-        by="profit_factor_15:29",
-        ascending=False
-    )
-
-    print("\n")
-    print("=" * 75)
-    print("TOP 20 PATTERNS — PROFIT FACTOR")
-    print("=" * 75)
 
     print(
-        results_pf[
-            [
-                "condition",
-                "trades",
-                "direction",
-                "win_rate_15:29",
-                "avg_return_15:29",
-                "profit_factor_15:29"
-            ]
-        ]
-        .head(20)
-        .to_string(
-            index=False
+        f"Training ends before: "
+        f"{split_date}"
+    )
+
+    print(
+        f"Test starts: "
+        f"{split_date}"
+    )
+
+    # ========================================================
+    # PATTERNS
+    # ========================================================
+
+    train_patterns = get_patterns(
+        train
+    )
+
+    test_patterns = get_patterns(
+        test
+    )
+
+    # ========================================================
+    # DISCOVER PATTERNS ONLY IN TRAINING
+    # ========================================================
+
+    discovered = []
+
+    for name, mask in train_patterns.items():
+
+        result = evaluate_pattern(
+            train,
+            mask,
+            MIN_TRAIN_TRADES
         )
-    )
 
-    # ========================================================
-    # SAVE PATTERN RESULTS
-    # ========================================================
-
-    pattern_file = (
-        "pattern_scanner_results.csv"
-    )
-
-    results_df.to_csv(
-        pattern_file,
-        index=False
-    )
-
-    # ========================================================
-    # SAVE RAW DAILY FEATURES
-    # ========================================================
-
-    raw_file = (
-        "pattern_scanner_daily_data.csv"
-    )
-
-    df.to_csv(
-        raw_file,
-        index=False
-    )
-
-    # ========================================================
-    # YEAR-BY-YEAR TEST OF TOP 10
-    # ========================================================
-
-    results_df["rank"] = range(
-        1,
-        len(results_df) + 1
-    )
-
-    top_patterns = results_df.head(
-        10
-    )["condition"].tolist()
-
-    print("\n")
-    print("=" * 75)
-    print("TOP PATTERNS — YEAR-BY-YEAR CHECK")
-    print("=" * 75)
-
-    df["year"] = (
-        df["trade_date"]
-        .astype(str)
-        .str[:4]
-    )
-
-    for pattern in top_patterns:
-
-        mask = None
-
-        for name, test_mask in tests:
-
-            if name == pattern:
-
-                mask = test_mask
-                break
-
-        if mask is None:
+        if result is None:
             continue
 
-        subset = df[mask].copy()
+        result["pattern"] = name
+
+        discovered.append(
+            result
+        )
+
+    discovered_df = pd.DataFrame(
+        discovered
+    )
+
+    if discovered_df.empty:
 
         print(
-            f"\n{pattern}"
+            "No patterns reached "
+            f"{MIN_TRAIN_TRADES} trades."
+        )
+
+        return
+
+    # ========================================================
+    # RANK TRAINING PATTERNS
+    # ========================================================
+
+    discovered_df = (
+        discovered_df
+        .sort_values(
+            by="15:29_average",
+            ascending=False
+        )
+    )
+
+    top = discovered_df.head(
+        TOP_PATTERNS
+    )
+
+    print("\n")
+    print("=" * 75)
+    print(
+        "TOP PATTERNS DISCOVERED "
+        "IN TRAINING DATA"
+    )
+    print("=" * 75)
+
+    print(
+        top[
+            [
+                "pattern",
+                "trades",
+                "direction",
+                "15:29_win_rate",
+                "15:29_average",
+                "15:29_profit_factor"
+            ]
+        ].to_string(
+            index=False
+        )
+    )
+
+    # ========================================================
+    # VALIDATE EACH TOP PATTERN
+    # ========================================================
+
+    validation_rows = []
+
+    for _, row in top.iterrows():
+
+        pattern_name = row[
+            "pattern"
+        ]
+
+        direction_name = row[
+            "direction"
+        ]
+
+        train_mask = (
+            train_patterns[
+                pattern_name
+            ]
+        )
+
+        test_mask = (
+            test_patterns[
+                pattern_name
+            ]
+        )
+
+        validation = test_pattern(
+            test,
+            test_mask,
+            direction_name
+        )
+
+        if validation is None:
+            continue
+
+        validation_rows.append({
+
+            "pattern":
+                pattern_name,
+
+            "direction":
+                direction_name,
+
+            "train_trades":
+                row["trades"],
+
+            "train_win_rate":
+                row["15:29_win_rate"],
+
+            "train_average":
+                row["15:29_average"],
+
+            "train_profit_factor":
+                row["15:29_profit_factor"],
+
+            "test_trades":
+                validation["trades"],
+
+            "test_15:27_win_rate":
+                validation[
+                    "15:27_win_rate"
+                ],
+
+            "test_15:27_average":
+                validation[
+                    "15:27_average"
+                ],
+
+            "test_15:27_profit_factor":
+                validation[
+                    "15:27_profit_factor"
+                ],
+
+            "test_15:29_win_rate":
+                validation[
+                    "15:29_win_rate"
+                ],
+
+            "test_15:29_average":
+                validation[
+                    "15:29_average"
+                ],
+
+            "test_15:29_profit_factor":
+                validation[
+                    "15:29_profit_factor"
+                ],
+
+            "test_15:29_total":
+                validation[
+                    "15:29_total"
+                ]
+        })
+
+    validation_df = pd.DataFrame(
+        validation_rows
+    )
+
+    # ========================================================
+    # FINAL VALIDATION TABLE
+    # ========================================================
+
+    print("\n")
+    print("=" * 75)
+    print(
+        "UNSEEN TEST RESULTS"
+    )
+    print("=" * 75)
+
+    if validation_df.empty:
+
+        print(
+            "No validation results."
+        )
+
+    else:
+
+        print(
+            validation_df[
+                [
+                    "pattern",
+                    "direction",
+                    "train_average",
+                    "train_profit_factor",
+                    "test_trades",
+                    "test_15:29_win_rate",
+                    "test_15:29_average",
+                    "test_15:29_profit_factor"
+                ]
+            ].to_string(
+                index=False
+            )
+        )
+
+    # ========================================================
+    # YEARLY TEST OF TOP PATTERNS
+    # ========================================================
+
+    print("\n")
+    print("=" * 75)
+    print(
+        "YEAR-BY-YEAR PERFORMANCE "
+        "OF TOP PATTERNS"
+    )
+    print("=" * 75)
+
+    test["year"] = (
+        test["signal_date"]
+        .dt.year
+    )
+
+    for _, row in top.iterrows():
+
+        pattern_name = row[
+            "pattern"
+        ]
+
+        direction_name = row[
+            "direction"
+        ]
+
+        mask = test_patterns[
+            pattern_name
+        ]
+
+        subset = test[
+            mask
+        ].copy()
+
+        if subset.empty:
+            continue
+
+        print(
+            f"\n{pattern_name} "
+            f"→ {direction_name}"
         )
 
         for year in sorted(
@@ -1426,80 +1509,76 @@ def main():
                 subset["year"] == year
             ]
 
-            if len(yearly) < 20:
-                continue
+            if direction_name == "LONG":
 
-            # Determine direction using that year's data
-            long_avg = (
-                yearly["long_1529_return"]
-                .mean()
-            )
-
-            short_avg = (
-                yearly["short_1529_return"]
-                .mean()
-            )
-
-            if long_avg >= short_avg:
-
-                chosen = (
-                    yearly[
-                        "long_1529_return"
-                    ]
-                )
-
-                side = "LONG"
+                returns = yearly[
+                    "long_1529"
+                ]
 
             else:
 
-                chosen = (
-                    yearly[
-                        "short_1529_return"
-                    ]
-                )
+                returns = yearly[
+                    "short_1529"
+                ]
 
-                side = "SHORT"
-
-            wins = (
-                chosen > 0
-            ).sum()
+            if len(returns) < 20:
+                continue
 
             win_rate = (
-                wins /
-                len(chosen) *
+                (returns > 0).sum()
+                /
+                len(returns)
+                *
                 100
             )
 
             print(
                 f"  {year}: "
-                f"{side} | "
-                f"N={len(chosen)} | "
+                f"N={len(returns)} | "
                 f"Win={win_rate:.2f}% | "
-                f"Avg={chosen.mean():.4f}%"
+                f"Avg={returns.mean():.4f}%"
             )
 
     # ========================================================
-    # FINISHED
+    # SAVE
     # ========================================================
+
+    discovered_df.to_csv(
+        "training_pattern_rankings.csv",
+        index=False
+    )
+
+    validation_df.to_csv(
+        "out_of_sample_validation.csv",
+        index=False
+    )
 
     print("\n")
     print("=" * 75)
-    print("PATTERN SCAN COMPLETE")
+    print("VALIDATION COMPLETE")
     print("=" * 75)
 
     print(
-        f"\nPattern results saved to:"
-        f"\n{pattern_file}"
+        "\nFiles created:"
     )
 
     print(
-        f"\nDaily feature data saved to:"
-        f"\n{raw_file}"
+        "training_pattern_rankings.csv"
     )
 
     print(
-        "\nThe next step is to take the strongest "
-        "patterns and test them on unseen data."
+        "out_of_sample_validation.csv"
+    )
+
+    print(
+        "\nThe most important numbers are "
+        "the TEST average return and TEST profit factor."
+    )
+
+    print(
+        "If a pattern remains positive on the "
+        "unseen test period, it becomes a candidate "
+        "for a proper strategy backtest."
     )
 
 
