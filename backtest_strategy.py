@@ -15,11 +15,17 @@ DATA_URL = (
     "releases/download/v1.0.0/stocks_1m_csvs.zip"
 )
 
-MIN_TRAIN_TRADES = 200
-TOP_PATTERNS = 10
-
-# 70% training / 30% unseen test
 TRAIN_PERCENT = 0.70
+
+# A pattern must have at least this many observations
+# in the training set before it can be considered.
+MIN_TRAIN_TRADES = 500
+
+# Show the best candidates
+TOP_PATTERNS = 30
+
+# Target we're searching for
+TARGET_WIN_RATE = 85.0
 
 
 # ============================================================
@@ -38,7 +44,7 @@ def direction(open_price, close_price):
 
 
 # ============================================================
-# DOWNLOAD
+# DOWNLOAD DATA
 # ============================================================
 
 def download_dataset():
@@ -112,6 +118,10 @@ def load_stock(z, filename):
         if df.empty:
             return None
 
+        # ----------------------------------------------------
+        # TIME
+        # ----------------------------------------------------
+
         df["datetime"] = pd.to_datetime(
             df["time"],
             unit="s",
@@ -130,6 +140,10 @@ def load_stock(z, filename):
             .dt.strftime("%H:%M")
         )
 
+        # ----------------------------------------------------
+        # OHLC
+        # ----------------------------------------------------
+
         for column in [
             "open",
             "high",
@@ -144,6 +158,10 @@ def load_stock(z, filename):
                 df[column],
                 errors="coerce"
             )
+
+        # ----------------------------------------------------
+        # VOLUME
+        # ----------------------------------------------------
 
         if "Volume" in df.columns:
 
@@ -191,7 +209,7 @@ def load_stock(z, filename):
 
 
 # ============================================================
-# BUILD CANDLE
+# BUILD MULTI-MINUTE CANDLE
 # ============================================================
 
 def build_candle(
@@ -249,10 +267,81 @@ def build_candle(
 
 
 # ============================================================
+# CANDLE STRUCTURE
+# ============================================================
+
+def candle_structure(candle):
+
+    open_price = candle["open"]
+    high = candle["high"]
+    low = candle["low"]
+    close = candle["close"]
+
+    candle_range = high - low
+
+    body = abs(
+        close - open_price
+    )
+
+    if candle_range > 0:
+
+        body_ratio = (
+            body /
+            candle_range
+        )
+
+        close_position = (
+            close - low
+        ) / candle_range
+
+        upper_wick = (
+            high -
+            max(open_price, close)
+        ) / candle_range
+
+        lower_wick = (
+            min(open_price, close) -
+            low
+        ) / candle_range
+
+    else:
+
+        body_ratio = 0
+        close_position = 0.5
+        upper_wick = 0
+        lower_wick = 0
+
+    return {
+
+        "range":
+            candle_range,
+
+        "body":
+            body,
+
+        "body_ratio":
+            body_ratio,
+
+        "close_position":
+            close_position,
+
+        "upper_wick_ratio":
+            upper_wick,
+
+        "lower_wick_ratio":
+            lower_wick
+    }
+
+
+# ============================================================
 # FEATURES
 # ============================================================
 
 def build_features(day):
+
+    # --------------------------------------------------------
+    # MAIN CANDLES
+    # --------------------------------------------------------
 
     c5_1520 = build_candle(
         day,
@@ -290,13 +379,40 @@ def build_features(day):
         1
     )
 
+    # --------------------------------------------------------
+    # PREVIOUS 3-MINUTE CANDLES
+    #
+    # Used to determine whether 15:24 is unusually large.
+    # --------------------------------------------------------
+
+    c3_1515 = build_candle(
+        day,
+        "15:15",
+        3
+    )
+
+    c3_1518 = build_candle(
+        day,
+        "15:18",
+        3
+    )
+
+    c3_1521 = build_candle(
+        day,
+        "15:21",
+        3
+    )
+
     candles = [
         c5_1520,
         c5_1525,
         c3_1524,
         c3_1527,
         c1_1528,
-        c1_1529
+        c1_1529,
+        c3_1515,
+        c3_1518,
+        c3_1521
     ]
 
     if any(
@@ -304,6 +420,10 @@ def build_features(day):
         for x in candles
     ):
         return None
+
+    # --------------------------------------------------------
+    # DIRECTIONS
+    # --------------------------------------------------------
 
     d5_1520 = direction(
         c5_1520["open"],
@@ -335,93 +455,313 @@ def build_features(day):
         c1_1529["close"]
     )
 
+    # --------------------------------------------------------
+    # STRUCTURE
+    # --------------------------------------------------------
+
+    s5_1520 = candle_structure(
+        c5_1520
+    )
+
+    s5_1525 = candle_structure(
+        c5_1525
+    )
+
+    s3_1524 = candle_structure(
+        c3_1524
+    )
+
+    s3_1527 = candle_structure(
+        c3_1527
+    )
+
+    s1_1528 = candle_structure(
+        c1_1528
+    )
+
+    s1_1529 = candle_structure(
+        c1_1529
+    )
+
+    s3_1515 = candle_structure(
+        c3_1515
+    )
+
+    s3_1518 = candle_structure(
+        c3_1518
+    )
+
+    s3_1521 = candle_structure(
+        c3_1521
+    )
+
+    # --------------------------------------------------------
+    # AVERAGE PREVIOUS 3M RANGE
+    # --------------------------------------------------------
+
+    previous_3m_ranges = [
+        s3_1515["range"],
+        s3_1518["range"],
+        s3_1521["range"]
+    ]
+
+    average_previous_range = np.mean(
+        previous_3m_ranges
+    )
+
+    # --------------------------------------------------------
+    # RELATIVE VOLUME
+    # --------------------------------------------------------
+
+    avg_previous_3m_volume = np.mean([
+        c3_1515["volume"],
+        c3_1518["volume"],
+        c3_1521["volume"]
+    ])
+
+    avg_previous_5m_volume = (
+        (
+            c5_1520["volume"] +
+            c5_1525["volume"]
+        ) / 2
+    )
+
+    # --------------------------------------------------------
+    # VOLUME RATIOS
+    # --------------------------------------------------------
+
+    v3_ratio = (
+        c3_1524["volume"] /
+        c3_1527["volume"]
+        if c3_1527["volume"] > 0
+        else 0
+    )
+
+    v1_ratio = (
+        c1_1528["volume"] /
+        c1_1529["volume"]
+        if c1_1529["volume"] > 0
+        else 0
+    )
+
+    v5_ratio = (
+        c5_1520["volume"] /
+        c5_1525["volume"]
+        if c5_1525["volume"] > 0
+        else 0
+    )
+
+    relative_3m_volume = (
+        c3_1524["volume"] /
+        avg_previous_3m_volume
+        if avg_previous_3m_volume > 0
+        else 0
+    )
+
+    # --------------------------------------------------------
+    # RANGE RATIO
+    # --------------------------------------------------------
+
+    range_ratio_3m = (
+        s3_1524["range"] /
+        average_previous_range
+        if average_previous_range > 0
+        else 0
+    )
+
+    # --------------------------------------------------------
+    # MOMENTUM
+    #
+    # Close of 15:24 relative to its open.
+    # --------------------------------------------------------
+
+    if c3_1524["open"] > 0:
+
+        momentum_3m = (
+            (
+                c3_1524["close"] -
+                c3_1524["open"]
+            )
+            /
+            c3_1524["open"]
+            *
+            100
+        )
+
+    else:
+
+        momentum_3m = 0
+
+    # --------------------------------------------------------
+    # RETURN ALL FEATURES
+    # --------------------------------------------------------
+
     return {
 
-        "5m_1520": d5_1520,
-        "5m_1525": d5_1525,
+        # ----------------------------------------------------
+        # DIRECTIONS
+        # ----------------------------------------------------
 
-        "3m_1524": d3_1524,
-        "3m_1527": d3_1527,
+        "5m_1520":
+            d5_1520,
 
-        "1m_1528": d1_1528,
-        "1m_1529": d1_1529,
+        "5m_1525":
+            d5_1525,
+
+        "3m_1524":
+            d3_1524,
+
+        "3m_1527":
+            d3_1527,
+
+        "1m_1528":
+            d1_1528,
+
+        "1m_1529":
+            d1_1529,
+
+        # ----------------------------------------------------
+        # 3M 15:24 STRUCTURE
+        # ----------------------------------------------------
+
+        "3m_body_ratio":
+            s3_1524["body_ratio"],
+
+        "3m_close_position":
+            s3_1524["close_position"],
+
+        "3m_upper_wick":
+            s3_1524["upper_wick_ratio"],
+
+        "3m_lower_wick":
+            s3_1524["lower_wick_ratio"],
+
+        "3m_range":
+            s3_1524["range"],
+
+        "3m_body":
+            s3_1524["body"],
+
+        # ----------------------------------------------------
+        # OTHER STRUCTURE
+        # ----------------------------------------------------
+
+        "5m_body_ratio":
+            s5_1520["body_ratio"],
+
+        "1m_body_ratio":
+            s1_1528["body_ratio"],
+
+        # ----------------------------------------------------
+        # RELATIVE RANGE
+        # ----------------------------------------------------
+
+        "3m_range_ratio":
+            range_ratio_3m,
+
+        # ----------------------------------------------------
+        # VOLUME
+        # ----------------------------------------------------
+
+        "3m_volume_ratio":
+            v3_ratio,
+
+        "1m_volume_ratio":
+            v1_ratio,
+
+        "5m_volume_ratio":
+            v5_ratio,
+
+        "3m_relative_volume":
+            relative_3m_volume,
+
+        # ----------------------------------------------------
+        # MOMENTUM
+        # ----------------------------------------------------
+
+        "3m_momentum":
+            momentum_3m,
+
+        # ----------------------------------------------------
+        # RELATIONSHIPS
+        # ----------------------------------------------------
 
         "5m_same":
             (
-                d5_1520 == d5_1525
-                and d5_1520 != "DOJI"
+                d5_1520 ==
+                d5_1525
+                and
+                d5_1520 != "DOJI"
             ),
 
         "5m_opposite":
             (
-                d5_1520 != d5_1525
-                and d5_1520 != "DOJI"
-                and d5_1525 != "DOJI"
+                d5_1520 !=
+                d5_1525
+                and
+                d5_1520 != "DOJI"
+                and
+                d5_1525 != "DOJI"
             ),
 
         "3m_same":
             (
-                d3_1524 == d3_1527
-                and d3_1524 != "DOJI"
+                d3_1524 ==
+                d3_1527
+                and
+                d3_1524 != "DOJI"
             ),
 
         "3m_opposite":
             (
-                d3_1524 != d3_1527
-                and d3_1524 != "DOJI"
-                and d3_1527 != "DOJI"
+                d3_1524 !=
+                d3_1527
+                and
+                d3_1524 != "DOJI"
+                and
+                d3_1527 != "DOJI"
             ),
 
         "1m_same":
             (
-                d1_1528 == d1_1529
-                and d1_1528 != "DOJI"
+                d1_1528 ==
+                d1_1529
+                and
+                d1_1528 != "DOJI"
             ),
 
         "1m_opposite":
             (
-                d1_1528 != d1_1529
-                and d1_1528 != "DOJI"
-                and d1_1529 != "DOJI"
+                d1_1528 !=
+                d1_1529
+                and
+                d1_1528 != "DOJI"
+                and
+                d1_1529 != "DOJI"
             ),
 
         "5m3m_same":
             (
-                d5_1520 == d3_1524
-                and d5_1520 != "DOJI"
-            ),
-
-        "5m3m_opposite":
-            (
-                d5_1520 != d3_1524
-                and d5_1520 != "DOJI"
-                and d3_1524 != "DOJI"
+                d5_1520 ==
+                d3_1524
+                and
+                d5_1520 != "DOJI"
             ),
 
         "5m1m_same":
             (
-                d5_1520 == d1_1528
-                and d5_1520 != "DOJI"
-            ),
-
-        "5m1m_opposite":
-            (
-                d5_1520 != d1_1528
-                and d5_1520 != "DOJI"
-                and d1_1528 != "DOJI"
+                d5_1520 ==
+                d1_1528
+                and
+                d5_1520 != "DOJI"
             ),
 
         "3m1m_same":
             (
-                d3_1524 == d1_1528
-                and d3_1524 != "DOJI"
-            ),
-
-        "3m1m_opposite":
-            (
-                d3_1524 != d1_1528
-                and d3_1524 != "DOJI"
-                and d1_1528 != "DOJI"
+                d3_1524 ==
+                d1_1528
+                and
+                d3_1524 != "DOJI"
             ),
 
         "all_three_same":
@@ -431,48 +771,12 @@ def build_features(day):
                 d1_1528
                 and
                 d5_1520 != "DOJI"
-            ),
-
-        "5m_volume_more":
-            (
-                c5_1520["volume"] >
-                c5_1525["volume"]
-            ),
-
-        "5m_volume_less":
-            (
-                c5_1520["volume"] <
-                c5_1525["volume"]
-            ),
-
-        "3m_volume_more":
-            (
-                c3_1524["volume"] >
-                c3_1527["volume"]
-            ),
-
-        "3m_volume_less":
-            (
-                c3_1524["volume"] <
-                c3_1527["volume"]
-            ),
-
-        "1m_volume_more":
-            (
-                c1_1528["volume"] >
-                c1_1529["volume"]
-            ),
-
-        "1m_volume_less":
-            (
-                c1_1528["volume"] <
-                c1_1529["volume"]
             )
     }
 
 
 # ============================================================
-# EXTRACT ALL OBSERVATIONS
+# EXTRACT STOCK DATA
 # ============================================================
 
 def extract_stock(
@@ -543,15 +847,13 @@ def extract_stock(
 
             next_day[row["hm"]] = row.to_dict()
 
-        required = [
-            "09:15",
-            "15:27",
-            "15:29"
-        ]
-
         if not all(
             x in next_day
-            for x in required
+            for x in [
+                "09:15",
+                "15:27",
+                "15:29"
+            ]
         ):
             continue
 
@@ -571,11 +873,13 @@ def extract_stock(
             continue
 
         long_1527 = (
-            exit_1527 - entry
+            exit_1527 -
+            entry
         ) / entry * 100
 
         long_1529 = (
-            exit_1529 - entry
+            exit_1529 -
+            entry
         ) / entry * 100
 
         rows.append({
@@ -608,217 +912,404 @@ def extract_stock(
 
 
 # ============================================================
-# PATTERN DEFINITIONS
+# CREATE PATTERN MASKS
 # ============================================================
 
-def get_patterns(df):
+def generate_patterns(df):
+
+    patterns = {}
+
+    # ========================================================
+    # BASE DIRECTION
+    # ========================================================
+
+    patterns[
+        "3m_15:24_BEAR"
+    ] = (
+        df["3m_1524"] ==
+        "BEAR"
+    )
+
+    patterns[
+        "3m_15:24_BULL"
+    ] = (
+        df["3m_1524"] ==
+        "BULL"
+    )
+
+    patterns[
+        "5m_15:20_BEAR"
+    ] = (
+        df["5m_1520"] ==
+        "BEAR"
+    )
+
+    patterns[
+        "5m_15:20_BULL"
+    ] = (
+        df["5m_1520"] ==
+        "BULL"
+    )
+
+    patterns[
+        "1m_15:28_BEAR"
+    ] = (
+        df["1m_1528"] ==
+        "BEAR"
+    )
+
+    patterns[
+        "1m_15:28_BULL"
+    ] = (
+        df["1m_1528"] ==
+        "BULL"
+    )
+
+    # ========================================================
+    # CANDLE BODY STRENGTH
+    # ========================================================
+
+    body_levels = [
+        0.50,
+        0.60,
+        0.70,
+        0.80,
+        0.90
+    ]
+
+    for level in body_levels:
+
+        patterns[
+            f"3m_BEAR_body>={level:.2f}"
+        ] = (
+            (df["3m_1524"] == "BEAR")
+            &
+            (df["3m_body_ratio"] >= level)
+        )
+
+        patterns[
+            f"3m_BULL_body>={level:.2f}"
+        ] = (
+            (df["3m_1524"] == "BULL")
+            &
+            (df["3m_body_ratio"] >= level)
+        )
+
+    # ========================================================
+    # CLOSE POSITION
+    # ========================================================
+
+    close_levels = [
+        0.10,
+        0.20,
+        0.30,
+        0.40
+    ]
+
+    for level in close_levels:
+
+        patterns[
+            f"3m_BEAR_close<={level:.2f}"
+        ] = (
+            (df["3m_1524"] == "BEAR")
+            &
+            (df["3m_close_position"] <= level)
+        )
+
+        patterns[
+            f"3m_BULL_close>={1-level:.2f}"
+        ] = (
+            (df["3m_1524"] == "BULL")
+            &
+            (df["3m_close_position"] >= 1-level)
+        )
+
+    # ========================================================
+    # RELATIVE RANGE
+    # ========================================================
+
+    range_levels = [
+        1.25,
+        1.50,
+        1.75,
+        2.00,
+        2.50,
+        3.00
+    ]
+
+    for level in range_levels:
+
+        patterns[
+            f"3m_BEAR_range>={level:.2f}x"
+        ] = (
+            (df["3m_1524"] == "BEAR")
+            &
+            (df["3m_range_ratio"] >= level)
+        )
+
+        patterns[
+            f"3m_BULL_range>={level:.2f}x"
+        ] = (
+            (df["3m_1524"] == "BULL")
+            &
+            (df["3m_range_ratio"] >= level)
+        )
+
+    # ========================================================
+    # RELATIVE VOLUME
+    # ========================================================
+
+    volume_levels = [
+        1.25,
+        1.50,
+        1.75,
+        2.00,
+        2.50,
+        3.00
+    ]
+
+    for level in volume_levels:
+
+        patterns[
+            f"3m_BEAR_relative_volume>={level:.2f}x"
+        ] = (
+            (df["3m_1524"] == "BEAR")
+            &
+            (df["3m_relative_volume"] >= level)
+        )
+
+        patterns[
+            f"3m_BULL_relative_volume>={level:.2f}x"
+        ] = (
+            (df["3m_1524"] == "BULL")
+            &
+            (df["3m_relative_volume"] >= level)
+        )
+
+        patterns[
+            f"3m_BEAR_15:24_vs_15:27_volume>={level:.2f}x"
+        ] = (
+            (df["3m_1524"] == "BEAR")
+            &
+            (df["3m_volume_ratio"] >= level)
+        )
+
+        patterns[
+            f"3m_BULL_15:24_vs_15:27_volume>={level:.2f}x"
+        ] = (
+            (df["3m_1524"] == "BULL")
+            &
+            (df["3m_volume_ratio"] >= level)
+        )
+
+    # ========================================================
+    # MOMENTUM
+    # ========================================================
+
+    momentum_levels = [
+        0.05,
+        0.10,
+        0.15,
+        0.20,
+        0.30,
+        0.50
+    ]
+
+    for level in momentum_levels:
+
+        patterns[
+            f"3m_BEAR_momentum<={-level:.2f}%"
+        ] = (
+            (df["3m_1524"] == "BEAR")
+            &
+            (df["3m_momentum"] <= -level)
+        )
+
+        patterns[
+            f"3m_BULL_momentum>={level:.2f}%"
+        ] = (
+            (df["3m_1524"] == "BULL")
+            &
+            (df["3m_momentum"] >= level)
+        )
+
+    # ========================================================
+    # RELATIONSHIPS
+    # ========================================================
+
+    patterns[
+        "3m_BEAR + 5m_BEAR"
+    ] = (
+        (df["3m_1524"] == "BEAR")
+        &
+        (df["5m_1520"] == "BEAR")
+    )
+
+    patterns[
+        "3m_BEAR + 1m_BEAR"
+    ] = (
+        (df["3m_1524"] == "BEAR")
+        &
+        (df["1m_1528"] == "BEAR")
+    )
+
+    patterns[
+        "3m_BEAR + 5m_BEAR + 1m_BEAR"
+    ] = (
+        (df["3m_1524"] == "BEAR")
+        &
+        (df["5m_1520"] == "BEAR")
+        &
+        (df["1m_1528"] == "BEAR")
+    )
+
+    patterns[
+        "3m_BEAR + 3m_OPPOSITE"
+    ] = (
+        (df["3m_1524"] == "BEAR")
+        &
+        (
+            df["3m_1524"] !=
+            df["3m_1527"]
+        )
+    )
+
+    # ========================================================
+    # HIGH-CONVICTION COMBINATIONS
+    # ========================================================
+
+    for body in [
+        0.60,
+        0.70,
+        0.80
+    ]:
+
+        for volume in [
+            1.25,
+            1.50,
+            2.00
+        ]:
+
+            patterns[
+                (
+                    f"BEAR + body>={body:.2f} "
+                    f"+ relative_volume>={volume:.2f}x"
+                )
+            ] = (
+                (df["3m_1524"] == "BEAR")
+                &
+                (df["3m_body_ratio"] >= body)
+                &
+                (df["3m_relative_volume"] >= volume)
+            )
+
+    # ========================================================
+    # EXTREME COMBINATIONS
+    # ========================================================
+
+    for body in [
+        0.60,
+        0.70,
+        0.80
+    ]:
+
+        for volume in [
+            1.50,
+            2.00
+        ]:
+
+            patterns[
+                (
+                    f"BEAR + body>={body:.2f} "
+                    f"+ volume>={volume:.2f}x "
+                    f"+ 3m OPPOSITE"
+                )
+            ] = (
+                (df["3m_1524"] == "BEAR")
+                &
+                (df["3m_body_ratio"] >= body)
+                &
+                (df["3m_relative_volume"] >= volume)
+                &
+                (
+                    df["3m_1524"] !=
+                    df["3m_1527"]
+                )
+            )
+
+    return patterns
+
+
+# ============================================================
+# STATISTICS
+# ============================================================
+
+def statistics(series):
+
+    if len(series) == 0:
+        return None
+
+    wins = (
+        series > 0
+    ).sum()
+
+    win_rate = (
+        wins /
+        len(series) *
+        100
+    )
+
+    gross_profit = (
+        series[
+            series > 0
+        ].sum()
+    )
+
+    gross_loss = abs(
+        series[
+            series < 0
+        ].sum()
+    )
+
+    if gross_loss > 0:
+
+        profit_factor = (
+            gross_profit /
+            gross_loss
+        )
+
+    else:
+
+        profit_factor = float("inf")
 
     return {
 
-        # ----------------------------------------------------
-        # INDIVIDUAL CANDLES
-        # ----------------------------------------------------
+        "trades":
+            len(series),
 
-        "3m_15:24_BEAR":
-            df["3m_1524"] == "BEAR",
+        "wins":
+            wins,
 
-        "3m_15:24_BULL":
-            df["3m_1524"] == "BULL",
+        "win_rate":
+            win_rate,
 
-        "3m_15:27_BEAR":
-            df["3m_1527"] == "BEAR",
+        "average":
+            series.mean(),
 
-        "3m_15:27_BULL":
-            df["3m_1527"] == "BULL",
+        "median":
+            series.median(),
 
-        "5m_15:20_BEAR":
-            df["5m_1520"] == "BEAR",
+        "profit_factor":
+            profit_factor,
 
-        "5m_15:20_BULL":
-            df["5m_1520"] == "BULL",
+        "total":
+            series.sum(),
 
-        "1m_15:28_BEAR":
-            df["1m_1528"] == "BEAR",
+        "best":
+            series.max(),
 
-        "1m_15:28_BULL":
-            df["1m_1528"] == "BULL",
-
-        # ----------------------------------------------------
-        # SAME / OPPOSITE
-        # ----------------------------------------------------
-
-        "5m_OPPOSITE":
-            df["5m_opposite"],
-
-        "5m_SAME":
-            df["5m_same"],
-
-        "3m_OPPOSITE":
-            df["3m_opposite"],
-
-        "3m_SAME":
-            df["3m_same"],
-
-        "1m_OPPOSITE":
-            df["1m_opposite"],
-
-        "1m_SAME":
-            df["1m_same"],
-
-        # ----------------------------------------------------
-        # TIMEFRAME ALIGNMENT
-        # ----------------------------------------------------
-
-        "5m15:20 = 3m15:24":
-            df["5m3m_same"],
-
-        "5m15:20 != 3m15:24":
-            df["5m3m_opposite"],
-
-        "5m15:20 = 1m15:28":
-            df["5m1m_same"],
-
-        "5m15:20 != 1m15:28":
-            df["5m1m_opposite"],
-
-        "3m15:24 = 1m15:28":
-            df["3m1m_same"],
-
-        "3m15:24 != 1m15:28":
-            df["3m1m_opposite"],
-
-        "ALL THREE SAME":
-            df["all_three_same"],
-
-        # ----------------------------------------------------
-        # VOLUME
-        # ----------------------------------------------------
-
-        "5m_15:20_VOLUME_MORE":
-            df["5m_volume_more"],
-
-        "5m_15:20_VOLUME_LESS":
-            df["5m_volume_less"],
-
-        "3m_15:24_VOLUME_MORE":
-            df["3m_volume_more"],
-
-        "3m_15:24_VOLUME_LESS":
-            df["3m_volume_less"],
-
-        "1m_15:28_VOLUME_MORE":
-            df["1m_volume_more"],
-
-        "1m_15:28_VOLUME_LESS":
-            df["1m_volume_less"],
-
-        # ----------------------------------------------------
-        # IMPORTANT COMBINATIONS
-        # ----------------------------------------------------
-
-        (
-            "3m 15:24 BEAR + "
-            "3m 15:24 VOLUME MORE"
-        ):
-            (
-                (df["3m_1524"] == "BEAR")
-                &
-                df["3m_volume_more"]
-            ),
-
-        (
-            "3m OPPOSITE + "
-            "3m VOLUME MORE"
-        ):
-            (
-                df["3m_opposite"]
-                &
-                df["3m_volume_more"]
-            ),
-
-        (
-            "5m OPPOSITE + "
-            "5m VOLUME MORE"
-        ):
-            (
-                df["5m_opposite"]
-                &
-                df["5m_volume_more"]
-            ),
-
-        (
-            "5m = 3m + "
-            "3m OPPOSITE"
-        ):
-            (
-                df["5m3m_same"]
-                &
-                df["3m_opposite"]
-            ),
-
-        (
-            "5m = 1m + "
-            "1m VOLUME MORE"
-        ):
-            (
-                df["5m1m_same"]
-                &
-                df["1m_volume_more"]
-            ),
-
-        (
-            "3m = 1m + "
-            "1m VOLUME MORE"
-        ):
-            (
-                df["3m1m_same"]
-                &
-                df["1m_volume_more"]
-            ),
-
-        (
-            "ALL THREE SAME + "
-            "1m VOLUME MORE"
-        ):
-            (
-                df["all_three_same"]
-                &
-                df["1m_volume_more"]
-            ),
-
-        (
-            "ALL THREE SAME + "
-            "3m VOLUME MORE"
-        ):
-            (
-                df["all_three_same"]
-                &
-                df["3m_volume_more"]
-            ),
-
-        (
-            "ALL THREE SAME + "
-            "5m VOLUME MORE"
-        ):
-            (
-                df["all_three_same"]
-                &
-                df["5m_volume_more"]
-            ),
-
-        (
-            "ALL THREE SAME + "
-            "ALL VOLUME MORE"
-        ):
-            (
-                df["all_three_same"]
-                &
-                df["5m_volume_more"]
-                &
-                df["3m_volume_more"]
-                &
-                df["1m_volume_more"]
-            )
+        "worst":
+            series.min()
     }
 
 
@@ -828,19 +1319,18 @@ def get_patterns(df):
 
 def evaluate_pattern(
     df,
-    mask,
-    min_trades
+    mask
 ):
 
     subset = df[
         mask
     ].copy()
 
-    if len(subset) < min_trades:
+    if len(subset) < MIN_TRAIN_TRADES:
         return None
 
     # --------------------------------------------------------
-    # Determine direction ONLY from TRAINING DATA
+    # Determine direction ONLY from training data
     # --------------------------------------------------------
 
     long_avg = (
@@ -855,7 +1345,7 @@ def evaluate_pattern(
 
     if long_avg >= short_avg:
 
-        direction_name = "LONG"
+        side = "LONG"
 
         r1527 = (
             subset["long_1527"]
@@ -867,7 +1357,7 @@ def evaluate_pattern(
 
     else:
 
-        direction_name = "SHORT"
+        side = "SHORT"
 
         r1527 = (
             subset["short_1527"]
@@ -877,225 +1367,115 @@ def evaluate_pattern(
             subset["short_1529"]
         )
 
-    def statistics(series):
-
-        wins = (
-            series > 0
-        ).sum()
-
-        losses = (
-            series < 0
-        ).sum()
-
-        win_rate = (
-            wins /
-            len(series) *
-            100
-        )
-
-        gross_profit = (
-            series[
-                series > 0
-            ].sum()
-        )
-
-        gross_loss = abs(
-            series[
-                series < 0
-            ].sum()
-        )
-
-        if gross_loss > 0:
-
-            profit_factor = (
-                gross_profit /
-                gross_loss
-            )
-
-        else:
-
-            profit_factor = float("inf")
-
-        return {
-
-            "trades":
-                len(series),
-
-            "win_rate":
-                win_rate,
-
-            "average":
-                series.mean(),
-
-            "median":
-                series.median(),
-
-            "profit_factor":
-                profit_factor,
-
-            "total":
-                series.sum()
-        }
-
-    s1527 = statistics(
+    s27 = statistics(
         r1527
     )
 
-    s1529 = statistics(
+    s29 = statistics(
         r1529
     )
 
     return {
 
         "direction":
-            direction_name,
+            side,
 
         "trades":
-            len(subset),
+            s29["trades"],
 
-        "15:27_win_rate":
-            s1527["win_rate"],
+        "win_rate_15:27":
+            s27["win_rate"],
 
-        "15:27_average":
-            s1527["average"],
+        "avg_15:27":
+            s27["average"],
 
-        "15:27_profit_factor":
-            s1527["profit_factor"],
+        "pf_15:27":
+            s27["profit_factor"],
 
-        "15:29_win_rate":
-            s1529["win_rate"],
+        "win_rate_15:29":
+            s29["win_rate"],
 
-        "15:29_average":
-            s1529["average"],
+        "avg_15:29":
+            s29["average"],
 
-        "15:29_profit_factor":
-            s1529["profit_factor"],
+        "pf_15:29":
+            s29["profit_factor"],
 
-        "15:29_total":
-            s1529["total"]
+        "total_15:29":
+            s29["total"]
     }
 
 
 # ============================================================
-# TEST TOP PATTERN ON UNSEEN DATA
+# OUT-OF-SAMPLE TEST
 # ============================================================
 
-def test_pattern(
+def validate_pattern(
     df,
-    pattern_mask,
-    direction_name
+    mask,
+    side
 ):
 
     subset = df[
-        pattern_mask
+        mask
     ].copy()
 
     if len(subset) == 0:
         return None
 
-    if direction_name == "LONG":
+    if side == "LONG":
 
-        r1527 = (
+        r27 = (
             subset["long_1527"]
         )
 
-        r1529 = (
+        r29 = (
             subset["long_1529"]
         )
 
     else:
 
-        r1527 = (
+        r27 = (
             subset["short_1527"]
         )
 
-        r1529 = (
+        r29 = (
             subset["short_1529"]
         )
 
-    def stats(series):
-
-        wins = (
-            series > 0
-        ).sum()
-
-        win_rate = (
-            wins /
-            len(series) *
-            100
-        )
-
-        gross_profit = (
-            series[
-                series > 0
-            ].sum()
-        )
-
-        gross_loss = abs(
-            series[
-                series < 0
-            ].sum()
-        )
-
-        if gross_loss > 0:
-
-            pf = (
-                gross_profit /
-                gross_loss
-            )
-
-        else:
-
-            pf = float("inf")
-
-        return (
-            len(series),
-            win_rate,
-            series.mean(),
-            series.median(),
-            pf,
-            series.sum()
-        )
-
-    a = stats(
-        r1527
+    s27 = statistics(
+        r27
     )
 
-    b = stats(
-        r1529
+    s29 = statistics(
+        r29
     )
 
     return {
 
-        "trades":
-            len(subset),
+        "test_trades":
+            s29["trades"],
 
-        "direction":
-            direction_name,
+        "test_15:27_win_rate":
+            s27["win_rate"],
 
-        "15:27_win_rate":
-            a[1],
+        "test_15:27_average":
+            s27["average"],
 
-        "15:27_average":
-            a[2],
+        "test_15:27_pf":
+            s27["profit_factor"],
 
-        "15:27_profit_factor":
-            a[4],
+        "test_15:29_win_rate":
+            s29["win_rate"],
 
-        "15:27_total":
-            a[5],
+        "test_15:29_average":
+            s29["average"],
 
-        "15:29_win_rate":
-            b[1],
+        "test_15:29_pf":
+            s29["profit_factor"],
 
-        "15:29_average":
-            b[2],
-
-        "15:29_profit_factor":
-            b[4],
-
-        "15:29_total":
-            b[5]
+        "test_15:29_total":
+            s29["total"]
     }
 
 
@@ -1107,17 +1487,24 @@ def main():
 
     print("\n")
     print("=" * 75)
-    print("OUT-OF-SAMPLE EDGE VALIDATION")
+    print(
+        "HIGH-WIN-RATE PATTERN DISCOVERY"
+    )
     print("=" * 75)
 
     print(
-        "\nTraining period: "
-        f"{TRAIN_PERCENT * 100:.0f}%"
+        "\nTARGET WIN RATE: "
+        f"{TARGET_WIN_RATE:.0f}%"
     )
 
     print(
-        "Unseen test period: "
-        f"{(1 - TRAIN_PERCENT) * 100:.0f}%"
+        f"MINIMUM TRAINING TRADES: "
+        f"{MIN_TRAIN_TRADES}"
+    )
+
+    print(
+        "\nThe scanner searches candle structure, "
+        "relative volume, range and momentum."
     )
 
     # ========================================================
@@ -1142,7 +1529,7 @@ def main():
     )
 
     # ========================================================
-    # LOAD
+    # PROCESS STOCKS
     # ========================================================
 
     all_rows = []
@@ -1169,11 +1556,7 @@ def main():
 
     print("\n")
 
-    df = pd.DataFrame(
-        all_rows
-    )
-
-    if df.empty:
+    if not all_rows:
 
         print(
             "No usable observations."
@@ -1181,29 +1564,35 @@ def main():
 
         return
 
+    df = pd.DataFrame(
+        all_rows
+    )
+
     df["signal_date"] = pd.to_datetime(
         df["signal_date"]
+    )
+
+    print(
+        f"Total observations: "
+        f"{len(df):,}"
     )
 
     # ========================================================
     # TIME SPLIT
     # ========================================================
 
-    unique_dates = sorted(
-        df["signal_date"]
-        .unique()
+    dates = sorted(
+        df["signal_date"].unique()
     )
 
     split_index = int(
-        len(unique_dates) *
+        len(dates) *
         TRAIN_PERCENT
     )
 
-    split_date = (
-        unique_dates[
-            split_index
-        ]
-    )
+    split_date = dates[
+        split_index
+    ]
 
     train = df[
         df["signal_date"] <
@@ -1216,7 +1605,7 @@ def main():
     ].copy()
 
     print(
-        f"Training observations: "
+        f"\nTraining observations: "
         f"{len(train):,}"
     )
 
@@ -1236,19 +1625,24 @@ def main():
     )
 
     # ========================================================
-    # PATTERNS
+    # GENERATE PATTERNS
     # ========================================================
 
-    train_patterns = get_patterns(
+    train_patterns = generate_patterns(
         train
     )
 
-    test_patterns = get_patterns(
+    test_patterns = generate_patterns(
         test
     )
 
+    print(
+        f"\nPatterns being tested: "
+        f"{len(train_patterns)}"
+    )
+
     # ========================================================
-    # DISCOVER PATTERNS ONLY IN TRAINING
+    # DISCOVER
     # ========================================================
 
     discovered = []
@@ -1257,8 +1651,7 @@ def main():
 
         result = evaluate_pattern(
             train,
-            mask,
-            MIN_TRAIN_TRADES
+            mask
         )
 
         if result is None:
@@ -1270,166 +1663,180 @@ def main():
             result
         )
 
-    discovered_df = pd.DataFrame(
-        discovered
-    )
-
-    if discovered_df.empty:
+    if not discovered:
 
         print(
-            "No patterns reached "
-            f"{MIN_TRAIN_TRADES} trades."
+            "No patterns passed the "
+            "minimum trade requirement."
         )
 
         return
 
-    # ========================================================
-    # RANK TRAINING PATTERNS
-    # ========================================================
+    discovered_df = pd.DataFrame(
+        discovered
+    )
+
+    # --------------------------------------------------------
+    # Sort by win rate first
+    # --------------------------------------------------------
 
     discovered_df = (
         discovered_df
         .sort_values(
-            by="15:29_average",
-            ascending=False
+            [
+                "win_rate_15:29",
+                "trades",
+                "pf_15:29"
+            ],
+            ascending=[
+                False,
+                False,
+                False
+            ]
         )
     )
 
-    top = discovered_df.head(
-        TOP_PATTERNS
-    )
+    # ========================================================
+    # TOP TRAINING PATTERNS
+    # ========================================================
 
     print("\n")
     print("=" * 75)
     print(
-        "TOP PATTERNS DISCOVERED "
-        "IN TRAINING DATA"
+        "TOP TRAINING PATTERNS "
+        "BY WIN RATE"
     )
     print("=" * 75)
 
     print(
-        top[
+        discovered_df[
             [
                 "pattern",
                 "trades",
                 "direction",
-                "15:29_win_rate",
-                "15:29_average",
-                "15:29_profit_factor"
+                "win_rate_15:29",
+                "avg_15:29",
+                "pf_15:29"
             ]
-        ].to_string(
+        ]
+        .head(TOP_PATTERNS)
+        .to_string(
             index=False
         )
     )
 
     # ========================================================
-    # VALIDATE EACH TOP PATTERN
+    # FIND PATTERNS CLOSE TO 85%
     # ========================================================
 
-    validation_rows = []
+    high_win = discovered_df[
+        discovered_df[
+            "win_rate_15:29"
+        ] >= TARGET_WIN_RATE
+    ]
+
+    print("\n")
+    print("=" * 75)
+    print(
+        f"PATTERNS REACHING "
+        f"{TARGET_WIN_RATE:.0f}%+ "
+        "IN TRAINING"
+    )
+    print("=" * 75)
+
+    if high_win.empty:
+
+        print(
+            "NONE reached the target "
+            "with the required sample size."
+        )
+
+    else:
+
+        print(
+            high_win[
+                [
+                    "pattern",
+                    "trades",
+                    "direction",
+                    "win_rate_15:29",
+                    "avg_15:29",
+                    "pf_15:29"
+                ]
+            ]
+            .to_string(
+                index=False
+            )
+        )
+
+    # ========================================================
+    # VALIDATE TOP 30
+    # ========================================================
+
+    top = discovered_df.head(
+        TOP_PATTERNS
+    )
+
+    validation = []
 
     for _, row in top.iterrows():
 
-        pattern_name = row[
+        name = row[
             "pattern"
         ]
 
-        direction_name = row[
+        side = row[
             "direction"
         ]
 
-        train_mask = (
-            train_patterns[
-                pattern_name
-            ]
-        )
+        test_mask = test_patterns[
+            name
+        ]
 
-        test_mask = (
-            test_patterns[
-                pattern_name
-            ]
-        )
-
-        validation = test_pattern(
+        result = validate_pattern(
             test,
             test_mask,
-            direction_name
+            side
         )
 
-        if validation is None:
+        if result is None:
             continue
 
-        validation_rows.append({
+        validation.append({
 
             "pattern":
-                pattern_name,
+                name,
 
             "direction":
-                direction_name,
+                side,
 
             "train_trades":
                 row["trades"],
 
             "train_win_rate":
-                row["15:29_win_rate"],
+                row["win_rate_15:29"],
 
             "train_average":
-                row["15:29_average"],
+                row["avg_15:29"],
 
-            "train_profit_factor":
-                row["15:29_profit_factor"],
+            "train_pf":
+                row["pf_15:29"],
 
-            "test_trades":
-                validation["trades"],
-
-            "test_15:27_win_rate":
-                validation[
-                    "15:27_win_rate"
-                ],
-
-            "test_15:27_average":
-                validation[
-                    "15:27_average"
-                ],
-
-            "test_15:27_profit_factor":
-                validation[
-                    "15:27_profit_factor"
-                ],
-
-            "test_15:29_win_rate":
-                validation[
-                    "15:29_win_rate"
-                ],
-
-            "test_15:29_average":
-                validation[
-                    "15:29_average"
-                ],
-
-            "test_15:29_profit_factor":
-                validation[
-                    "15:29_profit_factor"
-                ],
-
-            "test_15:29_total":
-                validation[
-                    "15:29_total"
-                ]
+            **result
         })
 
     validation_df = pd.DataFrame(
-        validation_rows
+        validation
     )
 
     # ========================================================
-    # FINAL VALIDATION TABLE
+    # VALIDATION
     # ========================================================
 
     print("\n")
     print("=" * 75)
     print(
-        "UNSEEN TEST RESULTS"
+        "UNSEEN TEST — TOP PATTERNS"
     )
     print("=" * 75)
 
@@ -1446,139 +1853,138 @@ def main():
                 [
                     "pattern",
                     "direction",
-                    "train_average",
-                    "train_profit_factor",
+                    "train_win_rate",
+                    "train_pf",
                     "test_trades",
                     "test_15:29_win_rate",
                     "test_15:29_average",
-                    "test_15:29_profit_factor"
+                    "test_15:29_pf"
                 ]
-            ].to_string(
+            ]
+            .sort_values(
+                "test_15:29_win_rate",
+                ascending=False
+            )
+            .to_string(
                 index=False
             )
         )
 
     # ========================================================
-    # YEARLY TEST OF TOP PATTERNS
+    # PATTERNS THAT SURVIVE
     # ========================================================
+
+    if not validation_df.empty:
+
+        survivors = validation_df[
+            (
+                validation_df[
+                    "test_15:29_win_rate"
+                ] >= 60
+            )
+            &
+            (
+                validation_df[
+                    "test_15:29_average"
+                ] > 0
+            )
+            &
+            (
+                validation_df[
+                    "test_15:29_pf"
+                ] > 1
+            )
+        ].copy()
+
+    else:
+
+        survivors = pd.DataFrame()
 
     print("\n")
     print("=" * 75)
     print(
-        "YEAR-BY-YEAR PERFORMANCE "
-        "OF TOP PATTERNS"
+        "POSITIVE OUT-OF-SAMPLE "
+        "CANDIDATES"
     )
     print("=" * 75)
 
-    test["year"] = (
-        test["signal_date"]
-        .dt.year
-    )
-
-    for _, row in top.iterrows():
-
-        pattern_name = row[
-            "pattern"
-        ]
-
-        direction_name = row[
-            "direction"
-        ]
-
-        mask = test_patterns[
-            pattern_name
-        ]
-
-        subset = test[
-            mask
-        ].copy()
-
-        if subset.empty:
-            continue
+    if survivors.empty:
 
         print(
-            f"\n{pattern_name} "
-            f"→ {direction_name}"
+            "No strong positive "
+            "out-of-sample candidates."
         )
 
-        for year in sorted(
-            subset["year"].unique()
-        ):
+    else:
 
-            yearly = subset[
-                subset["year"] == year
+        print(
+            survivors[
+                [
+                    "pattern",
+                    "direction",
+                    "test_trades",
+                    "test_15:29_win_rate",
+                    "test_15:29_average",
+                    "test_15:29_pf"
+                ]
             ]
-
-            if direction_name == "LONG":
-
-                returns = yearly[
-                    "long_1529"
-                ]
-
-            else:
-
-                returns = yearly[
-                    "short_1529"
-                ]
-
-            if len(returns) < 20:
-                continue
-
-            win_rate = (
-                (returns > 0).sum()
-                /
-                len(returns)
-                *
-                100
+            .sort_values(
+                "test_15:29_win_rate",
+                ascending=False
             )
-
-            print(
-                f"  {year}: "
-                f"N={len(returns)} | "
-                f"Win={win_rate:.2f}% | "
-                f"Avg={returns.mean():.4f}%"
+            .to_string(
+                index=False
             )
+        )
 
     # ========================================================
     # SAVE
     # ========================================================
 
     discovered_df.to_csv(
-        "training_pattern_rankings.csv",
+        "structure_training_results.csv",
         index=False
     )
 
     validation_df.to_csv(
-        "out_of_sample_validation.csv",
+        "structure_out_of_sample_results.csv",
         index=False
     )
 
+    # ========================================================
+    # DONE
+    # ========================================================
+
     print("\n")
     print("=" * 75)
-    print("VALIDATION COMPLETE")
+    print(
+        "HIGH-WIN-RATE SCAN COMPLETE"
+    )
     print("=" * 75)
 
     print(
-        "\nFiles created:"
+        "\nCreated:"
     )
 
     print(
-        "training_pattern_rankings.csv"
+        "structure_training_results.csv"
     )
 
     print(
-        "out_of_sample_validation.csv"
+        "structure_out_of_sample_results.csv"
     )
 
     print(
-        "\nThe most important numbers are "
-        "the TEST average return and TEST profit factor."
+        "\nIMPORTANT:"
     )
 
     print(
-        "If a pattern remains positive on the "
-        "unseen test period, it becomes a candidate "
-        "for a proper strategy backtest."
+        "An 85% training result is NOT enough."
+    )
+
+    print(
+        "The pattern must also survive "
+        "the unseen test period."
     )
 
 
