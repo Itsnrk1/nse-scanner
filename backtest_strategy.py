@@ -11,31 +11,28 @@ warnings.filterwarnings("ignore")
 
 
 # ============================================================
-# LARGE NEXT-DAY MOVE PRECURSOR SCANNER
+# SIMPLE 85% STRATEGY SEARCH
 # ============================================================
 #
-# SIGNAL:
-#   Previous trading day's EOD structure
+# FIXED EXECUTION:
 #
-# OUTCOME:
-#   Following trading day
+#   Entry = NEXT DAY 09:15 OPEN
+#   Exit  = NEXT DAY 15:27 OPEN
 #
-# ENTRY:
-#   09:15 open
+# DECISION INFORMATION:
 #
-# EXIT:
-#   15:27 open
+#   ONLY previous trading day information.
 #
-# TIMEFRAMES:
-#   1m / 2m / 3m / 5m / 10m / 15m
+# GOAL:
 #
-# TARGETS:
-#   Top 1%, 2%, 5% gainers
-#   Bottom 1%, 2%, 5% losers
-#   Top 1%, 2%, 5% absolute movers
+#   1) Find final-test win rate >= 85%
+#   2) Among those, maximize return / profit factor
+#   3) Keep logic simple
 #
 # IMPORTANT:
-#   The final test is NEVER used to discover patterns.
+#
+#   09:15 opening price is NEVER used to decide whether
+#   the trade should be taken.
 #
 # ============================================================
 
@@ -56,20 +53,15 @@ TRAIN_PERCENT = 0.60
 VALIDATION_PERCENT = 0.20
 TEST_PERCENT = 0.20
 
-MIN_TRAIN = 100
-MIN_VALIDATION = 30
-MIN_TEST = 30
+TARGET_WIN_RATE = 85.0
 
-# Maximum number of conditions in a pattern.
-MAX_DEPTH = 3
+MIN_TRAIN_TRADES = 100
+MIN_VALIDATION_TRADES = 30
+MIN_TEST_TRADES = 30
 
-# Number of strongest atomic conditions retained for
-# combination search.
-ATOMIC_CANDIDATES = 350
-
-# Round-trip estimated cost.
-# Used for trading-return statistics only.
-COST_PERCENT = 0.10
+# Estimated round-trip cost.
+# Change this if needed.
+ROUND_TRIP_COST = 0.10
 
 
 # ============================================================
@@ -87,13 +79,22 @@ TIMEFRAMES = {
 
 
 # ============================================================
-# THRESHOLDS
+# SIMPLE FACTOR THRESHOLDS
 # ============================================================
 
 BODY_LEVELS = [
+    0.50,
+    0.60,
+    0.70,
+    0.80,
+    0.90
+]
+
+CLOSE_LEVELS = [
+    0.10,
+    0.20,
     0.30,
     0.40,
-    0.50,
     0.60,
     0.70,
     0.80,
@@ -101,8 +102,6 @@ BODY_LEVELS = [
 ]
 
 REL_VOLUME_LEVELS = [
-    0.75,
-    1.00,
     1.25,
     1.50,
     2.00,
@@ -110,44 +109,24 @@ REL_VOLUME_LEVELS = [
     3.00
 ]
 
-VOLUME_RATIO_LEVELS = [
-    0.50,
+RANGE_LEVELS = [
     0.75,
     1.00,
     1.25,
     1.50,
-    2.00,
-    3.00
-]
-
-RANGE_RATIO_LEVELS = [
-    0.50,
-    0.75,
-    1.00,
-    1.25,
-    1.50,
-    2.00,
-    2.50
-]
-
-CLOSE_POSITION_LEVELS = [
-    0.10,
-    0.20,
-    0.30,
-    0.40,
-    0.50,
-    0.60,
-    0.70,
-    0.80,
-    0.90
+    2.00
 ]
 
 MOMENTUM_LEVELS = [
     0.05,
     0.10,
-    0.15,
     0.20,
     0.30,
+    0.50
+]
+
+RELATIVE_STRENGTH_LEVELS = [
+    0.25,
     0.50,
     0.75,
     1.00
@@ -155,13 +134,13 @@ MOMENTUM_LEVELS = [
 
 
 # ============================================================
-# DOWNLOAD
+# DOWNLOAD DATA
 # ============================================================
 
 def download_dataset():
 
     print("=" * 90)
-    print("DOWNLOADING NSE 1-MINUTE DATA")
+    print("DOWNLOADING NSE DATA")
     print("=" * 90)
 
     response = requests.get(
@@ -172,8 +151,6 @@ def download_dataset():
 
     response.raise_for_status()
 
-    chunks = []
-
     total = int(
         response.headers.get(
             "content-length",
@@ -182,6 +159,7 @@ def download_dataset():
     )
 
     downloaded = 0
+    chunks = []
 
     for chunk in response.iter_content(
         chunk_size=1024 * 1024
@@ -368,8 +346,7 @@ def build_candle(
     ):
 
         minute = (
-            start_minute +
-            i
+            start_minute + i
         )
 
         key = (
@@ -377,12 +354,14 @@ def build_candle(
         )
 
         if key not in day:
-
             return None
 
         rows.append(
             day[key]
         )
+
+    if not rows:
+        return None
 
     return {
 
@@ -391,14 +370,14 @@ def build_candle(
 
         "high":
             max(
-                x["high"]
-                for x in rows
+                row["high"]
+                for row in rows
             ),
 
         "low":
             min(
-                x["low"]
-                for x in rows
+                row["low"]
+                for row in rows
             ),
 
         "close":
@@ -406,8 +385,8 @@ def build_candle(
 
         "volume":
             sum(
-                x["volume"]
-                for x in rows
+                row["volume"]
+                for row in rows
             )
     }
 
@@ -445,30 +424,10 @@ def candle_metrics(
             candle["low"]
         ) / candle_range
 
-        upper_wick = (
-            candle["high"]
-            -
-            max(
-                candle["open"],
-                candle["close"]
-            )
-        ) / candle_range
-
-        lower_wick = (
-            min(
-                candle["open"],
-                candle["close"]
-            )
-            -
-            candle["low"]
-        ) / candle_range
-
     else:
 
         body_ratio = 0
         close_position = 0.5
-        upper_wick = 0
-        lower_wick = 0
 
     if candle["open"] != 0:
 
@@ -499,12 +458,6 @@ def candle_metrics(
         "close_position":
             close_position,
 
-        "upper_wick":
-            upper_wick,
-
-        "lower_wick":
-            lower_wick,
-
         "momentum":
             momentum
     }
@@ -514,7 +467,7 @@ def candle_metrics(
 # DIRECTION
 # ============================================================
 
-def candle_direction(
+def direction(
     candle
 ):
 
@@ -528,31 +481,27 @@ def candle_direction(
 
 
 # ============================================================
-# EOD CANDLE STARTS
+# TIMEFRAME STARTS
 # ============================================================
 
-def get_starts(
-    timeframe
+def timeframe_starts(
+    minutes
 ):
 
-    if timeframe == 1:
+    if minutes == 1:
 
         return [
-            20,
-            21,
-            22,
-            23,
             24,
             25,
             26,
             27,
-            28
+            28,
+            29
         ]
 
-    if timeframe == 2:
+    if minutes == 2:
 
         return [
-            18,
             20,
             22,
             24,
@@ -560,7 +509,7 @@ def get_starts(
             28
         ]
 
-    if timeframe == 3:
+    if minutes == 3:
 
         return [
             15,
@@ -570,7 +519,7 @@ def get_starts(
             27
         ]
 
-    if timeframe == 5:
+    if minutes == 5:
 
         return [
             10,
@@ -579,7 +528,7 @@ def get_starts(
             25
         ]
 
-    if timeframe == 10:
+    if minutes == 10:
 
         return [
             0,
@@ -587,7 +536,7 @@ def get_starts(
             20
         ]
 
-    if timeframe == 15:
+    if minutes == 15:
 
         return [
             0,
@@ -598,255 +547,7 @@ def get_starts(
 
 
 # ============================================================
-# BUILD TIMEFRAME FEATURES
-# ============================================================
-
-def build_timeframe_features(
-    day,
-    timeframe,
-    minutes
-):
-
-    starts = get_starts(
-        minutes
-    )
-
-    candles = {}
-
-    for start in starts:
-
-        candle = build_candle(
-            day,
-            start,
-            minutes
-        )
-
-        if candle is not None:
-
-            candles[
-                start
-            ] = candle
-
-    if len(candles) < 2:
-
-        return {}
-
-    ordered = sorted(
-        candles.keys()
-    )
-
-    last_start = ordered[-1]
-    previous_start = ordered[-2]
-
-    last = candles[
-        last_start
-    ]
-
-    previous = candles[
-        previous_start
-    ]
-
-    last_metrics = candle_metrics(
-        last
-    )
-
-    previous_metrics = candle_metrics(
-        previous
-    )
-
-    # --------------------------------------------------------
-    # Historical range / volume
-    # --------------------------------------------------------
-
-    historical_ranges = []
-    historical_volumes = []
-
-    for start in ordered[:-1]:
-
-        candle = candles[
-            start
-        ]
-
-        metrics = candle_metrics(
-            candle
-        )
-
-        historical_ranges.append(
-            metrics["range"]
-        )
-
-        historical_volumes.append(
-            candle["volume"]
-        )
-
-    if historical_ranges:
-
-        average_range = np.mean(
-            historical_ranges
-        )
-
-    else:
-
-        average_range = 0
-
-    if historical_volumes:
-
-        average_volume = np.mean(
-            historical_volumes
-        )
-
-    else:
-
-        average_volume = 0
-
-    if average_range > 0:
-
-        range_ratio = (
-            last_metrics["range"]
-            /
-            average_range
-        )
-
-    else:
-
-        range_ratio = 0
-
-    if average_volume > 0:
-
-        relative_volume = (
-            last["volume"]
-            /
-            average_volume
-        )
-
-    else:
-
-        relative_volume = 0
-
-    if previous["volume"] > 0:
-
-        volume_ratio = (
-            last["volume"]
-            /
-            previous["volume"]
-        )
-
-    else:
-
-        volume_ratio = 0
-
-    prefix = timeframe
-
-    return {
-
-        f"{prefix}_BEAR":
-            candle_direction(
-                last
-            ) == "BEAR",
-
-        f"{prefix}_BULL":
-            candle_direction(
-                last
-            ) == "BULL",
-
-        f"{prefix}_PREVIOUS_BEAR":
-            candle_direction(
-                previous
-            ) == "BEAR",
-
-        f"{prefix}_PREVIOUS_BULL":
-            candle_direction(
-                previous
-            ) == "BULL",
-
-        f"{prefix}_SAME":
-            (
-                candle_direction(last)
-                ==
-                candle_direction(previous)
-                and
-                candle_direction(last)
-                != "DOJI"
-            ),
-
-        f"{prefix}_OPPOSITE":
-            (
-                candle_direction(last)
-                !=
-                candle_direction(previous)
-                and
-                candle_direction(last)
-                != "DOJI"
-                and
-                candle_direction(previous)
-                != "DOJI"
-            ),
-
-        f"{prefix}_BODY":
-            last_metrics[
-                "body_ratio"
-            ],
-
-        f"{prefix}_CLOSE_POS":
-            last_metrics[
-                "close_position"
-            ],
-
-        f"{prefix}_UPPER_WICK":
-            last_metrics[
-                "upper_wick"
-            ],
-
-        f"{prefix}_LOWER_WICK":
-            last_metrics[
-                "lower_wick"
-            ],
-
-        f"{prefix}_RANGE":
-            last_metrics[
-                "range"
-            ],
-
-        f"{prefix}_RANGE_RATIO":
-            range_ratio,
-
-        f"{prefix}_REL_VOL":
-            relative_volume,
-
-        f"{prefix}_VOL_RATIO":
-            volume_ratio,
-
-        f"{prefix}_MOMENTUM":
-            last_metrics[
-                "momentum"
-            ],
-
-        f"{prefix}_MOM_CHANGE":
-            (
-                last_metrics[
-                    "momentum"
-                ]
-                -
-                previous_metrics[
-                    "momentum"
-                ]
-            ),
-
-        f"{prefix}_BODY_CHANGE":
-            (
-                last_metrics[
-                    "body_ratio"
-                ]
-                -
-                previous_metrics[
-                    "body_ratio"
-                ]
-            )
-    }
-
-
-# ============================================================
-# BUILD ALL PREVIOUS-DAY FEATURES
+# BUILD FEATURES
 # ============================================================
 
 def build_features(
@@ -859,17 +560,325 @@ def build_features(
         TIMEFRAMES.items()
     ):
 
-        timeframe_features = (
-            build_timeframe_features(
+        starts = timeframe_starts(
+            minutes
+        )
+
+        candles = {}
+
+        for start in starts:
+
+            candle = build_candle(
                 day,
-                timeframe,
+                start,
                 minutes
+            )
+
+            if candle is not None:
+
+                candles[
+                    start
+                ] = candle
+
+        if len(candles) < 2:
+            continue
+
+        ordered = sorted(
+            candles.keys()
+        )
+
+        last = candles[
+            ordered[-1]
+        ]
+
+        previous = candles[
+            ordered[-2]
+        ]
+
+        last_metrics = candle_metrics(
+            last
+        )
+
+        previous_metrics = (
+            candle_metrics(
+                previous
             )
         )
 
-        features.update(
-            timeframe_features
+        older = [
+            candles[x]
+            for x
+            in ordered[:-1]
+        ]
+
+        if older:
+
+            avg_range = np.mean([
+                candle_metrics(
+                    x
+                )["range"]
+                for x in older
+            ])
+
+            avg_volume = np.mean([
+                x["volume"]
+                for x in older
+            ])
+
+        else:
+
+            avg_range = 0
+            avg_volume = 0
+
+        if avg_range > 0:
+
+            range_ratio = (
+                last_metrics["range"]
+                /
+                avg_range
+            )
+
+        else:
+
+            range_ratio = 0
+
+        if avg_volume > 0:
+
+            rel_volume = (
+                last["volume"]
+                /
+                avg_volume
+            )
+
+        else:
+
+            rel_volume = 0
+
+        if previous["volume"] > 0:
+
+            volume_ratio = (
+                last["volume"]
+                /
+                previous["volume"]
+            )
+
+        else:
+
+            volume_ratio = 0
+
+        last_dir = direction(
+            last
         )
+
+        previous_dir = direction(
+            previous
+        )
+
+        features[
+            f"{timeframe}_BULL"
+        ] = (
+            last_dir == "BULL"
+        )
+
+        features[
+            f"{timeframe}_BEAR"
+        ] = (
+            last_dir == "BEAR"
+        )
+
+        features[
+            f"{timeframe}_PREVIOUS_BULL"
+        ] = (
+            previous_dir == "BULL"
+        )
+
+        features[
+            f"{timeframe}_PREVIOUS_BEAR"
+        ] = (
+            previous_dir == "BEAR"
+        )
+
+        features[
+            f"{timeframe}_SAME"
+        ] = (
+            last_dir ==
+            previous_dir
+            and
+            last_dir != "DOJI"
+        )
+
+        features[
+            f"{timeframe}_OPPOSITE"
+        ] = (
+            last_dir !=
+            previous_dir
+            and
+            last_dir != "DOJI"
+            and
+            previous_dir != "DOJI"
+        )
+
+        features[
+            f"{timeframe}_BODY"
+        ] = last_metrics[
+            "body_ratio"
+        ]
+
+        features[
+            f"{timeframe}_CLOSE"
+        ] = last_metrics[
+            "close_position"
+        ]
+
+        features[
+            f"{timeframe}_RANGE_RATIO"
+        ] = range_ratio
+
+        features[
+            f"{timeframe}_REL_VOLUME"
+        ] = rel_volume
+
+        features[
+            f"{timeframe}_VOLUME_RATIO"
+        ] = volume_ratio
+
+        features[
+            f"{timeframe}_MOMENTUM"
+        ] = last_metrics[
+            "momentum"
+        ]
+
+        features[
+            f"{timeframe}_MOM_CHANGE"
+        ] = (
+            last_metrics[
+                "momentum"
+            ]
+            -
+            previous_metrics[
+                "momentum"
+            ]
+        )
+
+    # ========================================================
+    # PREVIOUS-DAY OVERALL MOVE
+    # ========================================================
+
+    first_candle = day.get(
+        "09:15"
+    )
+
+    last_candle = day.get(
+        "15:29"
+    )
+
+    if (
+        first_candle is not None
+        and
+        last_candle is not None
+        and
+        first_candle["open"] > 0
+    ):
+
+        features[
+            "DAY_RETURN"
+        ] = (
+            (
+                last_candle["close"]
+                -
+                first_candle["open"]
+            )
+            /
+            first_candle["open"]
+            *
+            100
+        )
+
+    else:
+
+        features[
+            "DAY_RETURN"
+        ] = 0
+
+    # ========================================================
+    # PREVIOUS-DAY CLOSE LOCATION
+    # ========================================================
+
+    highs = []
+    lows = []
+
+    for minute, row in day.items():
+
+        try:
+
+            h = int(
+                minute.replace(
+                    ":",
+                    ""
+                )
+            )
+
+            # Only regular market data
+            if 915 <= h <= 1529:
+
+                highs.append(
+                    row["high"]
+                )
+
+                lows.append(
+                    row["low"]
+                )
+
+        except Exception:
+
+            continue
+
+    if (
+        highs
+        and
+        lows
+        and
+        last_candle is not None
+    ):
+
+        day_high = max(
+            highs
+        )
+
+        day_low = min(
+            lows
+        )
+
+        day_range = (
+            day_high -
+            day_low
+        )
+
+        if day_range > 0:
+
+            features[
+                "DAY_CLOSE_POSITION"
+            ] = (
+                (
+                    last_candle["close"]
+                    -
+                    day_low
+                )
+                /
+                day_range
+            )
+
+        else:
+
+            features[
+                "DAY_CLOSE_POSITION"
+            ] = 0.5
+
+    else:
+
+        features[
+            "DAY_CLOSE_POSITION"
+        ] = 0.5
 
     return features
 
@@ -907,6 +916,9 @@ def extract_events(
     symbol = os.path.basename(
         filename
     ).replace(
+        "_1m_csv.gz",
+        ""
+    ).replace(
         "_1m.csv.gz",
         ""
     )
@@ -943,7 +955,7 @@ def extract_events(
         )
 
         # ----------------------------------------------------
-        # Next-day trade
+        # FIXED ENTRY / EXIT
         # ----------------------------------------------------
 
         if ENTRY_TIME not in event_day:
@@ -970,7 +982,7 @@ def extract_events(
         if entry <= 0:
             continue
 
-        next_day_return = (
+        raw_return = (
             (
                 exit_price
                 -
@@ -997,13 +1009,11 @@ def extract_events(
                     event_date
                 ),
 
-            "next_day_return":
-                next_day_return,
+            "long_return":
+                raw_return,
 
-            "absolute_move":
-                abs(
-                    next_day_return
-                ),
+            "short_return":
+                -raw_return,
 
             **features
         })
@@ -1012,24 +1022,21 @@ def extract_events(
 
 
 # ============================================================
-# CREATE DATASET
+# CREATE COMPLETE DATASET
 # ============================================================
 
 def create_dataset():
 
-    raw_data = download_dataset()
+    raw = download_dataset()
 
     zip_file = zipfile.ZipFile(
-        io.BytesIO(
-            raw_data
-        )
+        io.BytesIO(raw)
     )
 
     files = [
-        filename
-        for filename
-        in zip_file.namelist()
-        if filename.endswith(
+        f
+        for f in zip_file.namelist()
+        if f.endswith(
             ".csv.gz"
         )
     ]
@@ -1040,7 +1047,7 @@ def create_dataset():
         f"{len(files):,}"
     )
 
-    all_events = []
+    all_rows = []
 
     for number, filename in enumerate(
         files,
@@ -1053,25 +1060,25 @@ def create_dataset():
             end=""
         )
 
-        events = extract_events(
+        rows = extract_events(
             zip_file,
             filename
         )
 
-        all_events.extend(
-            events
+        all_rows.extend(
+            rows
         )
 
     print()
 
     df = pd.DataFrame(
-        all_events
+        all_rows
     )
 
     if df.empty:
 
         raise RuntimeError(
-            "No valid observations found."
+            "No valid observations."
         )
 
     df = df.sort_values(
@@ -1084,24 +1091,29 @@ def create_dataset():
 
 
 # ============================================================
-# CHRONOLOGICAL SPLIT
+# SPLIT
 # ============================================================
 
-def split_data(
+def split_dataset(
     df
 ):
 
     dates = sorted(
         df[
             "event_date"
-        ].dt.normalize()
+        ]
+        .dt
+        .normalize()
         .unique()
     )
 
-    n = len(dates)
+    n = len(
+        dates
+    )
 
     train_index = int(
-        n * TRAIN_PERCENT
+        n *
+        TRAIN_PERCENT
     )
 
     validation_index = int(
@@ -1161,304 +1173,201 @@ def split_data(
 
 
 # ============================================================
-# CREATE LARGE-MOVE TARGETS
+# CANDIDATE CONDITIONS
 # ============================================================
 
-def create_targets(
-    df,
-    percentile
-):
-
-    data = df.copy()
-
-    # --------------------------------------------------------
-    # Calculate threshold from THIS DATASET ONLY.
-    #
-    # For discovery this is done separately on train.
-    # Validation and test are evaluated against their own
-    # realized distribution, so we can measure whether the
-    # pattern finds unusually large movers there.
-    # --------------------------------------------------------
-
-    gain_threshold = (
-        data[
-            "next_day_return"
-        ]
-        .quantile(
-            1 - percentile
-        )
-    )
-
-    loss_threshold = (
-        data[
-            "next_day_return"
-        ]
-        .quantile(
-            percentile
-        )
-    )
-
-    absolute_threshold = (
-        data[
-            "absolute_move"
-        ]
-        .quantile(
-            1 - percentile
-        )
-    )
-
-    data["BIG_GAIN"] = (
-        data[
-            "next_day_return"
-        ]
-        >= gain_threshold
-    )
-
-    data["BIG_LOSS"] = (
-        data[
-            "next_day_return"
-        ]
-        <= loss_threshold
-    )
-
-    data["BIG_ABSOLUTE_MOVE"] = (
-        data[
-            "absolute_move"
-        ]
-        >= absolute_threshold
-    )
-
-    return (
-        data,
-        gain_threshold,
-        loss_threshold,
-        absolute_threshold
-    )
-
-
-# ============================================================
-# ATOMIC CONDITIONS
-# ============================================================
-
-def generate_atomic_conditions(
+def generate_conditions(
     df
 ):
 
     conditions = {}
 
-    for timeframe in TIMEFRAMES:
+    # ========================================================
+    # SIMPLE DIRECTIONAL CONDITIONS
+    # ========================================================
 
-        prefix = timeframe
-
-        # ----------------------------------------------------
-        # Direction
-        # ----------------------------------------------------
+    for tf in TIMEFRAMES:
 
         conditions[
-            f"{prefix}:BEAR"
+            f"{tf}:BULL"
         ] = df[
-            f"{prefix}_BEAR"
+            f"{tf}_BULL"
         ].astype(bool)
 
         conditions[
-            f"{prefix}:BULL"
+            f"{tf}:BEAR"
         ] = df[
-            f"{prefix}_BULL"
+            f"{tf}_BEAR"
         ].astype(bool)
 
         conditions[
-            f"{prefix}:PREVIOUS_BEAR"
+            f"{tf}:PREVIOUS_BULL"
         ] = df[
-            f"{prefix}_PREVIOUS_BEAR"
+            f"{tf}_PREVIOUS_BULL"
         ].astype(bool)
 
         conditions[
-            f"{prefix}:PREVIOUS_BULL"
+            f"{tf}:PREVIOUS_BEAR"
         ] = df[
-            f"{prefix}_PREVIOUS_BULL"
+            f"{tf}_PREVIOUS_BEAR"
         ].astype(bool)
 
         conditions[
-            f"{prefix}:SAME"
+            f"{tf}:SAME"
         ] = df[
-            f"{prefix}_SAME"
+            f"{tf}_SAME"
         ].astype(bool)
 
         conditions[
-            f"{prefix}:OPPOSITE"
+            f"{tf}:OPPOSITE"
         ] = df[
-            f"{prefix}_OPPOSITE"
+            f"{tf}_OPPOSITE"
         ].astype(bool)
 
         # ----------------------------------------------------
-        # Body
+        # BODY
         # ----------------------------------------------------
 
         for level in BODY_LEVELS:
 
             conditions[
-                f"{prefix}:BODY>={level:.2f}"
+                f"{tf}:BODY>={level:.2f}"
             ] = (
                 df[
-                    f"{prefix}_BODY"
+                    f"{tf}_BODY"
                 ]
                 >= level
             )
 
         # ----------------------------------------------------
-        # Close position
+        # CLOSE
         # ----------------------------------------------------
 
-        for level in (
-            CLOSE_POSITION_LEVELS
-        ):
+        for level in CLOSE_LEVELS:
 
             conditions[
-                f"{prefix}:CLOSE_POS<={level:.2f}"
+                f"{tf}:CLOSE<={level:.2f}"
             ] = (
                 df[
-                    f"{prefix}_CLOSE_POS"
+                    f"{tf}_CLOSE"
                 ]
                 <= level
             )
 
             conditions[
-                f"{prefix}:CLOSE_POS>={level:.2f}"
+                f"{tf}:CLOSE>={level:.2f}"
             ] = (
                 df[
-                    f"{prefix}_CLOSE_POS"
+                    f"{tf}_CLOSE"
                 ]
                 >= level
             )
 
         # ----------------------------------------------------
-        # Relative volume
+        # RELATIVE VOLUME
         # ----------------------------------------------------
 
-        for level in (
-            REL_VOLUME_LEVELS
-        ):
+        for level in REL_VOLUME_LEVELS:
 
             conditions[
-                f"{prefix}:REL_VOL>={level:.2f}"
+                f"{tf}:REL_VOL>={level:.2f}"
             ] = (
                 df[
-                    f"{prefix}_REL_VOL"
+                    f"{tf}_REL_VOLUME"
                 ]
                 >= level
             )
 
         # ----------------------------------------------------
-        # Volume ratio
+        # RANGE
         # ----------------------------------------------------
 
-        for level in (
-            VOLUME_RATIO_LEVELS
-        ):
+        for level in RANGE_LEVELS:
 
             conditions[
-                f"{prefix}:VOL_RATIO>={level:.2f}"
+                f"{tf}:RANGE<={level:.2f}x"
             ] = (
                 df[
-                    f"{prefix}_VOL_RATIO"
-                ]
-                >= level
-            )
-
-        # ----------------------------------------------------
-        # Range ratio
-        # ----------------------------------------------------
-
-        for level in (
-            RANGE_RATIO_LEVELS
-        ):
-
-            conditions[
-                f"{prefix}:RANGE_RATIO<={level:.2f}"
-            ] = (
-                df[
-                    f"{prefix}_RANGE_RATIO"
+                    f"{tf}_RANGE_RATIO"
                 ]
                 <= level
             )
 
-            conditions[
-                f"{prefix}:RANGE_RATIO>={level:.2f}"
-            ] = (
-                df[
-                    f"{prefix}_RANGE_RATIO"
-                ]
-                >= level
-            )
-
         # ----------------------------------------------------
-        # Momentum
+        # MOMENTUM
         # ----------------------------------------------------
 
-        for level in (
-            MOMENTUM_LEVELS
-        ):
+        for level in MOMENTUM_LEVELS:
 
             conditions[
-                f"{prefix}:MOM>={level:.2f}%"
+                f"{tf}:MOM>={level:.2f}%"
             ] = (
                 df[
-                    f"{prefix}_MOMENTUM"
+                    f"{tf}_MOMENTUM"
                 ]
                 >= level
             )
 
             conditions[
-                f"{prefix}:MOM<=-{level:.2f}%"
+                f"{tf}:MOM<=-{level:.2f}%"
             ] = (
                 df[
-                    f"{prefix}_MOMENTUM"
+                    f"{tf}_MOMENTUM"
                 ]
                 <= -level
             )
 
-        # ----------------------------------------------------
-        # Momentum change
-        # ----------------------------------------------------
+    # ========================================================
+    # PREVIOUS-DAY TOTAL MOVE
+    # ========================================================
 
-        for level in [
-            0.05,
-            0.10,
-            0.20,
-            0.30,
-            0.50
-        ]:
+    for level in RELATIVE_STRENGTH_LEVELS:
 
-            conditions[
-                f"{prefix}:MOM_CHANGE>={level:.2f}"
-            ] = (
-                df[
-                    f"{prefix}_MOM_CHANGE"
-                ]
-                >= level
-            )
+        conditions[
+            f"DAY_RETURN>={level:.2f}%"
+        ] = (
+            df[
+                "DAY_RETURN"
+            ]
+            >= level
+        )
 
-            conditions[
-                f"{prefix}:MOM_CHANGE<=-{level:.2f}"
-            ] = (
-                df[
-                    f"{prefix}_MOM_CHANGE"
-                ]
-                <= -level
-            )
+        conditions[
+            f"DAY_RETURN<=-{level:.2f}%"
+        ] = (
+            df[
+                "DAY_RETURN"
+            ]
+            <= -level
+        )
 
-    return conditions
+    # ========================================================
+    # DAY CLOSE LOCATION
+    # ========================================================
 
+    for level in CLOSE_LEVELS:
 
-# ============================================================
-# CROSS-TIMEFRAME CONDITIONS
-# ============================================================
+        conditions[
+            f"DAY_CLOSE<={level:.2f}"
+        ] = (
+            df[
+                "DAY_CLOSE_POSITION"
+            ]
+            <= level
+        )
 
-def generate_cross_conditions(
-    df
-):
+        conditions[
+            f"DAY_CLOSE>={level:.2f}"
+        ] = (
+            df[
+                "DAY_CLOSE_POSITION"
+            ]
+            >= level
+        )
 
-    conditions = {}
+    # ========================================================
+    # CROSS-TIMEFRAME ALIGNMENT
+    # ========================================================
 
     timeframes = list(
         TIMEFRAMES.keys()
@@ -1468,18 +1377,6 @@ def generate_cross_conditions(
         timeframes,
         2
     ):
-
-        conditions[
-            f"{tf1}:BEAR + {tf2}:BEAR"
-        ] = (
-            df[
-                f"{tf1}_BEAR"
-            ]
-            &
-            df[
-                f"{tf2}_BEAR"
-            ]
-        )
 
         conditions[
             f"{tf1}:BULL + {tf2}:BULL"
@@ -1494,26 +1391,38 @@ def generate_cross_conditions(
         )
 
         conditions[
-            f"{tf1}:OPPOSITE + {tf2}:OPPOSITE"
+            f"{tf1}:BEAR + {tf2}:BEAR"
         ] = (
             df[
-                f"{tf1}_OPPOSITE"
+                f"{tf1}_BEAR"
             ]
             &
             df[
-                f"{tf2}_OPPOSITE"
+                f"{tf2}_BEAR"
             ]
         )
 
         conditions[
-            f"{tf1}:SAME + {tf2}:SAME"
+            f"{tf1}:BULL + {tf2}:BEAR"
         ] = (
             df[
-                f"{tf1}_SAME"
+                f"{tf1}_BULL"
             ]
             &
             df[
-                f"{tf2}_SAME"
+                f"{tf2}_BEAR"
+            ]
+        )
+
+        conditions[
+            f"{tf1}:BEAR + {tf2}:BULL"
+        ] = (
+            df[
+                f"{tf1}_BEAR"
+            ]
+            &
+            df[
+                f"{tf2}_BULL"
             ]
         )
 
@@ -1521,93 +1430,157 @@ def generate_cross_conditions(
 
 
 # ============================================================
-# EVALUATE TARGET
+# RETURN STATISTICS
 # ============================================================
 
-def evaluate_target(
+def get_stats(
+    returns
+):
+
+    returns = pd.Series(
+        returns
+    ).dropna()
+
+    if len(returns) == 0:
+        return None
+
+    net_returns = (
+        returns
+        -
+        ROUND_TRIP_COST
+    )
+
+    wins = (
+        net_returns > 0
+    ).sum()
+
+    win_rate = (
+        wins /
+        len(net_returns)
+        *
+        100
+    )
+
+    gross_profit = (
+        net_returns[
+            net_returns > 0
+        ].sum()
+    )
+
+    gross_loss = abs(
+        net_returns[
+            net_returns < 0
+        ].sum()
+    )
+
+    if gross_loss > 0:
+
+        pf = (
+            gross_profit
+            /
+            gross_loss
+        )
+
+    else:
+
+        pf = np.inf
+
+    return {
+
+        "trades":
+            len(net_returns),
+
+        "win_rate":
+            win_rate,
+
+        "average":
+            net_returns.mean(),
+
+        "profit_factor":
+            pf,
+
+        "total":
+            net_returns.sum()
+    }
+
+
+# ============================================================
+# EVALUATE BOTH DIRECTIONS
+# ============================================================
+
+def evaluate_direction(
     df,
-    mask,
-    target_column
+    mask
 ):
 
     subset = df[
         mask
     ]
 
-    n = len(
-        subset
-    )
-
-    if n < MIN_TRAIN:
-
+    if len(subset) < MIN_TRAIN_TRADES:
         return None
 
-    hits = (
+    long_stats = get_stats(
         subset[
-            target_column
+            "long_return"
         ]
-        .sum()
     )
 
-    precision = (
-        hits /
-        n *
-        100
-    )
-
-    baseline = (
-        df[
-            target_column
+    short_stats = get_stats(
+        subset[
+            "short_return"
         ]
-        .mean()
-        *
-        100
     )
 
-    lift = (
-        precision /
-        baseline
-        if baseline > 0
-        else np.nan
-    )
+    # --------------------------------------------------------
+    # Direction is selected ONLY from training data.
+    # --------------------------------------------------------
+
+    if (
+        long_stats["win_rate"]
+        >=
+        short_stats["win_rate"]
+    ):
+
+        direction_name = "LONG"
+
+        selected = long_stats
+
+    else:
+
+        direction_name = "SHORT"
+
+        selected = short_stats
 
     return {
 
+        "direction":
+            direction_name,
+
         "trades":
-            n,
+            selected["trades"],
 
-        "hits":
-            int(hits),
+        "win_rate":
+            selected["win_rate"],
 
-        "precision":
-            precision,
+        "average":
+            selected["average"],
 
-        "baseline":
-            baseline,
+        "profit_factor":
+            selected["profit_factor"],
 
-        "lift":
-            lift,
-
-        "average_move":
-            subset[
-                "absolute_move"
-            ].mean(),
-
-        "average_return":
-            subset[
-                "next_day_return"
-            ].mean()
+        "total":
+            selected["total"]
     }
 
 
 # ============================================================
-# RANK ATOMIC CONDITIONS
+# SELECT SIMPLE TRAINING CANDIDATES
 # ============================================================
 
-def rank_atomic_conditions(
+def rank_candidates(
     df,
-    conditions,
-    target
+    conditions
 ):
 
     rows = []
@@ -1616,13 +1589,14 @@ def rank_atomic_conditions(
         conditions.items()
     ):
 
-        stats = evaluate_target(
-            df,
-            mask,
-            target
+        result = (
+            evaluate_direction(
+                df,
+                mask
+            )
         )
 
-        if stats is None:
+        if result is None:
             continue
 
         rows.append({
@@ -1630,64 +1604,58 @@ def rank_atomic_conditions(
             "pattern":
                 name,
 
-            **stats
+            **result
         })
 
     if not rows:
-
         return []
 
     frame = pd.DataFrame(
         rows
     )
 
-    # Use a combination of precision and lift.
+    # Prefer win rate, but reward profitability too.
     frame[
         "score"
     ] = (
         frame[
-            "precision"
+            "win_rate"
         ]
-        *
+        +
+        8 *
         np.log1p(
             frame[
-                "lift"
+                "profit_factor"
             ]
         )
     )
 
-    frame = frame.sort_values(
+    return (
+        frame
+        .sort_values(
+            [
+                "score",
+                "win_rate",
+                "profit_factor"
+            ],
+            ascending=False
+        )
+        .head(250)
         [
-            "score",
-            "precision",
-            "lift"
-        ],
-        ascending=False
+            "pattern"
+        ]
+        .tolist()
     )
 
-    return frame.head(
-        ATOMIC_CANDIDATES
-    )[
-        "pattern"
-    ].tolist()
-
 
 # ============================================================
-# COMBINATION SEARCH
+# COMBINE CONDITIONS
 # ============================================================
 
-def search_combinations(
+def search_patterns(
     df,
-    conditions,
-    target,
-    max_depth=3
+    conditions
 ):
-
-    # --------------------------------------------------------
-    # Store masks permanently.
-    # This avoids the KeyError problem from the earlier
-    # exhaustive scanner.
-    # --------------------------------------------------------
 
     masks = {
         name:
@@ -1699,42 +1667,34 @@ def search_combinations(
         in conditions.items()
     }
 
-    # --------------------------------------------------------
-    # Atomic ranking
-    # --------------------------------------------------------
-
-    candidates = rank_atomic_conditions(
+    atomic_candidates = rank_candidates(
         df,
-        masks,
-        target
+        masks
     )
 
     print(
-        f"Candidate atomic conditions: "
-        f"{len(candidates):,}"
+        f"Atomic candidates retained: "
+        f"{len(atomic_candidates):,}"
     )
 
     results = []
 
     # ========================================================
-    # DEPTH 1
+    # SINGLE CONDITION SEARCH
     # ========================================================
 
-    depth_patterns = []
+    depth1 = []
 
-    for name in candidates:
+    for name in atomic_candidates:
 
-        mask = masks[
-            name
-        ]
-
-        stats = evaluate_target(
+        result = evaluate_direction(
             df,
-            mask,
-            target
+            masks[
+                name
+            ]
         )
 
-        if stats is None:
+        if result is None:
             continue
 
         row = {
@@ -1746,216 +1706,292 @@ def search_combinations(
                 name,
 
             "_mask":
-                mask,
+                masks[
+                    name
+                ],
 
-            **stats
+            **result
         }
 
-        depth_patterns.append(
+        depth1.append(
             row
         )
 
         results.append(
             {
-                k: v
-                for k, v in row.items()
-                if k != "_mask"
+                key: value
+                for key, value
+                in row.items()
+                if key != "_mask"
             }
         )
 
     # ========================================================
-    # DEPTH 2 / 3
+    # DEPTH 2
     # ========================================================
 
-    current = depth_patterns
+    depth2 = []
 
-    for depth in range(
-        2,
-        max_depth + 1
+    checked = 0
+
+    for a, b in itertools.combinations(
+        atomic_candidates,
+        2
     ):
 
-        print()
-        print(
-            "-" * 80
+        checked += 1
+
+        combined = (
+            masks[a]
+            &
+            masks[b]
         )
 
-        print(
-            f"SEARCHING DEPTH {depth}"
+        result = evaluate_direction(
+            df,
+            combined
         )
 
-        new_patterns = []
+        if result is None:
+            continue
 
-        checked = 0
-
-        for previous in current:
-
-            previous_name = (
-                previous[
-                    "pattern"
-                ]
-            )
-
-            previous_mask = (
-                previous[
-                    "_mask"
-                ]
-            )
-
-            previous_parts = set(
-                previous_name.split(
-                    " + "
-                )
-            )
-
-            for atomic_name in candidates:
-
-                if atomic_name in previous_parts:
-                    continue
-
-                checked += 1
-
-                combined_mask = (
-                    previous_mask
-                    &
-                    masks[
-                        atomic_name
-                    ]
-                )
-
-                stats = evaluate_target(
-                    df,
-                    combined_mask,
-                    target
-                )
-
-                if stats is None:
-                    continue
-
-                pattern = (
-                    previous_name
-                    +
-                    " + "
-                    +
-                    atomic_name
-                )
-
-                row = {
-
-                    "depth":
-                        depth,
-
-                    "pattern":
-                        pattern,
-
-                    "_mask":
-                        combined_mask,
-
-                    **stats
-                }
-
-                new_patterns.append(
-                    row
-                )
-
-        print(
-            f"Checked: "
-            f"{checked:,}"
+        pattern = (
+            a +
+            " + " +
+            b
         )
 
-        print(
-            f"Qualifying: "
-            f"{len(new_patterns):,}"
+        row = {
+
+            "depth":
+                2,
+
+            "pattern":
+                pattern,
+
+            "_mask":
+                combined,
+
+            **result
+        }
+
+        depth2.append(
+            row
         )
 
-        if not new_patterns:
-            break
+    print(
+        f"Depth 2 checked: "
+        f"{checked:,}"
+    )
 
-        # ----------------------------------------------------
-        # Deduplicate
-        # ----------------------------------------------------
+    print(
+        f"Depth 2 qualifying: "
+        f"{len(depth2):,}"
+    )
 
-        unique = {}
+    # Keep only strongest combinations
+    if depth2:
 
-        for row in new_patterns:
-
-            unique[
-                row[
-                    "pattern"
-                ]
-            ] = row
-
-        new_patterns = list(
-            unique.values()
-        )
-
-        # ----------------------------------------------------
-        # Rank by precision and lift
-        # ----------------------------------------------------
-
-        ranking = pd.DataFrame([
+        temp = pd.DataFrame([
             {
-                k: v
-                for k, v in row.items()
-                if k != "_mask"
+                key: value
+                for key, value
+                in row.items()
+                if key != "_mask"
             }
-            for row in new_patterns
+            for row in depth2
         ])
 
-        ranking[
+        temp[
             "score"
         ] = (
-            ranking[
-                "precision"
+            temp[
+                "win_rate"
             ]
-            *
+            +
+            8 *
             np.log1p(
-                ranking[
-                    "lift"
+                temp[
+                    "profit_factor"
                 ]
             )
-        )
-
-        ranking = ranking.sort_values(
-            [
-                "score",
-                "precision",
-                "lift"
-            ],
-            ascending=False
         )
 
         keep_names = set(
-            ranking
-            .head(
-                200
-            )[
+            temp
+            .sort_values(
+                "score",
+                ascending=False
+            )
+            .head(200)
+            [
                 "pattern"
             ]
             .tolist()
         )
 
-        current = [
+        depth2 = [
             row
-            for row
-            in new_patterns
+            for row in depth2
             if row[
                 "pattern"
             ] in keep_names
         ]
 
-        for row in new_patterns:
+    # Add clean results
+    for row in depth2:
 
-            results.append(
-                {
-                    k: v
-                    for k, v in row.items()
-                    if k != "_mask"
-                }
+        results.append(
+            {
+                key: value
+                for key, value
+                in row.items()
+                if key != "_mask"
+            }
+        )
+
+    # ========================================================
+    # DEPTH 3
+    # ========================================================
+
+    depth3 = []
+
+    checked = 0
+
+    for previous in depth2:
+
+        previous_name = previous[
+            "pattern"
+        ]
+
+        previous_mask = previous[
+            "_mask"
+        ]
+
+        previous_parts = set(
+            previous_name.split(
+                " + "
+            )
+        )
+
+        for atomic_name in (
+            atomic_candidates
+        ):
+
+            if (
+                atomic_name
+                in previous_parts
+            ):
+                continue
+
+            checked += 1
+
+            combined = (
+                previous_mask
+                &
+                masks[
+                    atomic_name
+                ]
             )
 
-        print(
-            f"Retained for next depth: "
-            f"{len(current):,}"
+            result = evaluate_direction(
+                df,
+                combined
+            )
+
+            if result is None:
+                continue
+
+            pattern = (
+                previous_name
+                +
+                " + "
+                +
+                atomic_name
+            )
+
+            depth3.append({
+
+                "depth":
+                    3,
+
+                "pattern":
+                    pattern,
+
+                "_mask":
+                    combined,
+
+                **result
+            })
+
+    print(
+        f"Depth 3 checked: "
+        f"{checked:,}"
+    )
+
+    print(
+        f"Depth 3 qualifying: "
+        f"{len(depth3):,}"
+    )
+
+    # Keep strongest depth 3
+    if depth3:
+
+        temp = pd.DataFrame([
+            {
+                key: value
+                for key, value
+                in row.items()
+                if key != "_mask"
+            }
+            for row in depth3
+        ])
+
+        temp[
+            "score"
+        ] = (
+            temp[
+                "win_rate"
+            ]
+            +
+            8 *
+            np.log1p(
+                temp[
+                    "profit_factor"
+                ]
+            )
+        )
+
+        keep_names = set(
+            temp
+            .sort_values(
+                "score",
+                ascending=False
+            )
+            .head(250)
+            [
+                "pattern"
+            ]
+            .tolist()
+        )
+
+        depth3 = [
+            row
+            for row in depth3
+            if row[
+                "pattern"
+            ] in keep_names
+        ]
+
+    for row in depth3:
+
+        results.append(
+            {
+                key: value
+                for key, value
+                in row.items()
+                if key != "_mask"
+            }
         )
 
     return pd.DataFrame(
@@ -1967,15 +2003,19 @@ def search_combinations(
 # BUILD MASK FROM PATTERN
 # ============================================================
 
-def pattern_mask(
+def build_mask_from_pattern(
     df,
-    pattern,
-    library
+    pattern
 ):
 
+    conditions = generate_conditions(
+        df
+    )
+
     parts = [
-        x.strip()
-        for x in pattern.split(
+        part.strip()
+        for part
+        in pattern.split(
             " + "
         )
     ]
@@ -1987,115 +2027,81 @@ def pattern_mask(
 
     for part in parts:
 
-        if part not in library:
+        if part not in conditions:
 
             return None
 
-        mask &= library[
-            part
-        ]
+        mask &= (
+            conditions[
+                part
+            ]
+            .astype(bool)
+        )
 
     return mask
 
 
 # ============================================================
-# VALIDATE PATTERNS
+# VALIDATE TOP TRAINING PATTERNS
 # ============================================================
 
 def validate_patterns(
     train,
     validation,
     test,
-    patterns,
-    target
+    training_patterns
 ):
 
-    train_library = {}
+    # --------------------------------------------------------
+    # Select candidates using TRAINING ONLY.
+    # --------------------------------------------------------
 
-    train_library.update(
-        generate_atomic_conditions(
-            train
+    candidates = set()
+
+    for metric in [
+        "win_rate",
+        "profit_factor",
+        "average"
+    ]:
+
+        top = (
+            training_patterns
+            .sort_values(
+                metric,
+                ascending=False
+            )
+            .head(300)
         )
-    )
 
-    train_library.update(
-        generate_cross_conditions(
-            train
+        candidates.update(
+            top[
+                "pattern"
+            ].tolist()
         )
-    )
-
-    validation_library = {}
-
-    validation_library.update(
-        generate_atomic_conditions(
-            validation
-        )
-    )
-
-    validation_library.update(
-        generate_cross_conditions(
-            validation
-        )
-    )
-
-    test_library = {}
-
-    test_library.update(
-        generate_atomic_conditions(
-            test
-        )
-    )
-
-    test_library.update(
-        generate_cross_conditions(
-            test
-        )
-    )
 
     rows = []
 
-    # --------------------------------------------------------
-    # Only the strongest training patterns move forward.
-    # --------------------------------------------------------
+    for pattern in candidates:
 
-    training_sorted = (
-        patterns
-        .sort_values(
-            [
-                "precision",
-                "lift"
-            ],
-            ascending=False
-        )
-        .head(
-            500
-        )
-    )
-
-    for _, discovered in (
-        training_sorted.iterrows()
-    ):
-
-        pattern = discovered[
-            "pattern"
-        ]
-
-        train_mask = pattern_mask(
-            train,
-            pattern,
-            train_library
+        train_mask = (
+            build_mask_from_pattern(
+                train,
+                pattern
+            )
         )
 
-        validation_mask = pattern_mask(
-            validation,
-            pattern,
-            validation_library
+        validation_mask = (
+            build_mask_from_pattern(
+                validation,
+                pattern
+            )
         )
 
-        test_mask = pattern_mask(
-            test,
-            pattern,
-            test_library
+        test_mask = (
+            build_mask_from_pattern(
+                test,
+                pattern
+            )
         )
 
         if (
@@ -2105,49 +2111,99 @@ def validate_patterns(
             or
             test_mask is None
         ):
-
             continue
 
-        train_stats = evaluate_target(
-            train,
-            train_mask,
-            target
+        train_result = (
+            evaluate_direction(
+                train,
+                train_mask
+            )
         )
 
-        validation_stats = evaluate_target(
-            validation,
-            validation_mask,
-            target
+        if train_result is None:
+            continue
+
+        direction_name = (
+            train_result[
+                "direction"
+            ]
+        )
+
+        validation_subset = (
+            validation[
+                validation_mask
+            ]
+        )
+
+        if (
+            len(
+                validation_subset
+            )
+            <
+            MIN_VALIDATION_TRADES
+        ):
+            continue
+
+        test_subset = (
+            test[
+                test_mask
+            ]
+        )
+
+        if (
+            len(
+                test_subset
+            )
+            <
+            MIN_TEST_TRADES
+        ):
+            continue
+
+        # ----------------------------------------------------
+        # Use training-selected direction.
+        # ----------------------------------------------------
+
+        if direction_name == "LONG":
+
+            validation_returns = (
+                validation_subset[
+                    "long_return"
+                ]
+            )
+
+            test_returns = (
+                test_subset[
+                    "long_return"
+                ]
+            )
+
+        else:
+
+            validation_returns = (
+                validation_subset[
+                    "short_return"
+                ]
+            )
+
+            test_returns = (
+                test_subset[
+                    "short_return"
+                ]
+            )
+
+        validation_stats = get_stats(
+            validation_returns
+        )
+
+        test_stats = get_stats(
+            test_returns
         )
 
         if (
             validation_stats is None
             or
-            validation_stats[
-                "trades"
-            ] < MIN_VALIDATION
-        ):
-
-            continue
-
-        # ----------------------------------------------------
-        # FINAL TEST
-        # ----------------------------------------------------
-
-        test_stats = evaluate_target(
-            test,
-            test_mask,
-            target
-        )
-
-        if (
             test_stats is None
-            or
-            test_stats[
-                "trades"
-            ] < MIN_TEST
         ):
-
             continue
 
         rows.append({
@@ -2155,19 +2211,22 @@ def validate_patterns(
             "pattern":
                 pattern,
 
+            "direction":
+                direction_name,
+
             "train_trades":
-                train_stats[
+                train_result[
                     "trades"
                 ],
 
-            "train_precision":
-                train_stats[
-                    "precision"
+            "train_win":
+                train_result[
+                    "win_rate"
                 ],
 
-            "train_lift":
-                train_stats[
-                    "lift"
+            "train_pf":
+                train_result[
+                    "profit_factor"
                 ],
 
             "validation_trades":
@@ -2175,14 +2234,19 @@ def validate_patterns(
                     "trades"
                 ],
 
-            "validation_precision":
+            "validation_win":
                 validation_stats[
-                    "precision"
+                    "win_rate"
                 ],
 
-            "validation_lift":
+            "validation_pf":
                 validation_stats[
-                    "lift"
+                    "profit_factor"
+                ],
+
+            "validation_avg":
+                validation_stats[
+                    "average"
                 ],
 
             "test_trades":
@@ -2190,24 +2254,24 @@ def validate_patterns(
                     "trades"
                 ],
 
-            "test_precision":
+            "test_win":
                 test_stats[
-                    "precision"
+                    "win_rate"
                 ],
 
-            "test_lift":
+            "test_pf":
                 test_stats[
-                    "lift"
+                    "profit_factor"
                 ],
 
-            "test_average_move":
+            "test_avg":
                 test_stats[
-                    "average_move"
+                    "average"
                 ],
 
-            "test_average_return":
+            "test_total":
                 test_stats[
-                    "average_return"
+                    "total"
                 ]
         })
 
@@ -2223,27 +2287,14 @@ def validate_patterns(
 def year_stability(
     test,
     pattern,
-    target
+    direction_name
 ):
 
-    library = {}
-
-    library.update(
-        generate_atomic_conditions(
-            test
+    mask = (
+        build_mask_from_pattern(
+            test,
+            pattern
         )
-    )
-
-    library.update(
-        generate_cross_conditions(
-            test
-        )
-    )
-
-    mask = pattern_mask(
-        test,
-        pattern,
-        library
     )
 
     if mask is None:
@@ -2256,10 +2307,14 @@ def year_stability(
     if subset.empty:
         return pd.DataFrame()
 
-    subset["year"] = (
+    subset[
+        "year"
+    ] = (
         subset[
             "event_date"
-        ].dt.year
+        ]
+        .dt
+        .year
     )
 
     rows = []
@@ -2270,24 +2325,24 @@ def year_stability(
         )
     ):
 
-        n = len(
-            group
+        if direction_name == "LONG":
+
+            returns = group[
+                "long_return"
+            ]
+
+        else:
+
+            returns = group[
+                "short_return"
+            ]
+
+        stats = get_stats(
+            returns
         )
 
-        if n == 0:
+        if stats is None:
             continue
-
-        hits = (
-            group[
-                target
-            ].sum()
-        )
-
-        precision = (
-            hits /
-            n *
-            100
-        )
 
         rows.append({
 
@@ -2295,23 +2350,29 @@ def year_stability(
                 year,
 
             "trades":
-                n,
+                stats[
+                    "trades"
+                ],
 
-            "hits":
-                int(hits),
+            "win_rate":
+                stats[
+                    "win_rate"
+                ],
 
-            "precision":
-                precision,
+            "average":
+                stats[
+                    "average"
+                ],
 
-            "average_move":
-                group[
-                    "absolute_move"
-                ].mean(),
+            "profit_factor":
+                stats[
+                    "profit_factor"
+                ],
 
-            "average_return":
-                group[
-                    "next_day_return"
-                ].mean()
+            "total":
+                stats[
+                    "total"
+                ]
         })
 
     return pd.DataFrame(
@@ -2328,34 +2389,38 @@ def main():
     print()
     print("=" * 90)
     print(
-        "NEXT-DAY LARGE-MOVE PRECURSOR SCANNER"
+        "HIGH-WIN-RATE SIMPLE STRATEGY SEARCH"
     )
     print("=" * 90)
 
     print()
     print(
-        "Previous-day EOD signal"
+        "FIXED ENTRY : NEXT DAY 09:15 OPEN"
     )
 
     print(
-        "Next-day 09:15 entry"
-    )
-
-    print(
-        "Next-day 15:27 exit"
+        "FIXED EXIT  : NEXT DAY 15:27 OPEN"
     )
 
     print()
     print(
-        "Timeframes:"
+        "NO INFORMATION AFTER 09:15 "
+        "IS USED TO DECIDE ENTRY."
     )
 
+    print()
     print(
-        "1m | 2m | 3m | 5m | 10m | 15m"
+        "Target win rate: "
+        f"{TARGET_WIN_RATE:.0f}%"
+    )
+
+    print()
+    print(
+        "Logic is intentionally kept simple."
     )
 
     # ========================================================
-    # DATA
+    # LOAD DATA
     # ========================================================
 
     df = create_dataset()
@@ -2376,7 +2441,7 @@ def main():
         test,
         train_end,
         validation_end
-    ) = split_data(
+    ) = split_dataset(
         df
     )
 
@@ -2399,6 +2464,7 @@ def main():
     )
 
     print()
+
     print(
         "Training ends:"
     )
@@ -2408,6 +2474,7 @@ def main():
     )
 
     print()
+
     print(
         "Validation ends:"
     )
@@ -2417,458 +2484,306 @@ def main():
     )
 
     # ========================================================
-    # TARGET PERCENTILES
+    # GENERATE CONDITIONS
     # ========================================================
 
-    target_percentiles = [
-        0.01,
-        0.02,
-        0.05
-    ]
+    print()
+    print(
+        "Generating simple conditions..."
+    )
+
+    conditions = generate_conditions(
+        train
+    )
+
+    print(
+        f"Conditions generated: "
+        f"{len(conditions):,}"
+    )
 
     # ========================================================
-    # PROCESS EACH TARGET
+    # TRAIN SEARCH
     # ========================================================
 
-    for percentile in (
-        target_percentiles
-    ):
+    print()
+    print("=" * 90)
+    print(
+        "SEARCHING TRAINING DATA"
+    )
+    print("=" * 90)
 
-        label = (
-            f"{int(percentile * 100)}%"
+    training_patterns = search_patterns(
+        train,
+        conditions
+    )
+
+    if training_patterns.empty:
+
+        print(
+            "No qualifying patterns."
         )
+
+        return
+
+    # ========================================================
+    # SAVE TRAINING
+    # ========================================================
+
+    training_patterns.to_csv(
+        "SIMPLE_85_TRAINING_PATTERNS.csv",
+        index=False
+    )
+
+    # ========================================================
+    # TOP TRAINING
+    # ========================================================
+
+    print()
+    print("=" * 90)
+    print(
+        "TOP TRAINING PATTERNS"
+    )
+    print("=" * 90)
+
+    print(
+        training_patterns
+        .sort_values(
+            [
+                "win_rate",
+                "profit_factor"
+            ],
+            ascending=False
+        )
+        .head(50)
+        .to_string(
+            index=False
+        )
+    )
+
+    # ========================================================
+    # VALIDATE
+    # ========================================================
+
+    print()
+    print("=" * 90)
+    print(
+        "VALIDATING TOP PATTERNS"
+    )
+    print("=" * 90)
+
+    final_results = validate_patterns(
+        train,
+        validation,
+        test,
+        training_patterns
+    )
+
+    if final_results.empty:
+
+        print(
+            "NO PATTERNS SURVIVED VALIDATION."
+        )
+
+        return
+
+    final_results = (
+        final_results
+        .sort_values(
+            [
+                "test_win",
+                "test_pf",
+                "test_avg"
+            ],
+            ascending=False
+        )
+        .reset_index(
+            drop=True
+        )
+    )
+
+    final_results.to_csv(
+        "SIMPLE_85_FINAL_TEST.csv",
+        index=False
+    )
+
+    # ========================================================
+    # FINAL TEST
+    # ========================================================
+
+    print()
+    print("=" * 90)
+    print(
+        "FINAL UNSEEN TEST"
+    )
+    print("=" * 90)
+
+    print(
+        final_results
+        .head(50)
+        .to_string(
+            index=False
+        )
+    )
+
+    # ========================================================
+    # 70%
+    # ========================================================
+
+    for threshold in [
+        70,
+        75,
+        80,
+        85
+    ]:
+
+        strong = final_results[
+            final_results[
+                "test_win"
+            ]
+            >= threshold
+        ]
 
         print()
         print("=" * 90)
         print(
-            f"TARGET: TOP/BOTTOM {label} MOVERS"
+            f"FINAL TEST >= {threshold}%"
         )
         print("=" * 90)
 
-        # ----------------------------------------------------
-        # IMPORTANT:
-        #
-        # Target thresholds are calculated separately within
-        # each dataset. This asks:
-        #
-        # "Does this pattern identify unusually large movers
-        # in each period?"
-        #
-        # ----------------------------------------------------
-
-        (
-            train_target,
-            train_gain_threshold,
-            train_loss_threshold,
-            train_absolute_threshold
-        ) = create_targets(
-            train,
-            percentile
-        )
-
-        (
-            validation_target,
-            validation_gain_threshold,
-            validation_loss_threshold,
-            validation_absolute_threshold
-        ) = create_targets(
-            validation,
-            percentile
-        )
-
-        (
-            test_target,
-            test_gain_threshold,
-            test_loss_threshold,
-            test_absolute_threshold
-        ) = create_targets(
-            test,
-            percentile
-        )
-
-        print()
-        print(
-            "TRAIN thresholds:"
-        )
-
-        print(
-            f"Top gain: "
-            f"{train_gain_threshold:.3f}%"
-        )
-
-        print(
-            f"Bottom loss: "
-            f"{train_loss_threshold:.3f}%"
-        )
-
-        print(
-            f"Absolute move: "
-            f"{train_absolute_threshold:.3f}%"
-        )
-
-        print()
-        print(
-            "TEST thresholds:"
-        )
-
-        print(
-            f"Top gain: "
-            f"{test_gain_threshold:.3f}%"
-        )
-
-        print(
-            f"Bottom loss: "
-            f"{test_loss_threshold:.3f}%"
-        )
-
-        print(
-            f"Absolute move: "
-            f"{test_absolute_threshold:.3f}%"
-        )
-
-        targets = {
-
-            "BIG_GAIN":
-                "BIG_GAIN",
-
-            "BIG_LOSS":
-                "BIG_LOSS",
-
-            "BIG_ABSOLUTE_MOVE":
-                "BIG_ABSOLUTE_MOVE"
-        }
-
-        # ====================================================
-        # EACH TARGET
-        # ====================================================
-
-        for target_name, target_column in (
-            targets.items()
-        ):
-
-            print()
-            print("-" * 80)
+        if strong.empty:
 
             print(
-                f"SEARCHING TARGET: "
-                f"{target_name}"
+                "NONE"
             )
 
-            # ------------------------------------------------
-            # CONDITIONS
-            # ------------------------------------------------
-
-            print()
-            print(
-                "Generating conditions..."
-            )
-
-            conditions = {}
-
-            conditions.update(
-                generate_atomic_conditions(
-                    train_target
-                )
-            )
-
-            conditions.update(
-                generate_cross_conditions(
-                    train_target
-                )
-            )
+        else:
 
             print(
-                f"Total conditions: "
-                f"{len(conditions):,}"
-            )
-
-            # ------------------------------------------------
-            # SEARCH
-            # ------------------------------------------------
-
-            training_patterns = (
-                search_combinations(
-                    train_target,
-                    conditions,
-                    target_column,
-                    MAX_DEPTH
-                )
-            )
-
-            if training_patterns.empty:
-
-                print(
-                    "No training patterns found."
-                )
-
-                continue
-
-            # ------------------------------------------------
-            # SAVE TRAINING
-            # ------------------------------------------------
-
-            training_file = (
-                f"LARGE_MOVE_"
-                f"{label}_"
-                f"{target_name}_"
-                f"TRAIN.csv"
-            )
-
-            training_patterns.to_csv(
-                training_file,
-                index=False
-            )
-
-            # ------------------------------------------------
-            # VALIDATION / TEST
-            # ------------------------------------------------
-
-            final_results = (
-                validate_patterns(
-                    train_target,
-                    validation_target,
-                    test_target,
-                    training_patterns,
-                    target_column
-                )
-            )
-
-            if final_results.empty:
-
-                print(
-                    "No patterns survived "
-                    "validation."
-                )
-
-                continue
-
-            # ------------------------------------------------
-            # Sort by FINAL TEST precision
-            #
-            # This is ONLY for displaying the results.
-            # The test was not used to discover the pattern.
-            # ------------------------------------------------
-
-            final_results = (
-                final_results
-                .sort_values(
-                    [
-                        "test_precision",
-                        "test_lift"
-                    ],
-                    ascending=False
-                )
-                .reset_index(
-                    drop=True
-                )
-            )
-
-            final_file = (
-                f"LARGE_MOVE_"
-                f"{label}_"
-                f"{target_name}_"
-                f"FINAL_TEST.csv"
-            )
-
-            final_results.to_csv(
-                final_file,
-                index=False
-            )
-
-            # =================================================
-            # TOP RESULTS
-            # =================================================
-
-            print()
-            print("=" * 90)
-            print(
-                f"TOP {label} "
-                f"{target_name} PATTERNS"
-            )
-            print("=" * 90)
-
-            print(
-                final_results
-                .head(30)
+                strong
+                .head(50)
                 .to_string(
                     index=False
                 )
             )
 
-            # =================================================
-            # 70% PRECISION
-            # =================================================
-
-            strong_70 = final_results[
-                final_results[
-                    "test_precision"
-                ]
-                >= 70
-            ]
-
-            print()
-            print(
-                f"{target_name} "
-                f"FINAL TEST >= 70%"
-            )
-
-            if strong_70.empty:
-
-                print(
-                    "NONE"
-                )
-
-            else:
-
-                print(
-                    strong_70
-                    .head(50)
-                    .to_string(
-                        index=False
-                    )
-                )
-
-            # =================================================
-            # 80%
-            # =================================================
-
-            strong_80 = final_results[
-                final_results[
-                    "test_precision"
-                ]
-                >= 80
-            ]
-
-            print()
-            print(
-                f"{target_name} "
-                f"FINAL TEST >= 80%"
-            )
-
-            if strong_80.empty:
-
-                print(
-                    "NONE"
-                )
-
-            else:
-
-                print(
-                    strong_80
-                    .head(50)
-                    .to_string(
-                        index=False
-                    )
-                )
-
-            # =================================================
-            # 85%
-            # =================================================
-
-            strong_85 = final_results[
-                final_results[
-                    "test_precision"
-                ]
-                >= 85
-            ]
-
-            print()
-            print(
-                f"{target_name} "
-                f"FINAL TEST >= 85%"
-            )
-
-            if strong_85.empty:
-
-                print(
-                    "NONE"
-                )
-
-            else:
-
-                print(
-                    strong_85
-                    .to_string(
-                        index=False
-                    )
-                )
-
-            # =================================================
-            # YEAR STABILITY
-            # =================================================
-
-            print()
-            print(
-                "YEAR-BY-YEAR STABILITY "
-                "OF TOP 5"
-            )
-
-            for _, row in (
-                final_results
-                .head(5)
-                .iterrows()
-            ):
-
-                print()
-                print(
-                    row[
-                        "pattern"
-                    ]
-                )
-
-                yearly = (
-                    year_stability(
-                        test_target,
-                        row[
-                            "pattern"
-                        ],
-                        target_column
-                    )
-                )
-
-                if yearly.empty:
-
-                    print(
-                        "No yearly data."
-                    )
-
-                else:
-
-                    print(
-                        yearly.to_string(
-                            index=False
-                        )
-                    )
-
     # ========================================================
-    # COMPLETE
+    # YEAR STABILITY
     # ========================================================
 
     print()
     print("=" * 90)
     print(
-        "LARGE-MOVE PRECURSOR SEARCH COMPLETE"
+        "YEAR-BY-YEAR STABILITY"
+    )
+    print("=" * 90)
+
+    for _, row in (
+        final_results
+        .head(10)
+        .iterrows()
+    ):
+
+        print()
+        print(
+            row[
+                "pattern"
+            ]
+        )
+
+        print(
+            "Direction:",
+            row[
+                "direction"
+            ]
+        )
+
+        yearly = (
+            year_stability(
+                test,
+                row[
+                    "pattern"
+                ],
+                row[
+                    "direction"
+                ]
+            )
+        )
+
+        if yearly.empty:
+
+            print(
+                "No yearly results."
+            )
+
+        else:
+
+            print(
+                yearly
+                .to_string(
+                    index=False
+                )
+            )
+
+    # ========================================================
+    # 85% DECISION
+    # ========================================================
+
+    candidates_85 = final_results[
+        final_results[
+            "test_win"
+        ]
+        >= 85
+    ]
+
+    print()
+    print("=" * 90)
+    print(
+        "85% FINAL TEST DECISION"
+    )
+    print("=" * 90)
+
+    if candidates_85.empty:
+
+        print(
+            "NO 85%+ STRATEGY SURVIVED "
+            "THE FINAL UNSEEN TEST."
+        )
+
+    else:
+
+        print(
+            "85%+ STRATEGIES FOUND:"
+        )
+
+        print(
+            candidates_85
+            .to_string(
+                index=False
+            )
+        )
+
+    # ========================================================
+    # FINISH
+    # ========================================================
+
+    print()
+    print("=" * 90)
+    print(
+        "SEARCH COMPLETE"
     )
     print("=" * 90)
 
     print()
     print(
-        "The most important output is:"
+        "Files:"
     )
 
     print(
-        "FINAL TEST >= 85%"
-    )
-
-    print()
-    print(
-        "A high training result alone does NOT "
-        "count as an edge."
+        "SIMPLE_85_TRAINING_PATTERNS.csv"
     )
 
     print(
-        "The pattern must survive validation "
-        "and the completely unseen final test."
+        "SIMPLE_85_FINAL_TEST.csv"
     )
 
 
