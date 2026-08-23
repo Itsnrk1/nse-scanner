@@ -1,875 +1,404 @@
 # ============================================================
-# 09:15 OPENING-VOLATILITY STRATEGY
+# 5-MIN EOD + PREVIOUS-DAY OPENING TREND STRATEGY
 # ============================================================
 #
-# GOAL
-# ------------------------------------------------------------
-# Find the best simple strategy that:
+# SIGNAL DAY = previous trading day
 #
-#   SIGNAL AVAILABLE BEFORE 09:15
-#   ENTRY = 09:15 OPEN
-#   EXIT  = 15:27 OPEN
+# PREVIOUS DAY CONDITIONS:
 #
-# BOTH LONG AND SHORT ARE TESTED.
+# 5-MIN OPENING:
+#   09:15 candle
+#   09:20 candle
 #
-# ============================================================
+# 5-MIN EOD:
+#   15:20 candle
+#   15:25 candle
 #
-# FEATURES USED
-# ------------------------------------------------------------
+# ALL FOUR MUST HAVE THE SAME TREND.
 #
-# PREVIOUS DAY:
-#   - return
-#   - range
-#   - volatility
-#   - body
-#   - close position
-#   - EOD momentum
-#   - EOD reversal
-#   - volume
+# LONG:
+#   09:15 bullish
+#   09:20 bullish
+#   15:20 bullish
+#   15:25 bullish
 #
-# PREVIOUS-DAY OPEN:
-#   - first 1m candle
-#   - first 3m
-#   - first 5m
-#   - first 10m
-#   - first 15m
-#   - opening direction
-#   - opening body
-#   - opening range
-#   - opening volume
+# SHORT:
+#   09:15 bearish
+#   09:20 bearish
+#   15:20 bearish
+#   15:25 bearish
 #
-# HISTORICAL CONTEXT:
-#   - previous 5/10/20 day returns
-#   - previous 5/10/20 day volatility
-#   - historical direction frequency
+# ENTRY:
+#   NEXT TRADING DAY 09:15 OPEN
 #
-# NO NEXT-DAY 09:16+ INFORMATION IS USED.
+# EXIT:
+#   SAME TRADING DAY 15:27
 #
 # ============================================================
 
 import pandas as pd
 import numpy as np
-import requests
-import zipfile
-import io
 import os
-import warnings
-
-warnings.filterwarnings("ignore")
+import glob
 
 
 # ============================================================
 # CONFIGURATION
 # ============================================================
 
-DATA_URL = (
-    "https://github.com/voletiramu/nse-fno-1min-data/"
-    "releases/download/v1.0.0/stocks_1m_csvs.zip"
-)
+DATA_FOLDER = "./data"
 
 ENTRY_TIME = "09:15"
 EXIT_TIME = "15:27"
 
-# Approximate total round-trip cost in percentage points.
-# Set to 0 for raw backtest.
+# Set to 0 for raw results.
+# Example: 0.10 means 0.10% total round-trip cost.
 ROUND_TRIP_COST = 0.10
 
-MIN_TRAIN_TRADES = 100
-MIN_VALIDATION_TRADES = 30
-MIN_TEST_TRADES = 30
-
-MAX_DEPTH = 3
-MAX_CANDIDATES = 300
-
-TARGET_WIN_RATE = 85.0
-
 
 # ============================================================
-# BASIC UTILITIES
+# TREND FUNCTION
 # ============================================================
 
-def candle_direction(open_price, close_price):
+def candle_trend(row):
+    """
+    Returns:
+        1  = bullish
+        -1 = bearish
+         0 = doji
+    """
 
-    if close_price > open_price:
+    if row["close"] > row["open"]:
         return 1
 
-    if close_price < open_price:
+    if row["close"] < row["open"]:
         return -1
 
     return 0
 
 
-def safe_pct(a, b):
-
-    if b is None or b == 0:
-        return np.nan
-
-    return (
-        (a - b) /
-        b *
-        100.0
-    )
-
-
-def candle_features(candle):
-
-    if candle is None:
-        return None
-
-    o = candle["open"]
-    h = candle["high"]
-    l = candle["low"]
-    c = candle["close"]
-
-    if o == 0:
-        return None
-
-    rng = h - l
-    body = abs(c - o)
-
-    if rng > 0:
-
-        body_ratio = body / rng
-
-        close_position = (
-            c - l
-        ) / rng
-
-    else:
-
-        body_ratio = 0.0
-        close_position = 0.5
-
-    return {
-
-        "direction":
-            candle_direction(
-                o,
-                c
-            ),
-
-        "body_ratio":
-            body_ratio,
-
-        "range":
-            rng,
-
-        "close_position":
-            close_position,
-
-        "momentum":
-            (c - o) / o * 100,
-
-        "volume":
-            candle["volume"]
-    }
-
-
 # ============================================================
-# DOWNLOAD
+# LOAD DATA
 # ============================================================
 
-def download_data():
+def load_data(file_path):
 
-    print("=" * 100)
-    print("DOWNLOADING NSE 1-MINUTE DATA")
-    print("=" * 100)
+    df = pd.read_csv(file_path)
 
-    r = requests.get(
-        DATA_URL,
-        timeout=900
-    )
+    # --------------------------------------------------------
+    # Try to identify datetime column
+    # --------------------------------------------------------
 
-    r.raise_for_status()
+    datetime_col = None
 
-    print(
-        f"Downloaded "
-        f"{len(r.content) / 1024 / 1024:.1f} MB"
-    )
+    for col in [
+        "datetime",
+        "Datetime",
+        "date_time",
+        "timestamp",
+        "time",
+        "Date"
+    ]:
 
-    return r.content
+        if col in df.columns:
 
+            datetime_col = col
+            break
 
-# ============================================================
-# LOAD STOCK
-# ============================================================
+    if datetime_col is None:
 
-def load_stock(
-    zip_file,
-    filename
-):
-
-    try:
-
-        raw = zip_file.read(
-            filename
+        raise ValueError(
+            f"No datetime column found in {file_path}"
         )
 
-        df = pd.read_csv(
-            io.BytesIO(raw),
-            compression="gzip"
-        )
+    df["datetime"] = pd.to_datetime(
+        df[datetime_col]
+    )
 
-        if df.empty:
-            return None
+    # --------------------------------------------------------
+    # Standardize OHLCV
+    # --------------------------------------------------------
 
-        if "time" not in df.columns:
-            return None
+    rename_map = {}
 
-        df["datetime"] = (
-            pd.to_datetime(
-                df["time"],
-                unit="s",
-                utc=True
+    for col in df.columns:
+
+        lower = col.lower()
+
+        if lower == "open":
+            rename_map[col] = "open"
+
+        elif lower == "high":
+            rename_map[col] = "high"
+
+        elif lower == "low":
+            rename_map[col] = "low"
+
+        elif lower == "close":
+            rename_map[col] = "close"
+
+        elif lower in [
+            "volume",
+            "vol"
+        ]:
+            rename_map[col] = "volume"
+
+    df = df.rename(
+        columns=rename_map
+    )
+
+    required = [
+        "open",
+        "high",
+        "low",
+        "close"
+    ]
+
+    for col in required:
+
+        if col not in df.columns:
+
+            raise ValueError(
+                f"Missing column: {col}"
             )
-            .dt
-            .tz_convert(
-                "Asia/Kolkata"
-            )
-        )
 
-        df["date"] = (
-            df["datetime"]
-            .dt
-            .strftime("%Y-%m-%d")
-        )
+    if "volume" not in df.columns:
 
-        df["hm"] = (
-            df["datetime"]
-            .dt
-            .strftime("%H:%M")
-        )
+        df["volume"] = 0
 
-        for col in [
+    # --------------------------------------------------------
+    # Clean
+    # --------------------------------------------------------
+
+    df = df.dropna(
+        subset=[
+            "datetime",
             "open",
             "high",
             "low",
             "close"
-        ]:
-
-            if col not in df.columns:
-                return None
-
-            df[col] = pd.to_numeric(
-                df[col],
-                errors="coerce"
-            )
-
-        if "Volume" in df.columns:
-
-            df["volume"] = pd.to_numeric(
-                df["Volume"],
-                errors="coerce"
-            )
-
-        elif "volume" in df.columns:
-
-            df["volume"] = pd.to_numeric(
-                df["volume"],
-                errors="coerce"
-            )
-
-        else:
-
-            return None
-
-        df = df.dropna(
-            subset=[
-                "open",
-                "high",
-                "low",
-                "close",
-                "volume"
-            ]
-        )
-
-        df = df[
-            (df["hm"] >= "09:15")
-            &
-            (df["hm"] <= "15:29")
-        ].copy()
-
-        return df[
-            [
-                "date",
-                "hm",
-                "open",
-                "high",
-                "low",
-                "close",
-                "volume"
-            ]
         ]
-
-    except Exception:
-
-        return None
-
-
-# ============================================================
-# DAY LOOKUP
-# ============================================================
-
-def make_day_lookup(group):
-
-    result = {}
-
-    for _, row in group.iterrows():
-
-        result[row["hm"]] = {
-
-            "open":
-                float(row["open"]),
-
-            "high":
-                float(row["high"]),
-
-            "low":
-                float(row["low"]),
-
-            "close":
-                float(row["close"]),
-
-            "volume":
-                float(row["volume"])
-        }
-
-    return result
-
-
-# ============================================================
-# BUILD INTRADAY CANDLE
-# ============================================================
-
-def build_candle(
-    day,
-    start,
-    end
-):
-
-    rows = []
-
-    for minute in range(
-        start,
-        end + 1
-    ):
-
-        h = minute // 60
-        m = minute % 60
-
-        key = f"{h:02d}:{m:02d}"
-
-        if key not in day:
-            return None
-
-        rows.append(
-            day[key]
-        )
-
-    if not rows:
-        return None
-
-    return {
-
-        "open":
-            rows[0]["open"],
-
-        "high":
-            max(
-                x["high"]
-                for x in rows
-            ),
-
-        "low":
-            min(
-                x["low"]
-                for x in rows
-            ),
-
-        "close":
-            rows[-1]["close"],
-
-        "volume":
-            sum(
-                x["volume"]
-                for x in rows
-            )
-    }
-
-
-# ============================================================
-# PREVIOUS DAY FEATURES
-# ============================================================
-
-def build_previous_day_features(
-    day
-):
-
-    if (
-        "09:15" not in day
-        or
-        "15:29" not in day
-    ):
-
-        return None
-
-    features = {}
-
-    day_open = day[
-        "09:15"
-    ]["open"]
-
-    day_close = day[
-        "15:29"
-    ]["close"]
-
-    if day_open <= 0:
-        return None
-
-    day_high = max(
-        x["high"]
-        for x in day.values()
     )
-
-    day_low = min(
-        x["low"]
-        for x in day.values()
-    )
-
-    day_volume = sum(
-        x["volume"]
-        for x in day.values()
-    )
-
-    day_range = (
-        day_high -
-        day_low
-    )
-
-    # --------------------------------------------------------
-    # Whole-day features
-    # --------------------------------------------------------
-
-    features[
-        "PREV_DAY_RETURN"
-    ] = safe_pct(
-        day_close,
-        day_open
-    )
-
-    features[
-        "PREV_DAY_RANGE_PCT"
-    ] = (
-        day_range /
-        day_open *
-        100
-    )
-
-    if day_range > 0:
-
-        features[
-            "PREV_DAY_CLOSE_POS"
-        ] = (
-            day_close -
-            day_low
-        ) / day_range
-
-    else:
-
-        features[
-            "PREV_DAY_CLOSE_POS"
-        ] = 0.5
-
-    # --------------------------------------------------------
-    # EOD candles
-    # --------------------------------------------------------
-
-    eod_1 = build_candle(
-        day,
-        15 * 60,
-        15 * 60 + 14
-    )
-
-    eod_2 = build_candle(
-        day,
-        15 * 60 + 15,
-        15 * 60 + 29
-    )
-
-    for label, candle in [
-        ("EOD1", eod_1),
-        ("EOD2", eod_2)
-    ]:
-
-        cf = candle_features(
-            candle
-        )
-
-        if cf is None:
-            continue
-
-        features[
-            f"{label}_DIR"
-        ] = cf["direction"]
-
-        features[
-            f"{label}_BODY"
-        ] = cf["body_ratio"]
-
-        features[
-            f"{label}_RANGE"
-        ] = cf["range"]
-
-        features[
-            f"{label}_CLOSE_POS"
-        ] = cf["close_position"]
-
-        features[
-            f"{label}_MOMENTUM"
-        ] = cf["momentum"]
-
-        features[
-            f"{label}_VOLUME"
-        ] = cf["volume"]
-
-    # EOD reversal
-    if (
-        eod_1 is not None
-        and
-        eod_2 is not None
-    ):
-
-        d1 = candle_direction(
-            eod_1["open"],
-            eod_1["close"]
-        )
-
-        d2 = candle_direction(
-            eod_2["open"],
-            eod_2["close"]
-        )
-
-        features[
-            "EOD_REVERSAL"
-        ] = (
-            d1 != 0
-            and
-            d2 != 0
-            and
-            d1 != d2
-        )
-
-        features[
-            "EOD_SECOND_VOL_MORE"
-        ] = (
-            eod_2["volume"]
-            >
-            eod_1["volume"]
-        )
-
-    # --------------------------------------------------------
-    # PREVIOUS-DAY OPENING STRUCTURES
-    # --------------------------------------------------------
-
-    windows = {
-
-        "OPEN_1M":
-            (9 * 60 + 15,
-             9 * 60 + 15),
-
-        "OPEN_3M":
-            (9 * 60 + 15,
-             9 * 60 + 17),
-
-        "OPEN_5M":
-            (9 * 60 + 15,
-             9 * 60 + 19),
-
-        "OPEN_10M":
-            (9 * 60 + 15,
-             9 * 60 + 24),
-
-        "OPEN_15M":
-            (9 * 60 + 15,
-             9 * 60 + 29)
-    }
-
-    for label, (
-        start,
-        end
-    ) in windows.items():
-
-        candle = build_candle(
-            day,
-            start,
-            end
-        )
-
-        cf = candle_features(
-            candle
-        )
-
-        if cf is None:
-            continue
-
-        features[
-            f"{label}_DIR"
-        ] = cf["direction"]
-
-        features[
-            f"{label}_BODY"
-        ] = cf["body_ratio"]
-
-        features[
-            f"{label}_RANGE"
-        ] = cf["range"]
-
-        features[
-            f"{label}_CLOSE_POS"
-        ] = cf["close_position"]
-
-        features[
-            f"{label}_MOMENTUM"
-        ] = cf["momentum"]
-
-        features[
-            f"{label}_VOLUME"
-        ] = cf["volume"]
-
-    # --------------------------------------------------------
-    # Opening progression
-    # --------------------------------------------------------
-
-    opening_1 = build_candle(
-        day,
-        9 * 60 + 15,
-        9 * 60 + 15
-    )
-
-    opening_3 = build_candle(
-        day,
-        9 * 60 + 15,
-        9 * 60 + 17
-    )
-
-    opening_5 = build_candle(
-        day,
-        9 * 60 + 15,
-        9 * 60 + 19
-    )
-
-    if (
-        opening_1 is not None
-        and
-        opening_5 is not None
-    ):
-
-        features[
-            "OPEN_5M_VS_1M_DIRECTION"
-        ] = (
-            candle_direction(
-                opening_5["open"],
-                opening_5["close"]
-            )
-            ==
-            candle_direction(
-                opening_1["open"],
-                opening_1["close"]
-            )
-        )
-
-        features[
-            "OPEN_5M_VOLUME_MORE_1M"
-        ] = (
-            opening_5["volume"]
-            >
-            opening_1["volume"]
-        )
-
-    if (
-        opening_3 is not None
-        and
-        opening_5 is not None
-    ):
-
-        features[
-            "OPEN_5M_VS_3M_DIRECTION"
-        ] = (
-            candle_direction(
-                opening_5["open"],
-                opening_5["close"]
-            )
-            ==
-            candle_direction(
-                opening_3["open"],
-                opening_3["close"]
-            )
-        )
-
-        features[
-            "OPEN_5M_VOLUME_MORE_3M"
-        ] = (
-            opening_5["volume"]
-            >
-            opening_3["volume"]
-        )
-
-    return features
-
-
-# ============================================================
-# HISTORICAL CONTEXT
-# ============================================================
-
-def add_historical_context(
-    feature_rows
-):
-
-    df = pd.DataFrame(
-        feature_rows
-    )
-
-    if df.empty:
-        return df
 
     df = df.sort_values(
-        [
-            "symbol",
-            "signal_date"
-        ]
-    ).reset_index(
-        drop=True
+        "datetime"
     )
 
-    # --------------------------------------------------------
-    # IMPORTANT:
-    # Shift before calculating statistics.
-    #
-    # This prevents today's signal from seeing today's result.
-    # --------------------------------------------------------
-
-    grouped = df.groupby(
-        "symbol",
-        group_keys=False
+    df["date"] = (
+        df["datetime"]
+        .dt.date
     )
 
-    df[
-        "HIST_RETURN_5"
-    ] = grouped[
-        "PREV_DAY_RETURN"
-    ].transform(
-        lambda x:
-        x.shift(1)
-        .rolling(5)
-        .mean()
-    )
-
-    df[
-        "HIST_RETURN_10"
-    ] = grouped[
-        "PREV_DAY_RETURN"
-    ].transform(
-        lambda x:
-        x.shift(1)
-        .rolling(10)
-        .mean()
-    )
-
-    df[
-        "HIST_RETURN_20"
-    ] = grouped[
-        "PREV_DAY_RETURN"
-    ].transform(
-        lambda x:
-        x.shift(1)
-        .rolling(20)
-        .mean()
-    )
-
-    df[
-        "HIST_VOL_10"
-    ] = grouped[
-        "PREV_DAY_RANGE_PCT"
-    ].transform(
-        lambda x:
-        x.shift(1)
-        .rolling(10)
-        .mean()
-    )
-
-    # --------------------------------------------------------
-    # Historical bullish frequency
-    # --------------------------------------------------------
-
-    prev_dir = (
-        df[
-            "PREV_DAY_RETURN"
-        ] > 0
-    ).astype(float)
-
-    df[
-        "HIST_BULL_FREQ_20"
-    ] = (
-        prev_dir
-        .groupby(
-            df["symbol"]
-        )
-        .transform(
-            lambda x:
-            x.shift(1)
-            .rolling(20)
-            .mean()
-        )
+    df["time"] = (
+        df["datetime"]
+        .dt.strftime("%H:%M")
     )
 
     return df
 
 
 # ============================================================
-# PROCESS STOCK
+# BUILD 5-MINUTE CANDLES
 # ============================================================
 
-def process_stock(
-    zip_file,
-    filename
+def build_5min_candles(df):
+
+    df = df.copy()
+
+    df["datetime"] = pd.to_datetime(
+        df["datetime"]
+    )
+
+    # --------------------------------------------------------
+    # Only NSE regular session
+    # --------------------------------------------------------
+
+    df = df[
+        (
+            df["time"] >= "09:15"
+        )
+        &
+        (
+            df["time"] <= "15:29"
+        )
+    ].copy()
+
+    # --------------------------------------------------------
+    # Create 5-minute bucket
+    #
+    # 09:15-09:19
+    # 09:20-09:24
+    # ...
+    # 15:20-15:24
+    # 15:25-15:29
+    # --------------------------------------------------------
+
+    minutes_from_open = (
+        df["datetime"].dt.hour * 60
+        +
+        df["datetime"].dt.minute
+        -
+        (9 * 60 + 15)
+    )
+
+    df["bucket"] = (
+        minutes_from_open // 5
+    )
+
+    df["candle_time"] = (
+        9 * 60
+        + 15
+        +
+        df["bucket"] * 5
+    )
+
+    df["candle_h"] = (
+        df["candle_time"] // 60
+    )
+
+    df["candle_m"] = (
+        df["candle_time"] % 60
+    )
+
+    df["candle_time"] = (
+        df["candle_h"].astype(str)
+        .str.zfill(2)
+        +
+        ":"
+        +
+        df["candle_m"].astype(str)
+        .str.zfill(2)
+    )
+
+    # --------------------------------------------------------
+    # Aggregate
+    # --------------------------------------------------------
+
+    candles = (
+        df
+        .groupby(
+            [
+                "date",
+                "candle_time"
+            ],
+            sort=True
+        )
+        .agg(
+            open=("open", "first"),
+            high=("high", "max"),
+            low=("low", "min"),
+            close=("close", "last"),
+            volume=("volume", "sum"),
+            bars=("close", "count")
+        )
+        .reset_index()
+    )
+
+    return candles
+
+
+# ============================================================
+# CHECK PREVIOUS DAY SIGNAL
+# ============================================================
+
+def get_signal(
+    previous_day
 ):
 
-    df = load_stock(
-        zip_file,
-        filename
+    required_times = [
+        "09:15",
+        "09:20",
+        "15:20",
+        "15:25"
+    ]
+
+    day = (
+        previous_day
+        .set_index("candle_time")
     )
 
-    if df is None:
-        return []
+    # --------------------------------------------------------
+    # Make sure all four candles exist.
+    # --------------------------------------------------------
 
-    grouped = {
-        date: group
-        for date, group
-        in df.groupby("date")
-    }
+    for t in required_times:
+
+        if t not in day.index:
+
+            return 0
+
+    # --------------------------------------------------------
+    # Extract trends
+    # --------------------------------------------------------
+
+    trends = []
+
+    for t in required_times:
+
+        row = day.loc[t]
+
+        trends.append(
+            candle_trend(row)
+        )
+
+    # --------------------------------------------------------
+    # Do NOT allow dojis.
+    # --------------------------------------------------------
+
+    if 0 in trends:
+
+        return 0
+
+    # --------------------------------------------------------
+    # All four must be identical.
+    # --------------------------------------------------------
+
+    if (
+        trends[0]
+        ==
+        trends[1]
+        ==
+        trends[2]
+        ==
+        trends[3]
+    ):
+
+        return trends[0]
+
+    return 0
+
+
+# ============================================================
+# BACKTEST ONE STOCK
+# ============================================================
+
+def backtest_stock(
+    file_path
+):
+
+    df = load_data(
+        file_path
+    )
+
+    candles = build_5min_candles(
+        df
+    )
+
+    if candles.empty:
+
+        return []
 
     dates = sorted(
-        grouped.keys()
+        candles["date"]
+        .unique()
     )
 
-    if len(dates) < 2:
-        return []
+    results = []
 
-    symbol = os.path.basename(
-        filename
-    )
-
-    symbol = symbol.replace(
-        ".csv.gz",
-        ""
-    )
-
-    symbol = symbol.replace(
-        "_1m",
-        ""
-    )
-
-    rows = []
+    # --------------------------------------------------------
+    # Day D-1 = signal day
+    # Day D   = trading day
+    # --------------------------------------------------------
 
     for i in range(
         1,
@@ -884,1315 +413,627 @@ def process_stock(
             i
         ]
 
-        previous_day = make_day_lookup(
-            grouped[
-                previous_date
-            ]
-        )
+        previous_day = candles[
+            candles["date"]
+            ==
+            previous_date
+        ].copy()
 
-        current_day = make_day_lookup(
-            grouped[
-                trade_date
-            ]
-        )
+        current_day = candles[
+            candles["date"]
+            ==
+            trade_date
+        ].copy()
 
         # ----------------------------------------------------
-        # Next-day execution prices
+        # SIGNAL
         # ----------------------------------------------------
 
-        if ENTRY_TIME not in current_day:
+        signal = get_signal(
+            previous_day
+        )
+
+        if signal == 0:
+
             continue
 
-        if EXIT_TIME not in current_day:
-            continue
+        # ----------------------------------------------------
+        # 09:15 ENTRY
+        # ----------------------------------------------------
 
-        entry = current_day[
+        entry_rows = current_day[
+            current_day[
+                "candle_time"
+            ]
+            ==
             ENTRY_TIME
-        ]["open"]
+        ]
 
-        exit_price = current_day[
-            EXIT_TIME
-        ]["open"]
+        if entry_rows.empty:
 
-        if entry <= 0:
             continue
 
-        features = (
-            build_previous_day_features(
-                previous_day
-            )
+        entry_price = float(
+            entry_rows.iloc[0]["open"]
         )
 
-        if features is None:
+        # ----------------------------------------------------
+        # 15:27 EXIT
+        #
+        # 15:27 is inside the 15:25-15:29 candle.
+        #
+        # Therefore we use the ACTUAL 15:27 1-minute
+        # open from the original data rather than the
+        # 5-minute candle open.
+        # ----------------------------------------------------
+
+        exit_rows = df[
+            (
+                df["date"]
+                ==
+                trade_date
+            )
+            &
+            (
+                df["time"]
+                ==
+                EXIT_TIME
+            )
+        ]
+
+        if exit_rows.empty:
+
+            continue
+
+        exit_price = float(
+            exit_rows.iloc[0]["open"]
+        )
+
+        if entry_price <= 0:
+
             continue
 
         # ----------------------------------------------------
-        # Both directions
+        # RETURN
         # ----------------------------------------------------
 
-        long_return = (
-            (
-                exit_price -
-                entry
+        if signal == 1:
+
+            direction = "LONG"
+
+            gross_return = (
+                (
+                    exit_price -
+                    entry_price
+                )
+                /
+                entry_price
+                *
+                100
             )
-            /
-            entry
-            *
-            100
+
+        else:
+
+            direction = "SHORT"
+
+            gross_return = (
+                (
+                    entry_price -
+                    exit_price
+                )
+                /
+                entry_price
+                *
+                100
+            )
+
+        net_return = (
+            gross_return -
+            ROUND_TRIP_COST
         )
 
-        short_return = (
-            (
-                entry -
-                exit_price
-            )
-            /
-            entry
-            *
-            100
-        )
-
-        rows.append({
+        results.append({
 
             "symbol":
-                symbol,
+                os.path.basename(
+                    file_path
+                ),
 
             "signal_date":
-                pd.Timestamp(
-                    previous_date
-                ),
+                previous_date,
 
             "trade_date":
-                pd.Timestamp(
-                    trade_date
-                ),
+                trade_date,
 
-            "ENTRY":
-                entry,
+            "direction":
+                direction,
 
-            "EXIT":
+            "entry":
+                entry_price,
+
+            "exit":
                 exit_price,
 
-            "LONG_RETURN":
-                long_return,
+            "gross_return":
+                gross_return,
 
-            "SHORT_RETURN":
-                short_return,
-
-            **features
+            "net_return":
+                net_return
         })
 
-    return rows
-
-
-# ============================================================
-# CREATE DATASET
-# ============================================================
-
-def create_dataset():
-
-    raw = download_data()
-
-    z = zipfile.ZipFile(
-        io.BytesIO(raw)
-    )
-
-    files = [
-        x
-        for x in z.namelist()
-        if x.endswith(
-            ".csv.gz"
-        )
-    ]
-
-    print(
-        f"Stocks found: "
-        f"{len(files):,}"
-    )
-
-    rows = []
-
-    for n, filename in enumerate(
-        files,
-        1
-    ):
-
-        print(
-            f"\rProcessing "
-            f"{n:,}/"
-            f"{len(files):,}",
-            end=""
-        )
-
-        try:
-
-            rows.extend(
-                process_stock(
-                    z,
-                    filename
-                )
-            )
-
-        except Exception:
-
-            continue
-
-    print()
-
-    df = pd.DataFrame(
-        rows
-    )
-
-    if df.empty:
-
-        raise RuntimeError(
-            "Dataset is empty."
-        )
-
-    df = add_historical_context(
-        df
-    )
-
-    return df.sort_values(
-        "trade_date"
-    ).reset_index(
-        drop=True
-    )
-
-
-# ============================================================
-# SPLIT
-# ============================================================
-
-def split_dataset(
-    df
-):
-
-    dates = sorted(
-        df[
-            "trade_date"
-        ]
-        .dt
-        .normalize()
-        .unique()
-    )
-
-    n = len(dates)
-
-    train_end = dates[
-        int(n * 0.60)
-    ]
-
-    validation_end = dates[
-        int(n * 0.80)
-    ]
-
-    train = df[
-        df[
-            "trade_date"
-        ].dt.normalize()
-        <
-        train_end
-    ].copy()
-
-    validation = df[
-        (
-            df[
-                "trade_date"
-            ].dt.normalize()
-            >=
-            train_end
-        )
-        &
-        (
-            df[
-                "trade_date"
-            ].dt.normalize()
-            <
-            validation_end
-        )
-    ].copy()
-
-    test = df[
-        df[
-            "trade_date"
-        ].dt.normalize()
-        >=
-        validation_end
-    ].copy()
-
-    return (
-        train,
-        validation,
-        test,
-        train_end,
-        validation_end
-    )
-
-
-# ============================================================
-# MAKE LONG/SHORT EVENT DATA
-# ============================================================
-
-def make_direction_dataset(
-    df,
-    direction
-):
-
-    result = df.copy()
-
-    if direction == "LONG":
-
-        result[
-            "RETURN"
-        ] = result[
-            "LONG_RETURN"
-        ]
-
-    else:
-
-        result[
-            "RETURN"
-        ] = result[
-            "SHORT_RETURN"
-        ]
-
-    return result
+    return results
 
 
 # ============================================================
 # STATISTICS
 # ============================================================
 
-def stats(
-    returns
+def calculate_statistics(
+    trades
 ):
 
-    returns = pd.Series(
-        returns
-    ).dropna()
+    if trades.empty:
 
-    if len(returns) == 0:
-        return None
+        return {}
 
-    net = (
-        returns -
-        ROUND_TRIP_COST
+    returns = (
+        trades["net_return"]
+        .dropna()
     )
 
     wins = (
-        net > 0
-    ).sum()
+        returns > 0
+    )
+
+    losses = (
+        returns < 0
+    )
 
     win_rate = (
-        wins /
-        len(net)
+        wins.sum()
+        /
+        len(returns)
         *
         100
     )
 
+    average_return = (
+        returns.mean()
+    )
+
+    total_return = (
+        returns.sum()
+    )
+
     gross_profit = (
-        net[
-            net > 0
+        returns[
+            returns > 0
         ].sum()
     )
 
     gross_loss = abs(
-        net[
-            net < 0
+        returns[
+            returns < 0
         ].sum()
     )
 
     if gross_loss > 0:
 
-        pf = (
+        profit_factor = (
             gross_profit /
             gross_loss
         )
 
     else:
 
-        pf = np.inf
+        profit_factor = np.inf
 
     return {
 
         "trades":
-            len(net),
+            len(returns),
+
+        "wins":
+            int(wins.sum()),
+
+        "losses":
+            int(losses.sum()),
 
         "win_rate":
             win_rate,
 
-        "average":
-            net.mean(),
+        "average_return":
+            average_return,
+
+        "total_return":
+            total_return,
 
         "profit_factor":
-            pf,
+            profit_factor,
 
-        "total":
-            net.sum()
+        "best_trade":
+            returns.max(),
+
+        "worst_trade":
+            returns.min()
     }
 
 
 # ============================================================
-# BASE DIRECTION RESULTS
-# ============================================================
-
-def print_base_results(
-    train,
-    validation,
-    test,
-    direction
-):
-
-    print()
-    print("=" * 100)
-    print(
-        f"BASE {direction}"
-    )
-    print("=" * 100)
-
-    for name, data in [
-        ("TRAIN", train),
-        ("VALIDATION", validation),
-        ("FINAL TEST", test)
-    ]:
-
-        s = stats(
-            data["RETURN"]
-        )
-
-        print()
-        print(name)
-
-        print(
-            f"Trades       : "
-            f"{s['trades']:,}"
-        )
-
-        print(
-            f"Win rate     : "
-            f"{s['win_rate']:.2f}%"
-        )
-
-        print(
-            f"Average      : "
-            f"{s['average']:.4f}%"
-        )
-
-        print(
-            f"Profit factor: "
-            f"{s['profit_factor']:.3f}"
-        )
-
-        print(
-            f"Total        : "
-            f"{s['total']:.4f}%"
-        )
-
-
-# ============================================================
-# CONDITION GENERATOR
-# ============================================================
-
-def generate_conditions(
-    df
-):
-
-    conditions = {}
-
-    ignored = {
-        "symbol",
-        "signal_date",
-        "trade_date",
-        "ENTRY",
-        "EXIT",
-        "LONG_RETURN",
-        "SHORT_RETURN",
-        "RETURN"
-    }
-
-    for column in df.columns:
-
-        if column in ignored:
-            continue
-
-        series = df[
-            column
-        ]
-
-        # ----------------------------------------------------
-        # Boolean conditions
-        # ----------------------------------------------------
-
-        if pd.api.types.is_bool_dtype(
-            series
-        ):
-
-            conditions[
-                f"{column}=TRUE"
-            ] = (
-                series
-                .fillna(False)
-                .astype(bool)
-            )
-
-            conditions[
-                f"{column}=FALSE"
-            ] = (
-                ~series
-                .fillna(False)
-                .astype(bool)
-            )
-
-            continue
-
-        # ----------------------------------------------------
-        # Numeric conditions
-        # ----------------------------------------------------
-
-        if not pd.api.types.is_numeric_dtype(
-            series
-        ):
-            continue
-
-        values = pd.to_numeric(
-            series,
-            errors="coerce"
-        )
-
-        valid = values.dropna()
-
-        if len(valid) < 100:
-            continue
-
-        # Use quantiles rather than thousands of arbitrary
-        # thresholds.
-        try:
-
-            q = valid.quantile(
-                [
-                    .10,
-                    .20,
-                    .30,
-                    .40,
-                    .50,
-                    .60,
-                    .70,
-                    .80,
-                    .90
-                ]
-            )
-
-        except Exception:
-
-            continue
-
-        for quantile, value in q.items():
-
-            if not np.isfinite(
-                value
-            ):
-                continue
-
-            conditions[
-                f"{column}<=Q{quantile:.2f}"
-            ] = (
-                values <= value
-            )
-
-            conditions[
-                f"{column}>=Q{quantile:.2f}"
-            ] = (
-                values >= value
-            )
-
-    return conditions
-
-
-# ============================================================
-# CANDIDATE EVALUATION
-# ============================================================
-
-def evaluate_candidates(
-    df,
-    conditions,
-    min_trades
-):
-
-    candidates = []
-
-    for name, mask in conditions.items():
-
-        subset = df[
-            mask
-        ]
-
-        if len(subset) < min_trades:
-            continue
-
-        s = stats(
-            subset["RETURN"]
-        )
-
-        if s is None:
-            continue
-
-        candidates.append({
-
-            "pattern":
-                name,
-
-            "_mask":
-                mask,
-
-            **s
-        })
-
-    if not candidates:
-        return []
-
-    # We want both high win rate and good economics.
-    candidates.sort(
-        key=lambda x: (
-            x["win_rate"],
-            x["profit_factor"],
-            x["average"]
-        ),
-        reverse=True
-    )
-
-    return candidates[
-        :MAX_CANDIDATES
-    ]
-
-
-# ============================================================
-# COMBINATION SEARCH
-# ============================================================
-
-def combine_candidates(
-    df,
-    survivors,
-    conditions,
-    min_trades
-):
-
-    results = []
-
-    names = list(
-        conditions.keys()
-    )
-
-    for candidate in survivors:
-
-        existing = set(
-            candidate[
-                "pattern"
-            ].split(" + ")
-        )
-
-        for name in names:
-
-            if name in existing:
-                continue
-
-            # Avoid duplicate combinations.
-            if name <= max(existing):
-                continue
-
-            mask = (
-                candidate["_mask"]
-                &
-                conditions[name]
-            )
-
-            if mask.sum() < min_trades:
-                continue
-
-            subset = df[
-                mask
-            ]
-
-            s = stats(
-                subset["RETURN"]
-            )
-
-            if s is None:
-                continue
-
-            pattern = (
-                " + ".join(
-                    sorted(
-                        existing |
-                        {name}
-                    )
-                )
-            )
-
-            results.append({
-
-                "pattern":
-                    pattern,
-
-                "_mask":
-                    mask,
-
-                **s
-            })
-
-    if not results:
-        return []
-
-    # Remove identical masks.
-    unique = {}
-
-    for result in results:
-
-        signature = np.packbits(
-            result[
-                "_mask"
-            ].to_numpy(
-                dtype=np.uint8
-            )
-        ).tobytes()
-
-        if signature not in unique:
-
-            unique[
-                signature
-            ] = result
-
-    results = list(
-        unique.values()
-    )
-
-    results.sort(
-        key=lambda x: (
-            x["win_rate"],
-            x["profit_factor"],
-            x["average"]
-        ),
-        reverse=True
-    )
-
-    return results[
-        :MAX_CANDIDATES
-    ]
-
-
-# ============================================================
-# APPLY PATTERN
-# ============================================================
-
-def apply_pattern(
-    df,
-    pattern
-):
-
-    conditions = generate_conditions(
-        df
-    )
-
-    mask = pd.Series(
-        True,
-        index=df.index
-    )
-
-    for part in pattern.split(
-        " + "
-    ):
-
-        if part not in conditions:
-            return None
-
-        mask &= (
-            conditions[
-                part
-            ]
-        )
-
-    return mask
-
-
-# ============================================================
-# VALIDATE
-# ============================================================
-
-def validate_patterns(
-    patterns,
-    validation
-):
-
-    rows = []
-
-    for candidate in patterns:
-
-        mask = apply_pattern(
-            validation,
-            candidate[
-                "pattern"
-            ]
-        )
-
-        if mask is None:
-            continue
-
-        subset = validation[
-            mask
-        ]
-
-        if len(subset) < MIN_VALIDATION_TRADES:
-            continue
-
-        s = stats(
-            subset["RETURN"]
-        )
-
-        rows.append({
-
-            "pattern":
-                candidate["pattern"],
-
-            "train_trades":
-                candidate["trades"],
-
-            "train_win":
-                candidate["win_rate"],
-
-            "train_average":
-                candidate["average"],
-
-            "train_pf":
-                candidate["profit_factor"],
-
-            "validation_trades":
-                s["trades"],
-
-            "validation_win":
-                s["win_rate"],
-
-            "validation_average":
-                s["average"],
-
-            "validation_pf":
-                s["profit_factor"]
-        })
-
-    if not rows:
-        return pd.DataFrame()
-
-    result = pd.DataFrame(
-        rows
-    )
-
-    return result.sort_values(
-        [
-            "validation_win",
-            "validation_pf",
-            "validation_average"
-        ],
-        ascending=False
-    ).head(
-        MAX_CANDIDATES
-    )
-
-
-# ============================================================
-# FINAL TEST
-# ============================================================
-
-def final_test(
-    validation_results,
-    test
-):
-
-    rows = []
-
-    for _, candidate in (
-        validation_results.iterrows()
-    ):
-
-        mask = apply_pattern(
-            test,
-            candidate[
-                "pattern"
-            ]
-        )
-
-        if mask is None:
-            continue
-
-        subset = test[
-            mask
-        ]
-
-        if len(subset) < MIN_TEST_TRADES:
-            continue
-
-        s = stats(
-            subset["RETURN"]
-        )
-
-        rows.append({
-
-            "pattern":
-                candidate["pattern"],
-
-            "train_win":
-                candidate["train_win"],
-
-            "train_pf":
-                candidate["train_pf"],
-
-            "validation_win":
-                candidate[
-                    "validation_win"
-                ],
-
-            "validation_pf":
-                candidate[
-                    "validation_pf"
-                ],
-
-            "test_trades":
-                s["trades"],
-
-            "test_win":
-                s["win_rate"],
-
-            "test_average":
-                s["average"],
-
-            "test_pf":
-                s["profit_factor"],
-
-            "test_total":
-                s["total"]
-        })
-
-    if not rows:
-        return pd.DataFrame()
-
-    return (
-        pd.DataFrame(rows)
-        .sort_values(
-            [
-                "test_win",
-                "test_pf",
-                "test_average"
-            ],
-            ascending=False
-        )
-        .reset_index(drop=True)
-    )
-
-
-# ============================================================
-# SEARCH ONE DIRECTION
-# ============================================================
-
-def search_direction(
-    df,
-    direction
-):
-
-    data = make_direction_dataset(
-        df,
-        direction
-    )
-
-    train, validation, test, train_end, validation_end = (
-        split_dataset(data)
-    )
-
-    print()
-    print("=" * 100)
-    print(
-        f"SEARCHING {direction}"
-    )
-    print("=" * 100)
-
-    print_base_results(
-        train,
-        validation,
-        test,
-        direction
-    )
-
-    print()
-    print(
-        "Generating conditions..."
-    )
-
-    conditions = generate_conditions(
-        train
-    )
-
-    print(
-        f"Conditions: "
-        f"{len(conditions):,}"
-    )
-
-    # --------------------------------------------------------
-    # DEPTH 1
-    # --------------------------------------------------------
-
-    survivors = evaluate_candidates(
-        train,
-        conditions,
-        MIN_TRAIN_TRADES
-    )
-
-    print(
-        f"Depth 1 survivors: "
-        f"{len(survivors):,}"
-    )
-
-    # --------------------------------------------------------
-    # DEPTH 2+
-    # --------------------------------------------------------
-
-    for depth in range(
-        2,
-        MAX_DEPTH + 1
-    ):
-
-        if not survivors:
-            break
-
-        survivors = combine_candidates(
-            train,
-            survivors,
-            conditions,
-            MIN_TRAIN_TRADES
-        )
-
-        print(
-            f"Depth {depth} survivors: "
-            f"{len(survivors):,}"
-        )
-
-    if not survivors:
-
-        print(
-            "No candidates."
-        )
-
-        return pd.DataFrame()
-
-    # --------------------------------------------------------
-    # VALIDATION
-    # --------------------------------------------------------
-
-    validation_results = (
-        validate_patterns(
-            survivors,
-            validation
-        )
-    )
-
-    if validation_results.empty:
-
-        print(
-            "No patterns survived validation."
-        )
-
-        return pd.DataFrame()
-
-    validation_results.to_csv(
-        f"{direction}_VALIDATION.csv",
-        index=False
-    )
-
-    print()
-    print(
-        "TOP VALIDATION RESULTS"
-    )
-
-    print(
-        validation_results
-        .head(20)
-        .to_string(
-            index=False
-        )
-    )
-
-    # --------------------------------------------------------
-    # FINAL TEST
-    # --------------------------------------------------------
-
-    test_results = final_test(
-        validation_results,
-        test
-    )
-
-    if test_results.empty:
-
-        print(
-            "No patterns survived final test."
-        )
-
-        return pd.DataFrame()
-
-    test_results[
-        "direction"
-    ] = direction
-
-    test_results.to_csv(
-        f"{direction}_FINAL_TEST.csv",
-        index=False
-    )
-
-    print()
-    print(
-        "=" * 100
-    )
-    print(
-        f"{direction} FINAL UNSEEN TEST"
-    )
-    print(
-        "=" * 100
-    )
-
-    print(
-        test_results
-        .head(30)
-        .to_string(
-            index=False
-        )
-    )
-
-    return test_results
-
-
-# ============================================================
-# MAIN
+# MAIN BACKTEST
 # ============================================================
 
 def main():
 
-    print()
     print("=" * 100)
     print(
-        "09:15 OPEN / 15:27 EXIT — OPENING VOLATILITY RESEARCH"
+        "5-MIN EOD + PREVIOUS-DAY OPENING TREND STRATEGY"
     )
     print("=" * 100)
 
     print()
     print(
-        "ENTRY : NEXT DAY 09:15 OPEN"
+        "PREVIOUS DAY:"
     )
 
     print(
-        "EXIT  : NEXT DAY 15:27 OPEN"
+        "09:15 + 09:20 = SAME TREND"
+    )
+
+    print(
+        "15:20 + 15:25 = SAME TREND"
+    )
+
+    print(
+        "OPENING TREND = EOD TREND"
     )
 
     print()
     print(
-        "SIGNAL INFORMATION MUST EXIST BEFORE 09:15."
+        "NEXT DAY:"
     )
 
     print(
-        "LONG AND SHORT WILL BOTH BE TESTED."
+        "ENTRY = 09:15 OPEN"
+    )
+
+    print(
+        "EXIT  = 15:27 OPEN"
+    )
+
+    print()
+    print(
+        "Round-trip cost:",
+        ROUND_TRIP_COST,
+        "%"
     )
 
     # --------------------------------------------------------
-    # DATA
+    # FIND FILES
     # --------------------------------------------------------
 
-    df = create_dataset()
+    files = []
+
+    for pattern in [
+        "*.csv",
+        "*.CSV"
+    ]:
+
+        files.extend(
+            glob.glob(
+                os.path.join(
+                    DATA_FOLDER,
+                    pattern
+                )
+            )
+        )
+
+    if not files:
+
+        raise FileNotFoundError(
+            f"No CSV files found in {DATA_FOLDER}"
+        )
 
     print()
     print(
-        f"TOTAL OBSERVATIONS: "
-        f"{len(df):,}"
+        "Stocks found:",
+        len(files)
+    )
+
+    # --------------------------------------------------------
+    # RUN
+    # --------------------------------------------------------
+
+    all_results = []
+
+    for i, file_path in enumerate(
+        files,
+        1
+    ):
+
+        print(
+            f"\rProcessing "
+            f"{i}/{len(files)}",
+            end=""
+        )
+
+        try:
+
+            result = backtest_stock(
+                file_path
+            )
+
+            if result:
+
+                all_results.extend(
+                    result
+                )
+
+        except Exception as e:
+
+            print(
+                f"\nError in "
+                f"{file_path}: "
+                f"{e}"
+            )
+
+    print()
+
+    # --------------------------------------------------------
+    # RESULTS
+    # --------------------------------------------------------
+
+    if not all_results:
+
+        print()
+        print(
+            "NO TRADES FOUND."
+        )
+
+        return
+
+    trades = pd.DataFrame(
+        all_results
+    )
+
+    trades = trades.sort_values(
+        [
+            "trade_date",
+            "symbol"
+        ]
+    ).reset_index(
+        drop=True
+    )
+
+    # --------------------------------------------------------
+    # OVERALL
+    # --------------------------------------------------------
+
+    overall = calculate_statistics(
+        trades
+    )
+
+    print()
+    print("=" * 100)
+    print(
+        "OVERALL RESULTS"
+    )
+    print("=" * 100)
+
+    print(
+        f"Trades          : "
+        f"{overall['trades']:,}"
+    )
+
+    print(
+        f"Wins            : "
+        f"{overall['wins']:,}"
+    )
+
+    print(
+        f"Losses          : "
+        f"{overall['losses']:,}"
+    )
+
+    print(
+        f"Win rate        : "
+        f"{overall['win_rate']:.2f}%"
+    )
+
+    print(
+        f"Average return  : "
+        f"{overall['average_return']:.4f}%"
+    )
+
+    print(
+        f"Total return    : "
+        f"{overall['total_return']:.4f}%"
+    )
+
+    print(
+        f"Profit factor   : "
+        f"{overall['profit_factor']:.3f}"
+    )
+
+    print(
+        f"Best trade      : "
+        f"{overall['best_trade']:.4f}%"
+    )
+
+    print(
+        f"Worst trade     : "
+        f"{overall['worst_trade']:.4f}%"
     )
 
     # --------------------------------------------------------
     # LONG
     # --------------------------------------------------------
 
-    long_results = search_direction(
-        df,
+    long_trades = trades[
+        trades["direction"]
+        ==
         "LONG"
-    )
+    ].copy()
+
+    short_trades = trades[
+        trades["direction"]
+        ==
+        "SHORT"
+    ].copy()
+
+    if not long_trades.empty:
+
+        s = calculate_statistics(
+            long_trades
+        )
+
+        print()
+        print("=" * 100)
+        print("LONG RESULTS")
+        print("=" * 100)
+
+        print(
+            f"Trades         : "
+            f"{s['trades']:,}"
+        )
+
+        print(
+            f"Win rate       : "
+            f"{s['win_rate']:.2f}%"
+        )
+
+        print(
+            f"Average        : "
+            f"{s['average_return']:.4f}%"
+        )
+
+        print(
+            f"Profit factor  : "
+            f"{s['profit_factor']:.3f}"
+        )
 
     # --------------------------------------------------------
     # SHORT
     # --------------------------------------------------------
 
-    short_results = search_direction(
-        df,
-        "SHORT"
-    )
+    if not short_trades.empty:
 
-    # --------------------------------------------------------
-    # COMBINE
-    # --------------------------------------------------------
-
-    results = []
-
-    if not long_results.empty:
-
-        results.append(
-            long_results
+        s = calculate_statistics(
+            short_trades
         )
 
-    if not short_results.empty:
-
-        results.append(
-            short_results
-        )
-
-    if not results:
+        print()
+        print("=" * 100)
+        print("SHORT RESULTS")
+        print("=" * 100)
 
         print(
-            "\nNO VALID STRATEGY FOUND."
+            f"Trades         : "
+            f"{s['trades']:,}"
         )
 
-        return
+        print(
+            f"Win rate       : "
+            f"{s['win_rate']:.2f}%"
+        )
 
-    final = pd.concat(
-        results,
-        ignore_index=True
-    )
+        print(
+            f"Average        : "
+            f"{s['average_return']:.4f}%"
+        )
 
-    final = final.sort_values(
-        [
-            "test_win",
-            "test_pf",
-            "test_average"
-        ],
-        ascending=False
-    ).reset_index(
-        drop=True
-    )
-
-    final.to_csv(
-        "OPENING_VOLATILITY_FINAL_RESULTS.csv",
-        index=False
-    )
+        print(
+            f"Profit factor  : "
+            f"{s['profit_factor']:.3f}"
+        )
 
     # --------------------------------------------------------
-    # BEST
+    # YEARLY
     # --------------------------------------------------------
+
+    trades["year"] = (
+        pd.to_datetime(
+            trades["trade_date"]
+        )
+        .dt.year
+    )
+
+    yearly = []
+
+    for year, group in (
+        trades.groupby("year")
+    ):
+
+        s = calculate_statistics(
+            group
+        )
+
+        yearly.append({
+
+            "year":
+                year,
+
+            "trades":
+                s["trades"],
+
+            "win_rate":
+                s["win_rate"],
+
+            "average_return":
+                s["average_return"],
+
+            "profit_factor":
+                s["profit_factor"],
+
+            "total_return":
+                s["total_return"]
+        })
+
+    yearly_df = pd.DataFrame(
+        yearly
+    )
 
     print()
     print("=" * 100)
-    print(
-        "BEST FINAL UNSEEN RESULTS"
-    )
+    print("YEARLY RESULTS")
     print("=" * 100)
 
     print(
-        final
-        .head(30)
-        .to_string(
+        yearly_df.to_string(
             index=False
         )
     )
 
     # --------------------------------------------------------
-    # >= 85%
+    # SAVE
     # --------------------------------------------------------
 
-    over_85 = final[
-        final[
-            "test_win"
-        ] >= TARGET_WIN_RATE
-    ]
-
-    print()
-    print("=" * 100)
-    print(
-        "FINAL TEST >= 85%"
-    )
-    print("=" * 100)
-
-    if over_85.empty:
-
-        print(
-            "NONE"
-        )
-
-    else:
-
-        print(
-            over_85.to_string(
-                index=False
-            )
-        )
-
-    # --------------------------------------------------------
-    # BEST STRATEGY
-    # --------------------------------------------------------
-
-    best = final.iloc[0]
-
-    print()
-    print("=" * 100)
-    print(
-        "BEST STRATEGY FOUND"
-    )
-    print("=" * 100)
-
-    print(
-        f"Direction      : "
-        f"{best['direction']}"
+    trades.to_csv(
+        "EOD_OPENING_5MIN_TRADES.csv",
+        index=False
     )
 
-    print(
-        f"Pattern        :\n"
-        f"{best['pattern']}"
-    )
-
-    print(
-        f"\nTest trades    : "
-        f"{int(best['test_trades']):,}"
-    )
-
-    print(
-        f"Test win rate  : "
-        f"{best['test_win']:.2f}%"
-    )
-
-    print(
-        f"Test average   : "
-        f"{best['test_average']:.4f}%"
-    )
-
-    print(
-        f"Test PF        : "
-        f"{best['test_pf']:.3f}"
-    )
-
-    print(
-        f"Test total     : "
-        f"{best['test_total']:.4f}%"
+    yearly_df.to_csv(
+        "EOD_OPENING_5MIN_YEARLY.csv",
+        index=False
     )
 
     print()
     print("=" * 100)
-    print(
-        "RESEARCH COMPLETE"
-    )
+    print("BACKTEST COMPLETE")
     print("=" * 100)
 
     print()
     print(
-        "Output:"
+        "Saved:"
     )
 
     print(
-        "LONG_FINAL_TEST.csv"
+        "EOD_OPENING_5MIN_TRADES.csv"
     )
 
     print(
-        "SHORT_FINAL_TEST.csv"
-    )
-
-    print(
-        "OPENING_VOLATILITY_FINAL_RESULTS.csv"
+        "EOD_OPENING_5MIN_YEARLY.csv"
     )
 
 
