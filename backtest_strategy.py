@@ -1,3 +1,35 @@
+# ============================================================
+# EXHAUSTIVE PREVIOUS-DAY OPENING + EOD STRATEGY SEARCH
+# ============================================================
+#
+# FIXED TRADING RULES
+#
+# SIGNAL:
+#     Previous trading day ONLY
+#
+# ENTRY:
+#     Next trading day 09:15 OPEN
+#
+# EXIT:
+#     Next trading day 15:27 OPEN
+#
+# GOAL:
+#     Find >= 85% FINAL TEST win rate
+#     while maximizing return / profit factor.
+#
+# TIMEFRAMES:
+#     1m, 2m, 3m, 5m, 10m, 15m
+#
+# SEARCH:
+#     Previous-day opening structures
+#     Previous-day EOD structures
+#     Cross-timeframe combinations
+#     LONG + SHORT
+#
+# NO NEXT-DAY GAP INFORMATION IS USED.
+#
+# ============================================================
+
 import pandas as pd
 import numpy as np
 import requests
@@ -6,35 +38,10 @@ import io
 import os
 import itertools
 import warnings
+import math
+from collections import defaultdict
 
 warnings.filterwarnings("ignore")
-
-
-# ============================================================
-# SIMPLE 85% STRATEGY SEARCH
-# ============================================================
-#
-# FIXED EXECUTION:
-#
-#   Entry = NEXT DAY 09:15 OPEN
-#   Exit  = NEXT DAY 15:27 OPEN
-#
-# DECISION INFORMATION:
-#
-#   ONLY previous trading day information.
-#
-# GOAL:
-#
-#   1) Find final-test win rate >= 85%
-#   2) Among those, maximize return / profit factor
-#   3) Keep logic simple
-#
-# IMPORTANT:
-#
-#   09:15 opening price is NEVER used to decide whether
-#   the trade should be taken.
-#
-# ============================================================
 
 
 # ============================================================
@@ -49,19 +56,31 @@ DATA_URL = (
 ENTRY_TIME = "09:15"
 EXIT_TIME = "15:27"
 
-TRAIN_PERCENT = 0.60
-VALIDATION_PERCENT = 0.20
-TEST_PERCENT = 0.20
-
 TARGET_WIN_RATE = 85.0
 
-MIN_TRAIN_TRADES = 100
-MIN_VALIDATION_TRADES = 30
-MIN_TEST_TRADES = 30
-
-# Estimated round-trip cost.
-# Change this if needed.
 ROUND_TRIP_COST = 0.10
+
+MIN_TRAIN_TRADES = 75
+MIN_VALIDATION_TRADES = 25
+MIN_TEST_TRADES = 25
+
+# Number of strongest individual conditions carried
+# into combination searches.
+#
+# This is deliberately large enough to search broadly,
+# while preventing impossible billions-of-combinations
+# searches.
+MAX_ATOMIC_CANDIDATES = 500
+
+# Maximum number of candidates carried to the next depth.
+MAX_SURVIVORS = 500
+
+# Search up to this depth.
+MAX_DEPTH = 4
+
+# Minimum training win rate to be considered for
+# combination expansion.
+MIN_TRAIN_WIN_FOR_EXPANSION = 52.0
 
 
 # ============================================================
@@ -79,7 +98,61 @@ TIMEFRAMES = {
 
 
 # ============================================================
-# SIMPLE FACTOR THRESHOLDS
+# OPENING WINDOWS
+# ============================================================
+#
+# These are PREVIOUS-DAY opening structures.
+#
+# We deliberately use windows beginning at 09:15.
+#
+# Example:
+#
+# 1m:
+#     09:15
+#     09:16
+#     09:17
+#     ...
+#
+# 3m:
+#     09:15-09:17
+#     09:18-09:20
+#     ...
+#
+# The exact minute alignment is kept consistent with
+# standard NSE intraday candle construction.
+# ============================================================
+
+OPENING_WINDOW_ENDS = {
+    "1m": [15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29],
+    "2m": [17, 19, 21, 23, 25, 27, 29],
+    "3m": [17, 20, 23, 26, 29],
+    "5m": [19, 24, 29],
+    "10m": [24, 29],
+    "15m": [29]
+}
+
+
+# ============================================================
+# EOD WINDOWS
+# ============================================================
+#
+# We use completed candles ending before/around the close.
+# For each timeframe the scanner examines multiple EOD
+# structures instead of only the final candle.
+# ============================================================
+
+EOD_STARTS = {
+    "1m": [20, 21, 22, 23, 24, 25, 26, 27, 28, 29],
+    "2m": [19, 21, 23, 25, 27],
+    "3m": [15, 18, 21, 24, 27],
+    "5m": [10, 15, 20, 25],
+    "10m": [0, 10, 20],
+    "15m": [0, 15]
+}
+
+
+# ============================================================
+# BASIC THRESHOLDS
 # ============================================================
 
 BODY_LEVELS = [
@@ -101,7 +174,10 @@ CLOSE_LEVELS = [
     0.90
 ]
 
-REL_VOLUME_LEVELS = [
+REL_VOL_LEVELS = [
+    0.50,
+    0.75,
+    1.00,
     1.25,
     1.50,
     2.00,
@@ -109,26 +185,24 @@ REL_VOLUME_LEVELS = [
     3.00
 ]
 
-RANGE_LEVELS = [
+RANGE_RATIO_LEVELS = [
+    0.50,
     0.75,
     1.00,
     1.25,
     1.50,
-    2.00
+    2.00,
+    2.50,
+    3.00
 ]
 
 MOMENTUM_LEVELS = [
     0.05,
     0.10,
+    0.15,
     0.20,
     0.30,
-    0.50
-]
-
-RELATIVE_STRENGTH_LEVELS = [
-    0.25,
     0.50,
-    0.75,
     1.00
 ]
 
@@ -139,66 +213,34 @@ RELATIVE_STRENGTH_LEVELS = [
 
 def download_dataset():
 
-    print("=" * 90)
+    print("=" * 100)
     print("DOWNLOADING NSE DATA")
-    print("=" * 90)
+    print("=" * 100)
 
     response = requests.get(
         DATA_URL,
-        stream=True,
-        timeout=600
+        timeout=900
     )
 
     response.raise_for_status()
 
-    total = int(
-        response.headers.get(
-            "content-length",
-            0
-        )
+    print(
+        f"Downloaded "
+        f"{len(response.content) / 1024 / 1024:.1f} MB"
     )
 
-    downloaded = 0
-    chunks = []
-
-    for chunk in response.iter_content(
-        chunk_size=1024 * 1024
-    ):
-
-        if not chunk:
-            continue
-
-        chunks.append(chunk)
-
-        downloaded += len(chunk)
-
-        if total:
-
-            print(
-                f"\rDownloaded "
-                f"{downloaded / total * 100:.1f}%",
-                end=""
-            )
-
-    print()
-
-    return b"".join(chunks)
+    return response.content
 
 
 # ============================================================
-# LOAD STOCK
+# LOAD ONE STOCK
 # ============================================================
 
-def load_stock(
-    zip_file,
-    filename
-):
+def load_stock(zip_file, filename):
 
     try:
 
-        raw = zip_file.read(
-            filename
-        )
+        raw = zip_file.read(filename)
 
         df = pd.read_csv(
             io.BytesIO(raw),
@@ -211,6 +253,10 @@ def load_stock(
         if "time" not in df.columns:
             return None
 
+        # ----------------------------------------------------
+        # Timestamp
+        # ----------------------------------------------------
+
         df["datetime"] = (
             pd.to_datetime(
                 df["time"],
@@ -218,9 +264,7 @@ def load_stock(
                 utc=True
             )
             .dt
-            .tz_convert(
-                "Asia/Kolkata"
-            )
+            .tz_convert("Asia/Kolkata")
         )
 
         df["date"] = (
@@ -235,12 +279,18 @@ def load_stock(
             .strftime("%H:%M")
         )
 
-        for column in [
+        # ----------------------------------------------------
+        # OHLC
+        # ----------------------------------------------------
+
+        required = [
             "open",
             "high",
             "low",
             "close"
-        ]:
+        ]
+
+        for column in required:
 
             if column not in df.columns:
                 return None
@@ -249,6 +299,10 @@ def load_stock(
                 df[column],
                 errors="coerce"
             )
+
+        # ----------------------------------------------------
+        # Volume
+        # ----------------------------------------------------
 
         if "Volume" in df.columns:
 
@@ -278,6 +332,20 @@ def load_stock(
             ]
         )
 
+        # ----------------------------------------------------
+        # Only NSE regular session
+        # ----------------------------------------------------
+
+        df = df[
+            (
+                df["hm"] >= "09:15"
+            )
+            &
+            (
+                df["hm"] <= "15:29"
+            )
+        ].copy()
+
         return df[
             [
                 "date",
@@ -299,59 +367,53 @@ def load_stock(
 # DAY LOOKUP
 # ============================================================
 
-def make_day_lookup(
-    group
-):
+def make_day_lookup(group):
 
     result = {}
 
     for _, row in group.iterrows():
 
-        result[
-            row["hm"]
-        ] = {
-            "open":
-                float(row["open"]),
-
-            "high":
-                float(row["high"]),
-
-            "low":
-                float(row["low"]),
-
-            "close":
-                float(row["close"]),
-
-            "volume":
-                float(row["volume"])
+        result[row["hm"]] = {
+            "open": float(row["open"]),
+            "high": float(row["high"]),
+            "low": float(row["low"]),
+            "close": float(row["close"]),
+            "volume": float(row["volume"])
         }
 
     return result
 
 
 # ============================================================
-# BUILD CANDLE
+# MINUTE KEY
+# ============================================================
+
+def minute_key(total_minutes):
+
+    hour = total_minutes // 60
+    minute = total_minutes % 60
+
+    return f"{hour:02d}:{minute:02d}"
+
+
+# ============================================================
+# BUILD CANDLE FROM START + END
 # ============================================================
 
 def build_candle(
     day,
-    start_minute,
-    minutes
+    start_total,
+    end_total
 ):
 
     rows = []
 
-    for i in range(
-        minutes
+    for t in range(
+        start_total,
+        end_total + 1
     ):
 
-        minute = (
-            start_minute + i
-        )
-
-        key = (
-            f"15:{minute:02d}"
-        )
+        key = minute_key(t)
 
         if key not in day:
             return None
@@ -370,14 +432,14 @@ def build_candle(
 
         "high":
             max(
-                row["high"]
-                for row in rows
+                x["high"]
+                for x in rows
             ),
 
         "low":
             min(
-                row["low"]
-                for row in rows
+                x["low"]
+                for x in rows
             ),
 
         "close":
@@ -385,8 +447,8 @@ def build_candle(
 
         "volume":
             sum(
-                row["volume"]
-                for row in rows
+                x["volume"]
+                for x in rows
             )
     }
 
@@ -395,9 +457,7 @@ def build_candle(
 # CANDLE METRICS
 # ============================================================
 
-def candle_metrics(
-    candle
-):
+def candle_metrics(candle):
 
     candle_range = (
         candle["high"]
@@ -426,7 +486,7 @@ def candle_metrics(
 
     else:
 
-        body_ratio = 0
+        body_ratio = 0.0
         close_position = 0.5
 
     if candle["open"] != 0:
@@ -445,21 +505,13 @@ def candle_metrics(
 
     else:
 
-        momentum = 0
+        momentum = 0.0
 
     return {
-
-        "range":
-            candle_range,
-
-        "body_ratio":
-            body_ratio,
-
-        "close_position":
-            close_position,
-
-        "momentum":
-            momentum
+        "range": candle_range,
+        "body": body_ratio,
+        "close_pos": close_position,
+        "momentum": momentum
     }
 
 
@@ -467,9 +519,7 @@ def candle_metrics(
 # DIRECTION
 # ============================================================
 
-def direction(
-    candle
-):
+def candle_direction(candle):
 
     if candle["close"] > candle["open"]:
         return "BULL"
@@ -481,373 +531,539 @@ def direction(
 
 
 # ============================================================
-# TIMEFRAME STARTS
+# BUILD TIMEFRAME STRUCTURES
 # ============================================================
 
-def timeframe_starts(
-    minutes
+def build_timeframe_structures(
+    day,
+    timeframe
 ):
 
-    if minutes == 1:
+    minutes = TIMEFRAMES[timeframe]
 
-        return [
-            24,
-            25,
-            26,
-            27,
-            28,
-            29
+    structures = {}
+
+    # --------------------------------------------------------
+    # OPENING STRUCTURES
+    # --------------------------------------------------------
+
+    for end_minute in (
+        OPENING_WINDOW_ENDS[
+            timeframe
         ]
+    ):
 
-    if minutes == 2:
+        start_total = (
+            9 * 60 + 15
+        )
 
-        return [
-            20,
-            22,
-            24,
-            26,
-            28
+        end_total = (
+            9 * 60 +
+            end_minute
+        )
+
+        candle = build_candle(
+            day,
+            start_total,
+            end_total
+        )
+
+        if candle is None:
+            continue
+
+        structures[
+            f"OPEN_{end_minute}"
+        ] = candle
+
+    # --------------------------------------------------------
+    # EOD STRUCTURES
+    # --------------------------------------------------------
+
+    for start_minute in (
+        EOD_STARTS[
+            timeframe
         ]
+    ):
 
-    if minutes == 3:
+        # Special handling for 10m / 15m,
+        # where the starts are expressed relative
+        # to the 15:xx portion.
+        #
+        # For starts <= 29 we interpret them as
+        # 15:start_minute.
+        #
+        # 10m starts [0,10,20] means:
+        # 15:00-15:09, etc.
+        #
+        # 15m starts [0,15] means:
+        # 15:00-15:14 and 15:15-15:29.
 
-        return [
-            15,
-            18,
-            21,
-            24,
-            27
-        ]
+        start_total = (
+            15 * 60 +
+            start_minute
+        )
 
-    if minutes == 5:
+        end_total = (
+            start_total +
+            minutes -
+            1
+        )
 
-        return [
-            10,
-            15,
-            20,
-            25
-        ]
+        # Do not go past 15:29.
+        if end_total > (
+            15 * 60 + 29
+        ):
+            continue
 
-    if minutes == 10:
+        candle = build_candle(
+            day,
+            start_total,
+            end_total
+        )
 
-        return [
-            0,
-            10,
-            20
-        ]
+        if candle is None:
+            continue
 
-    if minutes == 15:
+        structures[
+            f"EOD_{start_minute}"
+        ] = candle
 
-        return [
-            0,
-            15
-        ]
-
-    return []
+    return structures
 
 
 # ============================================================
-# BUILD FEATURES
+# BUILD FEATURES FOR ONE TIMEFRAME
 # ============================================================
 
-def build_features(
-    day
+def timeframe_features(
+    day,
+    timeframe
 ):
+
+    structures = build_timeframe_structures(
+        day,
+        timeframe
+    )
+
+    if not structures:
+        return {}
 
     features = {}
 
-    for timeframe, minutes in (
-        TIMEFRAMES.items()
-    ):
+    # ========================================================
+    # OPENING STRUCTURES
+    # ========================================================
 
-        starts = timeframe_starts(
-            minutes
+    opening_keys = sorted([
+        k for k in structures
+        if k.startswith("OPEN_")
+    ])
+
+    for key in opening_keys:
+
+        candle = structures[key]
+
+        metrics = candle_metrics(
+            candle
         )
 
-        candles = {}
-
-        for start in starts:
-
-            candle = build_candle(
-                day,
-                start,
-                minutes
-            )
-
-            if candle is not None:
-
-                candles[
-                    start
-                ] = candle
-
-        if len(candles) < 2:
-            continue
-
-        ordered = sorted(
-            candles.keys()
-        )
-
-        last = candles[
-            ordered[-1]
-        ]
-
-        previous = candles[
-            ordered[-2]
-        ]
-
-        last_metrics = candle_metrics(
-            last
-        )
-
-        previous_metrics = (
-            candle_metrics(
-                previous
-            )
-        )
-
-        older = [
-            candles[x]
-            for x
-            in ordered[:-1]
-        ]
-
-        if older:
-
-            avg_range = np.mean([
-                candle_metrics(
-                    x
-                )["range"]
-                for x in older
-            ])
-
-            avg_volume = np.mean([
-                x["volume"]
-                for x in older
-            ])
-
-        else:
-
-            avg_range = 0
-            avg_volume = 0
-
-        if avg_range > 0:
-
-            range_ratio = (
-                last_metrics["range"]
-                /
-                avg_range
-            )
-
-        else:
-
-            range_ratio = 0
-
-        if avg_volume > 0:
-
-            rel_volume = (
-                last["volume"]
-                /
-                avg_volume
-            )
-
-        else:
-
-            rel_volume = 0
-
-        if previous["volume"] > 0:
-
-            volume_ratio = (
-                last["volume"]
-                /
-                previous["volume"]
-            )
-
-        else:
-
-            volume_ratio = 0
-
-        last_dir = direction(
-            last
-        )
-
-        previous_dir = direction(
-            previous
+        prefix = (
+            f"{timeframe}:{key}"
         )
 
         features[
-            f"{timeframe}_BULL"
+            f"{prefix}:BULL"
         ] = (
-            last_dir == "BULL"
+            candle_direction(
+                candle
+            ) == "BULL"
         )
 
         features[
-            f"{timeframe}_BEAR"
+            f"{prefix}:BEAR"
         ] = (
-            last_dir == "BEAR"
+            candle_direction(
+                candle
+            ) == "BEAR"
         )
 
         features[
-            f"{timeframe}_PREVIOUS_BULL"
-        ] = (
-            previous_dir == "BULL"
-        )
-
-        features[
-            f"{timeframe}_PREVIOUS_BEAR"
-        ] = (
-            previous_dir == "BEAR"
-        )
-
-        features[
-            f"{timeframe}_SAME"
-        ] = (
-            last_dir ==
-            previous_dir
-            and
-            last_dir != "DOJI"
-        )
-
-        features[
-            f"{timeframe}_OPPOSITE"
-        ] = (
-            last_dir !=
-            previous_dir
-            and
-            last_dir != "DOJI"
-            and
-            previous_dir != "DOJI"
-        )
-
-        features[
-            f"{timeframe}_BODY"
-        ] = last_metrics[
-            "body_ratio"
+            f"{prefix}:BODY"
+        ] = metrics[
+            "body"
         ]
 
         features[
-            f"{timeframe}_CLOSE"
-        ] = last_metrics[
-            "close_position"
+            f"{prefix}:CLOSE_POS"
+        ] = metrics[
+            "close_pos"
         ]
 
         features[
-            f"{timeframe}_RANGE_RATIO"
-        ] = range_ratio
-
-        features[
-            f"{timeframe}_REL_VOLUME"
-        ] = rel_volume
-
-        features[
-            f"{timeframe}_VOLUME_RATIO"
-        ] = volume_ratio
-
-        features[
-            f"{timeframe}_MOMENTUM"
-        ] = last_metrics[
+            f"{prefix}:MOMENTUM"
+        ] = metrics[
             "momentum"
         ]
 
         features[
-            f"{timeframe}_MOM_CHANGE"
-        ] = (
-            last_metrics[
-                "momentum"
-            ]
-            -
-            previous_metrics[
-                "momentum"
-            ]
-        )
-
-    # ========================================================
-    # PREVIOUS-DAY OVERALL MOVE
-    # ========================================================
-
-    first_candle = day.get(
-        "09:15"
-    )
-
-    last_candle = day.get(
-        "15:29"
-    )
-
-    if (
-        first_candle is not None
-        and
-        last_candle is not None
-        and
-        first_candle["open"] > 0
-    ):
+            f"{prefix}:RANGE"
+        ] = metrics[
+            "range"
+        ]
 
         features[
-            "DAY_RETURN"
-        ] = (
-            (
-                last_candle["close"]
-                -
-                first_candle["open"]
-            )
-            /
-            first_candle["open"]
-            *
-            100
+            f"{prefix}:VOLUME"
+        ] = candle[
+            "volume"
+        ]
+
+    # ========================================================
+    # EOD STRUCTURES
+    # ========================================================
+
+    eod_keys = sorted([
+        k for k in structures
+        if k.startswith("EOD_")
+    ])
+
+    for key in eod_keys:
+
+        candle = structures[key]
+
+        metrics = candle_metrics(
+            candle
         )
 
-    else:
+        prefix = (
+            f"{timeframe}:{key}"
+        )
 
         features[
-            "DAY_RETURN"
-        ] = 0
+            f"{prefix}:BULL"
+        ] = (
+            candle_direction(
+                candle
+            ) == "BULL"
+        )
+
+        features[
+            f"{prefix}:BEAR"
+        ] = (
+            candle_direction(
+                candle
+            ) == "BEAR"
+        )
+
+        features[
+            f"{prefix}:BODY"
+        ] = metrics[
+            "body"
+        ]
+
+        features[
+            f"{prefix}:CLOSE_POS"
+        ] = metrics[
+            "close_pos"
+        ]
+
+        features[
+            f"{prefix}:MOMENTUM"
+        ] = metrics[
+            "momentum"
+        ]
+
+        features[
+            f"{prefix}:RANGE"
+        ] = metrics[
+            "range"
+        ]
+
+        features[
+            f"{prefix}:VOLUME"
+        ] = candle[
+            "volume"
+        ]
 
     # ========================================================
-    # PREVIOUS-DAY CLOSE LOCATION
+    # OPENING CANDLE RELATIONSHIPS
     # ========================================================
 
-    highs = []
-    lows = []
-
-    for minute, row in day.items():
-
-        try:
-
-            h = int(
-                minute.replace(
-                    ":",
-                    ""
-                )
-            )
-
-            # Only regular market data
-            if 915 <= h <= 1529:
-
-                highs.append(
-                    row["high"]
-                )
-
-                lows.append(
-                    row["low"]
-                )
-
-        except Exception:
-
-            continue
-
-    if (
-        highs
-        and
-        lows
-        and
-        last_candle is not None
+    for a, b in itertools.combinations(
+        opening_keys,
+        2
     ):
 
-        day_high = max(
-            highs
+        candle_a = structures[a]
+        candle_b = structures[b]
+
+        dir_a = candle_direction(
+            candle_a
         )
 
-        day_low = min(
-            lows
+        dir_b = candle_direction(
+            candle_b
         )
+
+        prefix = (
+            f"{timeframe}:{a}_VS_{b}"
+        )
+
+        if dir_a == dir_b and dir_a != "DOJI":
+
+            features[
+                f"{prefix}:SAME_DIRECTION"
+            ] = True
+
+        else:
+
+            features[
+                f"{prefix}:SAME_DIRECTION"
+            ] = False
+
+        if (
+            dir_a != dir_b
+            and
+            dir_a != "DOJI"
+            and
+            dir_b != "DOJI"
+        ):
+
+            features[
+                f"{prefix}:OPPOSITE_DIRECTION"
+            ] = True
+
+        else:
+
+            features[
+                f"{prefix}:OPPOSITE_DIRECTION"
+            ] = False
+
+        if candle_a["volume"] > candle_b["volume"]:
+
+            features[
+                f"{prefix}:A_VOLUME_MORE"
+            ] = True
+
+        else:
+
+            features[
+                f"{prefix}:A_VOLUME_MORE"
+            ] = False
+
+        if candle_b["volume"] > candle_a["volume"]:
+
+            features[
+                f"{prefix}:B_VOLUME_MORE"
+            ] = True
+
+        else:
+
+            features[
+                f"{prefix}:B_VOLUME_MORE"
+            ] = False
+
+    # ========================================================
+    # EOD CANDLE RELATIONSHIPS
+    # ========================================================
+
+    for a, b in itertools.combinations(
+        eod_keys,
+        2
+    ):
+
+        candle_a = structures[a]
+        candle_b = structures[b]
+
+        dir_a = candle_direction(
+            candle_a
+        )
+
+        dir_b = candle_direction(
+            candle_b
+        )
+
+        prefix = (
+            f"{timeframe}:{a}_VS_{b}"
+        )
+
+        features[
+            f"{prefix}:SAME_DIRECTION"
+        ] = (
+            dir_a == dir_b
+            and
+            dir_a != "DOJI"
+        )
+
+        features[
+            f"{prefix}:OPPOSITE_DIRECTION"
+        ] = (
+            dir_a != dir_b
+            and
+            dir_a != "DOJI"
+            and
+            dir_b != "DOJI"
+        )
+
+        features[
+            f"{prefix}:A_VOLUME_MORE"
+        ] = (
+            candle_a["volume"]
+            >
+            candle_b["volume"]
+        )
+
+        features[
+            f"{prefix}:B_VOLUME_MORE"
+        ] = (
+            candle_b["volume"]
+            >
+            candle_a["volume"]
+        )
+
+    # ========================================================
+    # OPENING VS EOD
+    # ========================================================
+
+    for opening_key in opening_keys:
+
+        for eod_key in eod_keys:
+
+            opening = structures[
+                opening_key
+            ]
+
+            eod = structures[
+                eod_key
+            ]
+
+            opening_dir = candle_direction(
+                opening
+            )
+
+            eod_dir = candle_direction(
+                eod
+            )
+
+            prefix = (
+                f"{timeframe}:"
+                f"{opening_key}_VS_"
+                f"{eod_key}"
+            )
+
+            features[
+                f"{prefix}:SAME_DIRECTION"
+            ] = (
+                opening_dir ==
+                eod_dir
+                and
+                opening_dir != "DOJI"
+            )
+
+            features[
+                f"{prefix}:OPPOSITE_DIRECTION"
+            ] = (
+                opening_dir !=
+                eod_dir
+                and
+                opening_dir != "DOJI"
+                and
+                eod_dir != "DOJI"
+            )
+
+            features[
+                f"{prefix}:OPEN_VOLUME_MORE"
+            ] = (
+                opening["volume"]
+                >
+                eod["volume"]
+            )
+
+            features[
+                f"{prefix}:EOD_VOLUME_MORE"
+            ] = (
+                eod["volume"]
+                >
+                opening["volume"]
+            )
+
+    return features
+
+
+# ============================================================
+# BUILD COMPLETE PREVIOUS-DAY FEATURE SET
+# ============================================================
+
+def build_features(day):
+
+    features = {}
+
+    for timeframe in TIMEFRAMES:
+
+        tf_features = timeframe_features(
+            day,
+            timeframe
+        )
+
+        features.update(
+            tf_features
+        )
+
+    # ========================================================
+    # WHOLE-DAY FEATURES
+    # ========================================================
+
+    if (
+        "09:15" in day
+        and
+        "15:29" in day
+    ):
+
+        day_open = day[
+            "09:15"
+        ]["open"]
+
+        day_close = day[
+            "15:29"
+        ]["close"]
+
+        if day_open > 0:
+
+            day_return = (
+                (
+                    day_close
+                    -
+                    day_open
+                )
+                /
+                day_open
+                *
+                100
+            )
+
+        else:
+
+            day_return = 0
+
+        features[
+            "DAY:RETURN"
+        ] = day_return
+
+        # ----------------------------------------------------
+        # Whole day high / low
+        # ----------------------------------------------------
+
+        highs = [
+            x["high"]
+            for x in day.values()
+        ]
+
+        lows = [
+            x["low"]
+            for x in day.values()
+        ]
+
+        day_high = max(highs)
+        day_low = min(lows)
 
         day_range = (
             day_high -
@@ -857,10 +1073,10 @@ def build_features(
         if day_range > 0:
 
             features[
-                "DAY_CLOSE_POSITION"
+                "DAY:CLOSE_POSITION"
             ] = (
                 (
-                    last_candle["close"]
+                    day_close
                     -
                     day_low
                 )
@@ -871,20 +1087,18 @@ def build_features(
         else:
 
             features[
-                "DAY_CLOSE_POSITION"
+                "DAY:CLOSE_POSITION"
             ] = 0.5
 
-    else:
-
         features[
-            "DAY_CLOSE_POSITION"
-        ] = 0.5
+            "DAY:RANGE"
+        ] = day_range
 
     return features
 
 
 # ============================================================
-# EXTRACT EVENTS
+# BUILD EVENTS
 # ============================================================
 
 def extract_events(
@@ -898,71 +1112,79 @@ def extract_events(
     )
 
     if df is None:
-
         return []
 
     grouped = {
         date: group
         for date, group
-        in df.groupby(
-            "date"
-        )
+        in df.groupby("date")
     }
 
     dates = sorted(
         grouped.keys()
     )
 
+    if len(dates) < 2:
+        return []
+
     symbol = os.path.basename(
         filename
-    ).replace(
-        "_1m_csv.gz",
-        ""
-    ).replace(
-        "_1m.csv.gz",
+    )
+
+    symbol = symbol.replace(
+        ".csv.gz",
         ""
     )
 
-    results = []
+    symbol = symbol.replace(
+        "_1m",
+        ""
+    )
+
+    events = []
 
     for i in range(
         1,
         len(dates)
     ):
 
-        signal_date = dates[
+        previous_date = dates[
             i - 1
         ]
 
-        event_date = dates[
+        next_date = dates[
             i
         ]
 
-        previous_day = (
-            make_day_lookup(
-                grouped[
-                    signal_date
-                ]
-            )
+        previous_day = make_day_lookup(
+            grouped[
+                previous_date
+            ]
         )
 
-        event_day = (
-            make_day_lookup(
-                grouped[
-                    event_date
-                ]
-            )
+        next_day = make_day_lookup(
+            grouped[
+                next_date
+            ]
         )
 
         # ----------------------------------------------------
-        # FIXED ENTRY / EXIT
+        # FIXED NEXT-DAY ENTRY
         # ----------------------------------------------------
 
-        if ENTRY_TIME not in event_day:
+        if ENTRY_TIME not in next_day:
             continue
 
-        if EXIT_TIME not in event_day:
+        # ----------------------------------------------------
+        # FIXED NEXT-DAY EXIT
+        # ----------------------------------------------------
+
+        if EXIT_TIME not in next_day:
             continue
+
+        # ----------------------------------------------------
+        # BUILD SIGNAL FROM PREVIOUS DAY ONLY
+        # ----------------------------------------------------
 
         features = build_features(
             previous_day
@@ -971,11 +1193,11 @@ def extract_events(
         if not features:
             continue
 
-        entry = event_day[
+        entry = next_day[
             ENTRY_TIME
         ]["open"]
 
-        exit_price = event_day[
+        exit_price = next_day[
             EXIT_TIME
         ]["open"]
 
@@ -994,35 +1216,35 @@ def extract_events(
             100
         )
 
-        results.append({
+        events.append({
 
             "symbol":
                 symbol,
 
             "signal_date":
                 pd.Timestamp(
-                    signal_date
+                    previous_date
                 ),
 
             "event_date":
                 pd.Timestamp(
-                    event_date
+                    next_date
                 ),
 
-            "long_return":
+            "LONG_RETURN":
                 raw_return,
 
-            "short_return":
+            "SHORT_RETURN":
                 -raw_return,
 
             **features
         })
 
-    return results
+    return events
 
 
 # ============================================================
-# CREATE COMPLETE DATASET
+# CREATE DATASET
 # ============================================================
 
 def create_dataset():
@@ -1034,9 +1256,9 @@ def create_dataset():
     )
 
     files = [
-        f
-        for f in zip_file.namelist()
-        if f.endswith(
+        x
+        for x in zip_file.namelist()
+        if x.endswith(
             ".csv.gz"
         )
     ]
@@ -1047,7 +1269,7 @@ def create_dataset():
         f"{len(files):,}"
     )
 
-    all_rows = []
+    all_events = []
 
     for number, filename in enumerate(
         files,
@@ -1056,29 +1278,29 @@ def create_dataset():
 
         print(
             f"\rProcessing "
-            f"{number}/{len(files)}",
+            f"{number:,}/{len(files):,}",
             end=""
         )
 
-        rows = extract_events(
+        events = extract_events(
             zip_file,
             filename
         )
 
-        all_rows.extend(
-            rows
+        all_events.extend(
+            events
         )
 
     print()
 
     df = pd.DataFrame(
-        all_rows
+        all_events
     )
 
     if df.empty:
 
         raise RuntimeError(
-            "No valid observations."
+            "No events were created."
         )
 
     df = df.sort_values(
@@ -1091,14 +1313,12 @@ def create_dataset():
 
 
 # ============================================================
-# SPLIT
+# TRAIN / VALIDATION / TEST
 # ============================================================
 
-def split_dataset(
-    df
-):
+def chronological_split(df):
 
-    dates = sorted(
+    unique_dates = sorted(
         df[
             "event_date"
         ]
@@ -1107,30 +1327,22 @@ def split_dataset(
         .unique()
     )
 
-    n = len(
-        dates
+    n = len(unique_dates)
+
+    train_end_index = int(
+        n * 0.60
     )
 
-    train_index = int(
-        n *
-        TRAIN_PERCENT
+    validation_end_index = int(
+        n * 0.80
     )
 
-    validation_index = int(
-        n *
-        (
-            TRAIN_PERCENT
-            +
-            VALIDATION_PERCENT
-        )
-    )
-
-    train_end = dates[
-        train_index
+    train_end = unique_dates[
+        train_end_index
     ]
 
-    validation_end = dates[
-        validation_index
+    validation_end = unique_dates[
+        validation_end_index
     ]
 
     train = df[
@@ -1173,269 +1385,169 @@ def split_dataset(
 
 
 # ============================================================
-# CANDIDATE CONDITIONS
+# CONDITION GENERATION
 # ============================================================
 
-def generate_conditions(
-    df
-):
+def generate_conditions(df):
 
     conditions = {}
 
     # ========================================================
-    # SIMPLE DIRECTIONAL CONDITIONS
+    # BOOLEAN CONDITIONS
     # ========================================================
 
-    for tf in TIMEFRAMES:
+    for column in df.columns:
 
-        conditions[
-            f"{tf}:BULL"
-        ] = df[
-            f"{tf}_BULL"
-        ].astype(bool)
+        if (
+            column in [
+                "symbol",
+                "signal_date",
+                "event_date",
+                "LONG_RETURN",
+                "SHORT_RETURN"
+            ]
+        ):
+            continue
 
-        conditions[
-            f"{tf}:BEAR"
-        ] = df[
-            f"{tf}_BEAR"
-        ].astype(bool)
-
-        conditions[
-            f"{tf}:PREVIOUS_BULL"
-        ] = df[
-            f"{tf}_PREVIOUS_BULL"
-        ].astype(bool)
-
-        conditions[
-            f"{tf}:PREVIOUS_BEAR"
-        ] = df[
-            f"{tf}_PREVIOUS_BEAR"
-        ].astype(bool)
-
-        conditions[
-            f"{tf}:SAME"
-        ] = df[
-            f"{tf}_SAME"
-        ].astype(bool)
-
-        conditions[
-            f"{tf}:OPPOSITE"
-        ] = df[
-            f"{tf}_OPPOSITE"
-        ].astype(bool)
-
-        # ----------------------------------------------------
-        # BODY
-        # ----------------------------------------------------
-
-        for level in BODY_LEVELS:
+        if (
+            df[column].dtype
+            == bool
+        ):
 
             conditions[
-                f"{tf}:BODY>={level:.2f}"
+                column
             ] = (
-                df[
-                    f"{tf}_BODY"
-                ]
-                >= level
-            )
-
-        # ----------------------------------------------------
-        # CLOSE
-        # ----------------------------------------------------
-
-        for level in CLOSE_LEVELS:
-
-            conditions[
-                f"{tf}:CLOSE<={level:.2f}"
-            ] = (
-                df[
-                    f"{tf}_CLOSE"
-                ]
-                <= level
-            )
-
-            conditions[
-                f"{tf}:CLOSE>={level:.2f}"
-            ] = (
-                df[
-                    f"{tf}_CLOSE"
-                ]
-                >= level
-            )
-
-        # ----------------------------------------------------
-        # RELATIVE VOLUME
-        # ----------------------------------------------------
-
-        for level in REL_VOLUME_LEVELS:
-
-            conditions[
-                f"{tf}:REL_VOL>={level:.2f}"
-            ] = (
-                df[
-                    f"{tf}_REL_VOLUME"
-                ]
-                >= level
-            )
-
-        # ----------------------------------------------------
-        # RANGE
-        # ----------------------------------------------------
-
-        for level in RANGE_LEVELS:
-
-            conditions[
-                f"{tf}:RANGE<={level:.2f}x"
-            ] = (
-                df[
-                    f"{tf}_RANGE_RATIO"
-                ]
-                <= level
-            )
-
-        # ----------------------------------------------------
-        # MOMENTUM
-        # ----------------------------------------------------
-
-        for level in MOMENTUM_LEVELS:
-
-            conditions[
-                f"{tf}:MOM>={level:.2f}%"
-            ] = (
-                df[
-                    f"{tf}_MOMENTUM"
-                ]
-                >= level
-            )
-
-            conditions[
-                f"{tf}:MOM<=-{level:.2f}%"
-            ] = (
-                df[
-                    f"{tf}_MOMENTUM"
-                ]
-                <= -level
+                df[column]
+                .fillna(False)
+                .astype(bool)
             )
 
     # ========================================================
-    # PREVIOUS-DAY TOTAL MOVE
+    # NUMERIC CONDITIONS
     # ========================================================
 
-    for level in RELATIVE_STRENGTH_LEVELS:
+    numeric_columns = []
 
-        conditions[
-            f"DAY_RETURN>={level:.2f}%"
-        ] = (
-            df[
-                "DAY_RETURN"
+    for column in df.columns:
+
+        if (
+            column in [
+                "LONG_RETURN",
+                "SHORT_RETURN",
+                "symbol",
+                "signal_date",
+                "event_date"
             ]
-            >= level
+        ):
+            continue
+
+        if pd.api.types.is_numeric_dtype(
+            df[column]
+        ):
+
+            numeric_columns.append(
+                column
+            )
+
+    for column in numeric_columns:
+
+        series = pd.to_numeric(
+            df[column],
+            errors="coerce"
         )
 
-        conditions[
-            f"DAY_RETURN<=-{level:.2f}%"
-        ] = (
-            df[
-                "DAY_RETURN"
-            ]
-            <= -level
+        # ----------------------------------------------------
+        # Only create threshold conditions for meaningful
+        # numeric features.
+        # ----------------------------------------------------
+
+        if series.notna().sum() < 100:
+            continue
+
+        # Quantile thresholds prevent arbitrary overfitting.
+        quantiles = [
+            0.05,
+            0.10,
+            0.20,
+            0.30,
+            0.50,
+            0.70,
+            0.80,
+            0.90,
+            0.95
+        ]
+
+        values = (
+            series
+            .dropna()
+            .quantile(
+                quantiles
+            )
+            .unique()
         )
+
+        for value in values:
+
+            if not np.isfinite(value):
+                continue
+
+            conditions[
+                f"{column}<=Q{value:.6g}"
+            ] = (
+                series <= value
+            )
+
+            conditions[
+                f"{column}>=Q{value:.6g}"
+            ] = (
+                series >= value
+            )
 
     # ========================================================
-    # DAY CLOSE LOCATION
+    # REMOVE DUPLICATE BOOLEAN MASKS
     # ========================================================
 
-    for level in CLOSE_LEVELS:
+    unique_conditions = {}
 
-        conditions[
-            f"DAY_CLOSE<={level:.2f}"
-        ] = (
-            df[
-                "DAY_CLOSE_POSITION"
-            ]
-            <= level
+    seen = set()
+
+    for name, mask in conditions.items():
+
+        mask = (
+            pd.Series(
+                mask,
+                index=df.index
+            )
+            .fillna(False)
+            .astype(bool)
         )
 
-        conditions[
-            f"DAY_CLOSE>={level:.2f}"
-        ] = (
-            df[
-                "DAY_CLOSE_POSITION"
-            ]
-            >= level
+        # Pack boolean mask into bytes.
+        signature = np.packbits(
+            mask.to_numpy(
+                dtype=np.uint8
+            )
+        ).tobytes()
+
+        if signature in seen:
+            continue
+
+        seen.add(
+            signature
         )
 
-    # ========================================================
-    # CROSS-TIMEFRAME ALIGNMENT
-    # ========================================================
+        unique_conditions[
+            name
+        ] = mask
 
-    timeframes = list(
-        TIMEFRAMES.keys()
-    )
-
-    for tf1, tf2 in itertools.combinations(
-        timeframes,
-        2
-    ):
-
-        conditions[
-            f"{tf1}:BULL + {tf2}:BULL"
-        ] = (
-            df[
-                f"{tf1}_BULL"
-            ]
-            &
-            df[
-                f"{tf2}_BULL"
-            ]
-        )
-
-        conditions[
-            f"{tf1}:BEAR + {tf2}:BEAR"
-        ] = (
-            df[
-                f"{tf1}_BEAR"
-            ]
-            &
-            df[
-                f"{tf2}_BEAR"
-            ]
-        )
-
-        conditions[
-            f"{tf1}:BULL + {tf2}:BEAR"
-        ] = (
-            df[
-                f"{tf1}_BULL"
-            ]
-            &
-            df[
-                f"{tf2}_BEAR"
-            ]
-        )
-
-        conditions[
-            f"{tf1}:BEAR + {tf2}:BULL"
-        ] = (
-            df[
-                f"{tf1}_BEAR"
-            ]
-            &
-            df[
-                f"{tf2}_BULL"
-            ]
-        )
-
-    return conditions
+    return unique_conditions
 
 
 # ============================================================
-# RETURN STATISTICS
+# STATISTICS
 # ============================================================
 
-def get_stats(
-    returns
-):
+def stats(returns):
 
     returns = pd.Series(
         returns
@@ -1444,71 +1556,66 @@ def get_stats(
     if len(returns) == 0:
         return None
 
-    net_returns = (
+    net = (
         returns
         -
         ROUND_TRIP_COST
     )
 
     wins = (
-        net_returns > 0
+        net > 0
     ).sum()
 
     win_rate = (
         wins /
-        len(net_returns)
+        len(net)
         *
         100
     )
 
     gross_profit = (
-        net_returns[
-            net_returns > 0
-        ].sum()
+        net[net > 0].sum()
     )
 
     gross_loss = abs(
-        net_returns[
-            net_returns < 0
-        ].sum()
+        net[net < 0].sum()
     )
 
     if gross_loss > 0:
 
-        pf = (
-            gross_profit
-            /
+        profit_factor = (
+            gross_profit /
             gross_loss
         )
 
     else:
 
-        pf = np.inf
+        profit_factor = np.inf
 
     return {
 
         "trades":
-            len(net_returns),
+            len(net),
 
         "win_rate":
             win_rate,
 
         "average":
-            net_returns.mean(),
+            net.mean(),
 
         "profit_factor":
-            pf,
+            profit_factor,
 
         "total":
-            net_returns.sum()
+            net.sum()
     }
 
 
 # ============================================================
-# EVALUATE BOTH DIRECTIONS
+# DIRECTION EVALUATION
 # ============================================================
 
-def evaluate_direction(
+def evaluate_mask(
     df,
     mask
 ):
@@ -1520,42 +1627,40 @@ def evaluate_direction(
     if len(subset) < MIN_TRAIN_TRADES:
         return None
 
-    long_stats = get_stats(
+    long_stats = stats(
         subset[
-            "long_return"
+            "LONG_RETURN"
         ]
     )
 
-    short_stats = get_stats(
+    short_stats = stats(
         subset[
-            "short_return"
+            "SHORT_RETURN"
         ]
     )
-
-    # --------------------------------------------------------
-    # Direction is selected ONLY from training data.
-    # --------------------------------------------------------
 
     if (
-        long_stats["win_rate"]
+        long_stats[
+            "win_rate"
+        ]
         >=
-        short_stats["win_rate"]
+        short_stats[
+            "win_rate"
+        ]
     ):
 
-        direction_name = "LONG"
-
+        direction = "LONG"
         selected = long_stats
 
     else:
 
-        direction_name = "SHORT"
-
+        direction = "SHORT"
         selected = short_stats
 
     return {
 
         "direction":
-            direction_name,
+            direction,
 
         "trades":
             selected["trades"],
@@ -1575,461 +1680,664 @@ def evaluate_direction(
 
 
 # ============================================================
-# SELECT SIMPLE TRAINING CANDIDATES
+# CANDIDATE SCORING
 # ============================================================
 
-def rank_candidates(
+def candidate_score(row):
+
+    pf = row["profit_factor"]
+
+    if not np.isfinite(pf):
+        pf = 10
+
+    # Win rate dominates.
+    # PF and average return reward profitable setups.
+    # Trade count provides a mild stability preference.
+
+    return (
+        row["win_rate"]
+        +
+        10 *
+        np.log1p(
+            max(pf, 0)
+        )
+        +
+        2 *
+        np.log1p(
+            max(
+                row["trades"],
+                1
+            )
+        )
+        +
+        5 *
+        max(
+            row["average"],
+            -1
+        )
+    )
+
+
+# ============================================================
+# SEARCH DEPTH 1
+# ============================================================
+
+def search_depth_1(
     df,
     conditions
 ):
 
+    print()
+    print("=" * 100)
+    print("SEARCHING DEPTH 1")
+    print("=" * 100)
+
     rows = []
 
-    for name, mask in (
-        conditions.items()
-    ):
+    for name, mask in conditions.items():
 
-        result = (
-            evaluate_direction(
-                df,
-                mask
-            )
+        result = evaluate_mask(
+            df,
+            mask
         )
 
         if result is None:
             continue
 
+        if (
+            result["win_rate"]
+            <
+            MIN_TRAIN_WIN_FOR_EXPANSION
+        ):
+            continue
+
         rows.append({
 
-            "pattern":
-                name,
-
+            "depth": 1,
+            "pattern": name,
+            "_mask": mask,
             **result
         })
 
     if not rows:
         return []
 
-    frame = pd.DataFrame(
-        rows
+    rows.sort(
+        key=candidate_score,
+        reverse=True
     )
 
-    # Prefer win rate, but reward profitability too.
-    frame[
-        "score"
-    ] = (
-        frame[
-            "win_rate"
-        ]
-        +
-        8 *
-        np.log1p(
-            frame[
-                "profit_factor"
-            ]
-        )
-    )
-
-    return (
-        frame
-        .sort_values(
-            [
-                "score",
-                "win_rate",
-                "profit_factor"
-            ],
-            ascending=False
-        )
-        .head(250)
-        [
-            "pattern"
-        ]
-        .tolist()
-    )
+    return rows[
+        :MAX_ATOMIC_CANDIDATES
+    ]
 
 
 # ============================================================
-# COMBINE CONDITIONS
+# COMBINATION SEARCH
 # ============================================================
 
-def search_patterns(
+def search_next_depth(
     df,
-    conditions
+    previous_survivors,
+    all_conditions,
+    depth
 ):
 
-    masks = {
-        name:
-            pd.Series(
-                mask,
-                index=df.index
-            ).fillna(False).astype(bool)
-        for name, mask
-        in conditions.items()
-    }
-
-    atomic_candidates = rank_candidates(
-        df,
-        masks
-    )
-
+    print()
+    print("=" * 100)
     print(
-        f"Atomic candidates retained: "
-        f"{len(atomic_candidates):,}"
+        f"SEARCHING DEPTH {depth}"
     )
+    print("=" * 100)
 
     results = []
 
-    # ========================================================
-    # SINGLE CONDITION SEARCH
-    # ========================================================
-
-    depth1 = []
-
-    for name in atomic_candidates:
-
-        result = evaluate_direction(
-            df,
-            masks[
-                name
-            ]
-        )
-
-        if result is None:
-            continue
-
-        row = {
-
-            "depth":
-                1,
-
-            "pattern":
-                name,
-
-            "_mask":
-                masks[
-                    name
-                ],
-
-            **result
-        }
-
-        depth1.append(
-            row
-        )
-
-        results.append(
-            {
-                key: value
-                for key, value
-                in row.items()
-                if key != "_mask"
-            }
-        )
-
-    # ========================================================
-    # DEPTH 2
-    # ========================================================
-
-    depth2 = []
-
     checked = 0
 
-    for a, b in itertools.combinations(
-        atomic_candidates,
-        2
-    ):
+    # --------------------------------------------------------
+    # Candidate conditions are kept separate so the same
+    # atomic condition cannot appear twice.
+    # --------------------------------------------------------
 
-        checked += 1
-
-        combined = (
-            masks[a]
-            &
-            masks[b]
-        )
-
-        result = evaluate_direction(
-            df,
-            combined
-        )
-
-        if result is None:
-            continue
-
-        pattern = (
-            a +
-            " + " +
-            b
-        )
-
-        row = {
-
-            "depth":
-                2,
-
-            "pattern":
-                pattern,
-
-            "_mask":
-                combined,
-
-            **result
-        }
-
-        depth2.append(
-            row
-        )
-
-    print(
-        f"Depth 2 checked: "
-        f"{checked:,}"
+    condition_items = list(
+        all_conditions.items()
     )
 
-    print(
-        f"Depth 2 qualifying: "
-        f"{len(depth2):,}"
-    )
-
-    # Keep only strongest combinations
-    if depth2:
-
-        temp = pd.DataFrame([
-            {
-                key: value
-                for key, value
-                in row.items()
-                if key != "_mask"
-            }
-            for row in depth2
-        ])
-
-        temp[
-            "score"
-        ] = (
-            temp[
-                "win_rate"
-            ]
-            +
-            8 *
-            np.log1p(
-                temp[
-                    "profit_factor"
-                ]
-            )
-        )
-
-        keep_names = set(
-            temp
-            .sort_values(
-                "score",
-                ascending=False
-            )
-            .head(200)
-            [
-                "pattern"
-            ]
-            .tolist()
-        )
-
-        depth2 = [
-            row
-            for row in depth2
-            if row[
-                "pattern"
-            ] in keep_names
-        ]
-
-    # Add clean results
-    for row in depth2:
-
-        results.append(
-            {
-                key: value
-                for key, value
-                in row.items()
-                if key != "_mask"
-            }
-        )
-
-    # ========================================================
-    # DEPTH 3
-    # ========================================================
-
-    depth3 = []
-
-    checked = 0
-
-    for previous in depth2:
-
-        previous_name = previous[
-            "pattern"
-        ]
-
-        previous_mask = previous[
-            "_mask"
-        ]
+    for survivor in previous_survivors:
 
         previous_parts = set(
-            previous_name.split(
+            survivor[
+                "pattern"
+            ].split(
                 " + "
             )
         )
 
-        for atomic_name in (
-            atomic_candidates
-        ):
+        for condition_name, condition_mask in condition_items:
 
             if (
-                atomic_name
+                condition_name
                 in previous_parts
             ):
                 continue
 
+            # Avoid adding conditions that are
+            # mathematically identical to an existing
+            # condition.
+            #
+            # The signature is calculated directly.
+
             checked += 1
 
-            combined = (
-                previous_mask
-                &
-                masks[
-                    atomic_name
+            combined_mask = (
+                survivor[
+                    "_mask"
                 ]
+                &
+                condition_mask
             )
 
-            result = evaluate_direction(
+            result = evaluate_mask(
                 df,
-                combined
+                combined_mask
             )
 
             if result is None:
                 continue
 
-            pattern = (
-                previous_name
-                +
-                " + "
-                +
-                atomic_name
+            if (
+                result["win_rate"]
+                <
+                MIN_TRAIN_WIN_FOR_EXPANSION
+            ):
+                continue
+
+            pattern_parts = (
+                previous_parts
+                |
+                {condition_name}
             )
 
-            depth3.append({
+            # Canonical ordering prevents:
+            #
+            # A + B
+            # B + A
+            #
+            # from being counted twice.
+
+            pattern = " + ".join(
+                sorted(
+                    pattern_parts
+                )
+            )
+
+            results.append({
 
                 "depth":
-                    3,
+                    depth,
 
                 "pattern":
                     pattern,
 
                 "_mask":
-                    combined,
+                    combined_mask,
 
                 **result
             })
 
     print(
-        f"Depth 3 checked: "
+        f"Combinations checked: "
         f"{checked:,}"
     )
 
     print(
-        f"Depth 3 qualifying: "
-        f"{len(depth3):,}"
+        f"Qualifying combinations: "
+        f"{len(results):,}"
     )
 
-    # Keep strongest depth 3
-    if depth3:
+    if not results:
+        return []
 
-        temp = pd.DataFrame([
-            {
-                key: value
-                for key, value
-                in row.items()
-                if key != "_mask"
-            }
-            for row in depth3
-        ])
+    # --------------------------------------------------------
+    # Remove duplicate masks.
+    # --------------------------------------------------------
 
-        temp[
-            "score"
-        ] = (
-            temp[
-                "win_rate"
+    unique = {}
+
+    for row in results:
+
+        signature = np.packbits(
+            row[
+                "_mask"
             ]
-            +
-            8 *
-            np.log1p(
-                temp[
-                    "profit_factor"
-                ]
+            .to_numpy(
+                dtype=np.uint8
             )
-        )
+        ).tobytes()
 
-        keep_names = set(
-            temp
-            .sort_values(
-                "score",
-                ascending=False
-            )
-            .head(250)
-            [
-                "pattern"
-            ]
-            .tolist()
-        )
+        if signature not in unique:
 
-        depth3 = [
-            row
-            for row in depth3
-            if row[
-                "pattern"
-            ] in keep_names
+            unique[
+                signature
+            ] = row
+
+    results = list(
+        unique.values()
+    )
+
+    print(
+        f"Unique combinations: "
+        f"{len(results):,}"
+    )
+
+    # --------------------------------------------------------
+    # Rank.
+    # --------------------------------------------------------
+
+    results.sort(
+        key=candidate_score,
+        reverse=True
+    )
+
+    return results[
+        :MAX_SURVIVORS
+    ]
+
+
+# ============================================================
+# VALIDATION
+# ============================================================
+
+def evaluate_survivors_on_validation(
+    train_survivors,
+    validation
+):
+
+    survivors = []
+
+    for row in train_survivors:
+
+        pattern = row[
+            "pattern"
         ]
 
-    for row in depth3:
+        # ----------------------------------------------------
+        # Pattern is represented by its conditions.
+        # We reconstruct masks from the stored condition
+        # masks by using the names.
+        # ----------------------------------------------------
 
-        results.append(
-            {
-                key: value
-                for key, value
-                in row.items()
-                if key != "_mask"
-            }
+        parts = [
+            x.strip()
+            for x
+            in pattern.split(
+                " + "
+            )
+        ]
+
+        mask = pd.Series(
+            True,
+            index=validation.index
         )
 
-    return pd.DataFrame(
+        valid = True
+
+        conditions = generate_conditions(
+            validation
+        )
+
+        for part in parts:
+
+            if part not in conditions:
+
+                valid = False
+                break
+
+            mask &= (
+                conditions[
+                    part
+                ]
+                .astype(bool)
+            )
+
+        if not valid:
+            continue
+
+        subset = validation[
+            mask
+        ]
+
+        if (
+            len(subset)
+            <
+            MIN_VALIDATION_TRADES
+        ):
+            continue
+
+        if row[
+            "direction"
+        ] == "LONG":
+
+            returns = subset[
+                "LONG_RETURN"
+            ]
+
+        else:
+
+            returns = subset[
+                "SHORT_RETURN"
+            ]
+
+        result = stats(
+            returns
+        )
+
+        if result is None:
+            continue
+
+        survivors.append({
+
+            "depth":
+                row["depth"],
+
+            "pattern":
+                pattern,
+
+            "direction":
+                row["direction"],
+
+            "train_trades":
+                row["trades"],
+
+            "train_win":
+                row["win_rate"],
+
+            "train_pf":
+                row["profit_factor"],
+
+            "validation_trades":
+                result["trades"],
+
+            "validation_win":
+                result["win_rate"],
+
+            "validation_average":
+                result["average"],
+
+            "validation_pf":
+                result["profit_factor"],
+
+            "validation_total":
+                result["total"]
+        })
+
+    if not survivors:
+        return pd.DataFrame()
+
+    frame = pd.DataFrame(
+        survivors
+    )
+
+    frame[
+        "validation_score"
+    ] = (
+        frame[
+            "validation_win"
+        ]
+        +
+        10 *
+        np.log1p(
+            frame[
+                "validation_pf"
+            ].clip(
+                lower=0
+            )
+        )
+        +
+        5 *
+        frame[
+            "validation_average"
+        ]
+    )
+
+    frame = (
+        frame
+        .sort_values(
+            "validation_score",
+            ascending=False
+        )
+        .reset_index(
+            drop=True
+        )
+    )
+
+    return frame
+
+
+# ============================================================
+# FINAL TEST
+# ============================================================
+
+def final_test(
+    validation_survivors,
+    test
+):
+
+    results = []
+
+    conditions = generate_conditions(
+        test
+    )
+
+    for _, row in (
+        validation_survivors
+        .head(MAX_SURVIVORS)
+        .iterrows()
+    ):
+
+        parts = [
+            x.strip()
+            for x
+            in row[
+                "pattern"
+            ].split(
+                " + "
+            )
+        ]
+
+        mask = pd.Series(
+            True,
+            index=test.index
+        )
+
+        valid = True
+
+        for part in parts:
+
+            if part not in conditions:
+
+                valid = False
+                break
+
+            mask &= (
+                conditions[
+                    part
+                ]
+                .astype(bool)
+            )
+
+        if not valid:
+            continue
+
+        subset = test[
+            mask
+        ]
+
+        if (
+            len(subset)
+            <
+            MIN_TEST_TRADES
+        ):
+            continue
+
+        if row[
+            "direction"
+        ] == "LONG":
+
+            returns = subset[
+                "LONG_RETURN"
+            ]
+
+        else:
+
+            returns = subset[
+                "SHORT_RETURN"
+            ]
+
+        result = stats(
+            returns
+        )
+
+        if result is None:
+            continue
+
+        results.append({
+
+            "depth":
+                row["depth"],
+
+            "pattern":
+                row["pattern"],
+
+            "direction":
+                row["direction"],
+
+            "train_trades":
+                row["train_trades"],
+
+            "train_win":
+                row["train_win"],
+
+            "train_pf":
+                row["train_pf"],
+
+            "validation_trades":
+                row[
+                    "validation_trades"
+                ],
+
+            "validation_win":
+                row[
+                    "validation_win"
+                ],
+
+            "validation_pf":
+                row[
+                    "validation_pf"
+                ],
+
+            "test_trades":
+                result[
+                    "trades"
+                ],
+
+            "test_win":
+                result[
+                    "win_rate"
+                ],
+
+            "test_average":
+                result[
+                    "average"
+                ],
+
+            "test_pf":
+                result[
+                    "profit_factor"
+                ],
+
+            "test_total":
+                result[
+                    "total"
+                ]
+        })
+
+    if not results:
+        return pd.DataFrame()
+
+    result_df = pd.DataFrame(
         results
     )
 
+    result_df[
+        "final_score"
+    ] = (
+        result_df[
+            "test_win"
+        ]
+        +
+        10 *
+        np.log1p(
+            result_df[
+                "test_pf"
+            ].clip(
+                lower=0
+            )
+        )
+        +
+        5 *
+        result_df[
+            "test_average"
+        ]
+    )
+
+    return (
+        result_df
+        .sort_values(
+            [
+                "test_win",
+                "test_pf",
+                "test_average",
+                "test_trades"
+            ],
+            ascending=False
+        )
+        .reset_index(
+            drop=True
+        )
+    )
+
 
 # ============================================================
-# BUILD MASK FROM PATTERN
+# YEARLY STABILITY
 # ============================================================
 
-def build_mask_from_pattern(
-    df,
-    pattern
+def yearly_results(
+    test,
+    pattern,
+    direction
 ):
 
     conditions = generate_conditions(
-        df
+        test
     )
 
     parts = [
-        part.strip()
-        for part
-        in pattern.split(
+        x.strip()
+        for x in pattern.split(
             " + "
         )
     ]
 
     mask = pd.Series(
         True,
-        index=df.index
+        index=test.index
     )
 
     for part in parts:
 
         if part not in conditions:
-
-            return None
+            return pd.DataFrame()
 
         mask &= (
             conditions[
@@ -2037,268 +2345,6 @@ def build_mask_from_pattern(
             ]
             .astype(bool)
         )
-
-    return mask
-
-
-# ============================================================
-# VALIDATE TOP TRAINING PATTERNS
-# ============================================================
-
-def validate_patterns(
-    train,
-    validation,
-    test,
-    training_patterns
-):
-
-    # --------------------------------------------------------
-    # Select candidates using TRAINING ONLY.
-    # --------------------------------------------------------
-
-    candidates = set()
-
-    for metric in [
-        "win_rate",
-        "profit_factor",
-        "average"
-    ]:
-
-        top = (
-            training_patterns
-            .sort_values(
-                metric,
-                ascending=False
-            )
-            .head(300)
-        )
-
-        candidates.update(
-            top[
-                "pattern"
-            ].tolist()
-        )
-
-    rows = []
-
-    for pattern in candidates:
-
-        train_mask = (
-            build_mask_from_pattern(
-                train,
-                pattern
-            )
-        )
-
-        validation_mask = (
-            build_mask_from_pattern(
-                validation,
-                pattern
-            )
-        )
-
-        test_mask = (
-            build_mask_from_pattern(
-                test,
-                pattern
-            )
-        )
-
-        if (
-            train_mask is None
-            or
-            validation_mask is None
-            or
-            test_mask is None
-        ):
-            continue
-
-        train_result = (
-            evaluate_direction(
-                train,
-                train_mask
-            )
-        )
-
-        if train_result is None:
-            continue
-
-        direction_name = (
-            train_result[
-                "direction"
-            ]
-        )
-
-        validation_subset = (
-            validation[
-                validation_mask
-            ]
-        )
-
-        if (
-            len(
-                validation_subset
-            )
-            <
-            MIN_VALIDATION_TRADES
-        ):
-            continue
-
-        test_subset = (
-            test[
-                test_mask
-            ]
-        )
-
-        if (
-            len(
-                test_subset
-            )
-            <
-            MIN_TEST_TRADES
-        ):
-            continue
-
-        # ----------------------------------------------------
-        # Use training-selected direction.
-        # ----------------------------------------------------
-
-        if direction_name == "LONG":
-
-            validation_returns = (
-                validation_subset[
-                    "long_return"
-                ]
-            )
-
-            test_returns = (
-                test_subset[
-                    "long_return"
-                ]
-            )
-
-        else:
-
-            validation_returns = (
-                validation_subset[
-                    "short_return"
-                ]
-            )
-
-            test_returns = (
-                test_subset[
-                    "short_return"
-                ]
-            )
-
-        validation_stats = get_stats(
-            validation_returns
-        )
-
-        test_stats = get_stats(
-            test_returns
-        )
-
-        if (
-            validation_stats is None
-            or
-            test_stats is None
-        ):
-            continue
-
-        rows.append({
-
-            "pattern":
-                pattern,
-
-            "direction":
-                direction_name,
-
-            "train_trades":
-                train_result[
-                    "trades"
-                ],
-
-            "train_win":
-                train_result[
-                    "win_rate"
-                ],
-
-            "train_pf":
-                train_result[
-                    "profit_factor"
-                ],
-
-            "validation_trades":
-                validation_stats[
-                    "trades"
-                ],
-
-            "validation_win":
-                validation_stats[
-                    "win_rate"
-                ],
-
-            "validation_pf":
-                validation_stats[
-                    "profit_factor"
-                ],
-
-            "validation_avg":
-                validation_stats[
-                    "average"
-                ],
-
-            "test_trades":
-                test_stats[
-                    "trades"
-                ],
-
-            "test_win":
-                test_stats[
-                    "win_rate"
-                ],
-
-            "test_pf":
-                test_stats[
-                    "profit_factor"
-                ],
-
-            "test_avg":
-                test_stats[
-                    "average"
-                ],
-
-            "test_total":
-                test_stats[
-                    "total"
-                ]
-        })
-
-    return pd.DataFrame(
-        rows
-    )
-
-
-# ============================================================
-# YEAR STABILITY
-# ============================================================
-
-def year_stability(
-    test,
-    pattern,
-    direction_name
-):
-
-    mask = (
-        build_mask_from_pattern(
-            test,
-            pattern
-        )
-    )
-
-    if mask is None:
-        return pd.DataFrame()
 
     subset = test[
         mask
@@ -2308,7 +2354,7 @@ def year_stability(
         return pd.DataFrame()
 
     subset[
-        "year"
+        "YEAR"
     ] = (
         subset[
             "event_date"
@@ -2321,27 +2367,27 @@ def year_stability(
 
     for year, group in (
         subset.groupby(
-            "year"
+            "YEAR"
         )
     ):
 
-        if direction_name == "LONG":
+        if direction == "LONG":
 
             returns = group[
-                "long_return"
+                "LONG_RETURN"
             ]
 
         else:
 
             returns = group[
-                "short_return"
+                "SHORT_RETURN"
             ]
 
-        stats = get_stats(
+        s = stats(
             returns
         )
 
-        if stats is None:
+        if s is None:
             continue
 
         rows.append({
@@ -2350,33 +2396,52 @@ def year_stability(
                 year,
 
             "trades":
-                stats[
-                    "trades"
-                ],
+                s["trades"],
 
             "win_rate":
-                stats[
-                    "win_rate"
-                ],
+                s["win_rate"],
 
             "average":
-                stats[
-                    "average"
-                ],
+                s["average"],
 
             "profit_factor":
-                stats[
-                    "profit_factor"
-                ],
+                s["profit_factor"],
 
             "total":
-                stats[
-                    "total"
-                ]
+                s["total"]
         })
 
     return pd.DataFrame(
         rows
+    )
+
+
+# ============================================================
+# PRINT TOP RESULTS
+# ============================================================
+
+def print_top(
+    df,
+    title,
+    n=30
+):
+
+    print()
+    print("=" * 100)
+    print(title)
+    print("=" * 100)
+
+    if df is None or df.empty:
+
+        print("NONE")
+
+        return
+
+    print(
+        df.head(n)
+        .to_string(
+            index=False
+        )
     )
 
 
@@ -2387,47 +2452,54 @@ def year_stability(
 def main():
 
     print()
-    print("=" * 90)
+    print("=" * 100)
     print(
-        "HIGH-WIN-RATE SIMPLE STRATEGY SEARCH"
+        "EXHAUSTIVE PREVIOUS-DAY OPENING + EOD SEARCH"
     )
-    print("=" * 90)
+    print("=" * 100)
 
     print()
     print(
-        "FIXED ENTRY : NEXT DAY 09:15 OPEN"
+        "ENTRY : NEXT DAY 09:15 OPEN"
     )
 
     print(
-        "FIXED EXIT  : NEXT DAY 15:27 OPEN"
-    )
-
-    print()
-    print(
-        "NO INFORMATION AFTER 09:15 "
-        "IS USED TO DECIDE ENTRY."
+        "EXIT  : NEXT DAY 15:27 OPEN"
     )
 
     print()
     print(
-        "Target win rate: "
+        "SIGNAL INFORMATION:"
+    )
+
+    print(
+        "PREVIOUS TRADING DAY ONLY"
+    )
+
+    print()
+    print(
+        "TIMEFRAMES:"
+    )
+
+    print(
+        "1m / 2m / 3m / 5m / 10m / 15m"
+    )
+
+    print()
+    print(
+        f"TARGET FINAL TEST WIN RATE: "
         f"{TARGET_WIN_RATE:.0f}%"
     )
 
-    print()
-    print(
-        "Logic is intentionally kept simple."
-    )
-
     # ========================================================
-    # LOAD DATA
+    # DATA
     # ========================================================
 
     df = create_dataset()
 
     print()
     print(
-        f"Total observations: "
+        f"TOTAL OBSERVATIONS: "
         f"{len(df):,}"
     )
 
@@ -2441,12 +2513,12 @@ def main():
         test,
         train_end,
         validation_end
-    ) = split_dataset(
+    ) = chronological_split(
         df
     )
 
     print()
-    print("=" * 90)
+    print("=" * 100)
 
     print(
         f"TRAIN: "
@@ -2464,145 +2536,166 @@ def main():
     )
 
     print()
-
     print(
-        "Training ends:"
+        f"TRAIN ENDS: "
+        f"{train_end}"
     )
 
     print(
-        train_end
-    )
-
-    print()
-
-    print(
-        "Validation ends:"
-    )
-
-    print(
-        validation_end
+        f"VALIDATION ENDS: "
+        f"{validation_end}"
     )
 
     # ========================================================
-    # GENERATE CONDITIONS
+    # CONDITIONS
     # ========================================================
 
     print()
+    print("=" * 100)
     print(
-        "Generating simple conditions..."
+        "GENERATING PREVIOUS-DAY CONDITIONS"
     )
+    print("=" * 100)
 
     conditions = generate_conditions(
         train
     )
 
     print(
-        f"Conditions generated: "
+        f"TOTAL UNIQUE CONDITIONS: "
         f"{len(conditions):,}"
     )
 
     # ========================================================
-    # TRAIN SEARCH
+    # DEPTH 1
     # ========================================================
 
-    print()
-    print("=" * 90)
-    print(
-        "SEARCHING TRAINING DATA"
-    )
-    print("=" * 90)
-
-    training_patterns = search_patterns(
+    survivors = search_depth_1(
         train,
         conditions
     )
 
-    if training_patterns.empty:
+    print(
+        f"DEPTH 1 SURVIVORS: "
+        f"{len(survivors):,}"
+    )
 
-        print(
-            "No qualifying patterns."
+    all_training_results = []
+
+    for row in survivors:
+
+        all_training_results.append({
+            k: v
+            for k, v in row.items()
+            if k != "_mask"
+        })
+
+    # ========================================================
+    # DEPTH 2-4
+    # ========================================================
+
+    for depth in range(
+        2,
+        MAX_DEPTH + 1
+    ):
+
+        if not survivors:
+
+            print(
+                f"No survivors for depth "
+                f"{depth}."
+            )
+
+            break
+
+        survivors = search_next_depth(
+            train,
+            survivors,
+            conditions,
+            depth
         )
 
-        return
+        print(
+            f"DEPTH {depth} SURVIVORS: "
+            f"{len(survivors):,}"
+        )
+
+        for row in survivors:
+
+            all_training_results.append({
+                k: v
+                for k, v in row.items()
+                if k != "_mask"
+            })
 
     # ========================================================
     # SAVE TRAINING
     # ========================================================
 
-    training_patterns.to_csv(
-        "SIMPLE_85_TRAINING_PATTERNS.csv",
-        index=False
+    training_df = pd.DataFrame(
+        all_training_results
     )
 
-    # ========================================================
-    # TOP TRAINING
-    # ========================================================
+    if not training_df.empty:
 
-    print()
-    print("=" * 90)
-    print(
-        "TOP TRAINING PATTERNS"
-    )
-    print("=" * 90)
-
-    print(
-        training_patterns
-        .sort_values(
-            [
-                "win_rate",
-                "profit_factor"
-            ],
-            ascending=False
-        )
-        .head(50)
-        .to_string(
+        training_df.to_csv(
+            "EXHAUSTIVE_EOD_OPEN_TRAINING.csv",
             index=False
         )
+
+    print_top(
+        training_df,
+        "TOP TRAINING PATTERNS",
+        50
     )
 
     # ========================================================
-    # VALIDATE
+    # VALIDATION
     # ========================================================
 
     print()
-    print("=" * 90)
+    print("=" * 100)
     print(
-        "VALIDATING TOP PATTERNS"
+        "VALIDATING SURVIVING PATTERNS"
     )
-    print("=" * 90)
+    print("=" * 100)
 
-    final_results = validate_patterns(
-        train,
-        validation,
-        test,
-        training_patterns
+    if not survivors:
+
+        print(
+            "No training survivors."
+        )
+
+        return
+
+    # --------------------------------------------------------
+    # Validate the final survivors from deepest search.
+    # --------------------------------------------------------
+
+    validation_df = (
+        evaluate_survivors_on_validation(
+            survivors,
+            validation
+        )
     )
 
-    if final_results.empty:
+    print_top(
+        validation_df,
+        "VALIDATION SURVIVORS",
+        50
+    )
 
+    if validation_df.empty:
+
+        print()
         print(
             "NO PATTERNS SURVIVED VALIDATION."
         )
 
         return
 
-    final_results = (
-        final_results
-        .sort_values(
-            [
-                "test_win",
-                "test_pf",
-                "test_avg"
-            ],
-            ascending=False
-        )
-        .reset_index(
-            drop=True
-        )
-    )
-
-    final_results.to_csv(
-        "SIMPLE_85_FINAL_TEST.csv",
+    validation_df.to_csv(
+        "EXHAUSTIVE_EOD_OPEN_VALIDATION.csv",
         index=False
     )
 
@@ -2611,108 +2704,214 @@ def main():
     # ========================================================
 
     print()
-    print("=" * 90)
+    print("=" * 100)
     print(
         "FINAL UNSEEN TEST"
     )
-    print("=" * 90)
+    print("=" * 100)
 
-    print(
-        final_results
-        .head(50)
-        .to_string(
-            index=False
+    final_df = final_test(
+        validation_df,
+        test
+    )
+
+    if final_df.empty:
+
+        print(
+            "NO PATTERNS SURVIVED "
+            "FINAL TEST REQUIREMENTS."
         )
+
+        return
+
+    final_df.to_csv(
+        "EXHAUSTIVE_EOD_OPEN_FINAL_TEST.csv",
+        index=False
+    )
+
+    print_top(
+        final_df,
+        "TOP FINAL TEST RESULTS",
+        50
     )
 
     # ========================================================
-    # 70%
-    # ========================================================
-
-    for threshold in [
-        70,
-        75,
-        80,
-        85
-    ]:
-
-        strong = final_results[
-            final_results[
-                "test_win"
-            ]
-            >= threshold
-        ]
-
-        print()
-        print("=" * 90)
-        print(
-            f"FINAL TEST >= {threshold}%"
-        )
-        print("=" * 90)
-
-        if strong.empty:
-
-            print(
-                "NONE"
-            )
-
-        else:
-
-            print(
-                strong
-                .head(50)
-                .to_string(
-                    index=False
-                )
-            )
-
-    # ========================================================
-    # YEAR STABILITY
+    # 85% RESULTS
     # ========================================================
 
     print()
-    print("=" * 90)
+    print("=" * 100)
     print(
-        "YEAR-BY-YEAR STABILITY"
+        "FINAL TEST >= 85%"
     )
-    print("=" * 90)
+    print("=" * 100)
 
-    for _, row in (
-        final_results
+    over_85 = final_df[
+        final_df[
+            "test_win"
+        ] >= TARGET_WIN_RATE
+    ].copy()
+
+    if over_85.empty:
+
+        print(
+            "NONE"
+        )
+
+    else:
+
+        print(
+            over_85
+            .sort_values(
+                [
+                    "test_win",
+                    "test_pf",
+                    "test_average"
+                ],
+                ascending=False
+            )
+            .to_string(
+                index=False
+            )
+        )
+
+    # ========================================================
+    # 80% RESULTS
+    # ========================================================
+
+    print()
+    print("=" * 100)
+    print(
+        "FINAL TEST >= 80%"
+    )
+    print("=" * 100)
+
+    over_80 = final_df[
+        final_df[
+            "test_win"
+        ] >= 80
+    ]
+
+    if over_80.empty:
+
+        print("NONE")
+
+    else:
+
+        print(
+            over_80
+            .head(50)
+            .to_string(
+                index=False
+            )
+        )
+
+    # ========================================================
+    # BEST RESULT
+    # ========================================================
+
+    best = final_df.iloc[0]
+
+    print()
+    print("=" * 100)
+    print(
+        "BEST FINAL TEST RESULT"
+    )
+    print("=" * 100)
+
+    print()
+    print(
+        f"Pattern       : "
+        f"{best['pattern']}"
+    )
+
+    print(
+        f"Direction     : "
+        f"{best['direction']}"
+    )
+
+    print(
+        f"Train trades  : "
+        f"{int(best['train_trades']):,}"
+    )
+
+    print(
+        f"Train win     : "
+        f"{best['train_win']:.2f}%"
+    )
+
+    print(
+        f"Validation    : "
+        f"{best['validation_win']:.2f}%"
+    )
+
+    print(
+        f"Test trades   : "
+        f"{int(best['test_trades']):,}"
+    )
+
+    print(
+        f"TEST WIN RATE : "
+        f"{best['test_win']:.2f}%"
+    )
+
+    print(
+        f"TEST AVG      : "
+        f"{best['test_average']:.4f}%"
+    )
+
+    print(
+        f"TEST PF       : "
+        f"{best['test_pf']:.3f}"
+    )
+
+    print(
+        f"TEST TOTAL    : "
+        f"{best['test_total']:.4f}%"
+    )
+
+    # ========================================================
+    # YEARLY STABILITY
+    # ========================================================
+
+    print()
+    print("=" * 100)
+    print(
+        "YEAR-BY-YEAR RESULTS OF TOP 10"
+    )
+    print("=" * 100)
+
+    for index, row in (
+        final_df
         .head(10)
         .iterrows()
     ):
 
         print()
         print(
-            row[
-                "pattern"
-            ]
+            "-" * 100
         )
 
         print(
-            "Direction:",
-            row[
-                "direction"
-            ]
+            f"{index + 1}. "
+            f"{row['pattern']}"
         )
 
-        yearly = (
-            year_stability(
-                test,
-                row[
-                    "pattern"
-                ],
-                row[
-                    "direction"
-                ]
-            )
+        print(
+            f"Direction: "
+            f"{row['direction']}"
+        )
+
+        yearly = yearly_results(
+            test,
+            row["pattern"],
+            row["direction"]
         )
 
         if yearly.empty:
 
             print(
-                "No yearly results."
+                "No yearly data."
             )
 
         else:
@@ -2725,66 +2924,48 @@ def main():
             )
 
     # ========================================================
-    # 85% DECISION
+    # FINAL MESSAGE
     # ========================================================
 
-    candidates_85 = final_results[
-        final_results[
-            "test_win"
-        ]
-        >= 85
-    ]
+    print()
+    print("=" * 100)
+    print(
+        "SEARCH COMPLETE"
+    )
+    print("=" * 100)
 
     print()
-    print("=" * 90)
     print(
-        "85% FINAL TEST DECISION"
+        "Files created:"
     )
-    print("=" * 90)
 
-    if candidates_85.empty:
+    print(
+        "EXHAUSTIVE_EOD_OPEN_TRAINING.csv"
+    )
+
+    print(
+        "EXHAUSTIVE_EOD_OPEN_VALIDATION.csv"
+    )
+
+    print(
+        "EXHAUSTIVE_EOD_OPEN_FINAL_TEST.csv"
+    )
+
+    print()
+
+    if over_85.empty:
 
         print(
-            "NO 85%+ STRATEGY SURVIVED "
-            "THE FINAL UNSEEN TEST."
+            "RESULT: NO 85%+ FINAL-TEST "
+            "PATTERN WAS FOUND."
         )
 
     else:
 
         print(
-            "85%+ STRATEGIES FOUND:"
+            "RESULT: 85%+ FINAL-TEST "
+            "PATTERN(S) FOUND."
         )
-
-        print(
-            candidates_85
-            .to_string(
-                index=False
-            )
-        )
-
-    # ========================================================
-    # FINISH
-    # ========================================================
-
-    print()
-    print("=" * 90)
-    print(
-        "SEARCH COMPLETE"
-    )
-    print("=" * 90)
-
-    print()
-    print(
-        "Files:"
-    )
-
-    print(
-        "SIMPLE_85_TRAINING_PATTERNS.csv"
-    )
-
-    print(
-        "SIMPLE_85_FINAL_TEST.csv"
-    )
 
 
 # ============================================================
@@ -2792,5 +2973,4 @@ def main():
 # ============================================================
 
 if __name__ == "__main__":
-
     main()
