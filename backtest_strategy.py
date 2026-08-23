@@ -1,32 +1,35 @@
 # ============================================================
-# EXHAUSTIVE PREVIOUS-DAY OPENING + EOD STRATEGY SEARCH
+# BASE STRATEGY OPTIMIZER
 # ============================================================
 #
-# FIXED TRADING RULES
+# BASE:
+#   Previous day 15-minute:
+#       Candle 1 = BULL
+#       Candle 2 = BEAR
 #
-# SIGNAL:
-#     Previous trading day ONLY
+# TRADE:
+#       SHORT
 #
 # ENTRY:
-#     Next trading day 09:15 OPEN
+#       NEXT DAY 09:15 OPEN
 #
 # EXIT:
-#     Next trading day 15:27 OPEN
+#       NEXT DAY 15:27 OPEN
 #
-# GOAL:
-#     Find >= 85% FINAL TEST win rate
-#     while maximizing return / profit factor.
+# IMPORTANT:
+#   ALL SIGNAL INFORMATION COMES FROM THE PREVIOUS DAY.
+#   NO NEXT-DAY GAP OR 09:15 INFORMATION IS USED.
 #
-# TIMEFRAMES:
-#     1m, 2m, 3m, 5m, 10m, 15m
+# OBJECTIVE:
+#   Start from the 15m reversal base and find simple
+#   filters that improve:
 #
-# SEARCH:
-#     Previous-day opening structures
-#     Previous-day EOD structures
-#     Cross-timeframe combinations
-#     LONG + SHORT
+#       1. Win rate
+#       2. Profit factor
+#       3. Average return
 #
-# NO NEXT-DAY GAP INFORMATION IS USED.
+#   HARD TARGET:
+#       >= 85% FINAL TEST WIN RATE
 #
 # ============================================================
 
@@ -38,8 +41,6 @@ import io
 import os
 import itertools
 import warnings
-import math
-from collections import defaultdict
 
 warnings.filterwarnings("ignore")
 
@@ -56,31 +57,19 @@ DATA_URL = (
 ENTRY_TIME = "09:15"
 EXIT_TIME = "15:27"
 
-TARGET_WIN_RATE = 85.0
-
 ROUND_TRIP_COST = 0.10
 
-MIN_TRAIN_TRADES = 75
-MIN_VALIDATION_TRADES = 25
-MIN_TEST_TRADES = 25
+TARGET_WIN_RATE = 85.0
 
-# Number of strongest individual conditions carried
-# into combination searches.
-#
-# This is deliberately large enough to search broadly,
-# while preventing impossible billions-of-combinations
-# searches.
-MAX_ATOMIC_CANDIDATES = 500
+MIN_TRAIN_TRADES = 100
+MIN_VALIDATION_TRADES = 30
+MIN_TEST_TRADES = 30
 
-# Maximum number of candidates carried to the next depth.
-MAX_SURVIVORS = 500
+# Maximum filters in one strategy.
+MAX_DEPTH = 3
 
-# Search up to this depth.
-MAX_DEPTH = 4
-
-# Minimum training win rate to be considered for
-# combination expansion.
-MIN_TRAIN_WIN_FOR_EXPANSION = 52.0
+# Number of candidates carried forward.
+MAX_SURVIVORS = 300
 
 
 # ============================================================
@@ -98,33 +87,37 @@ TIMEFRAMES = {
 
 
 # ============================================================
-# OPENING WINDOWS
+# CANDLE WINDOWS
 # ============================================================
 #
-# These are PREVIOUS-DAY opening structures.
+# Previous day only.
 #
-# We deliberately use windows beginning at 09:15.
-#
-# Example:
+# We construct:
 #
 # 1m:
-#     09:15
-#     09:16
-#     09:17
-#     ...
+#   opening candles
+#   late-day candles
 #
 # 3m:
-#     09:15-09:17
-#     09:18-09:20
-#     ...
+#   opening structure
+#   late-day structure
 #
-# The exact minute alignment is kept consistent with
-# standard NSE intraday candle construction.
+# etc.
+#
+# The 15m BASE is:
+#
+#   15:00-15:14 = first candle
+#   15:15-15:29 = second candle
+#
+# BASE:
+#   first BULL
+#   second BEAR
+#
 # ============================================================
 
-OPENING_WINDOW_ENDS = {
-    "1m": [15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29],
-    "2m": [17, 19, 21, 23, 25, 27, 29],
+OPENING_ENDS = {
+    "1m": [15, 16, 17, 18, 19, 20],
+    "2m": [17, 19, 21, 23],
     "3m": [17, 20, 23, 26, 29],
     "5m": [19, 24, 29],
     "10m": [24, 29],
@@ -133,287 +126,94 @@ OPENING_WINDOW_ENDS = {
 
 
 # ============================================================
-# EOD WINDOWS
-# ============================================================
-#
-# We use completed candles ending before/around the close.
-# For each timeframe the scanner examines multiple EOD
-# structures instead of only the final candle.
+# UTILITY
 # ============================================================
 
-EOD_STARTS = {
-    "1m": [20, 21, 22, 23, 24, 25, 26, 27, 28, 29],
-    "2m": [19, 21, 23, 25, 27],
-    "3m": [15, 18, 21, 24, 27],
-    "5m": [10, 15, 20, 25],
-    "10m": [0, 10, 20],
-    "15m": [0, 15]
-}
+def minute_key(minutes):
 
-
-# ============================================================
-# BASIC THRESHOLDS
-# ============================================================
-
-BODY_LEVELS = [
-    0.50,
-    0.60,
-    0.70,
-    0.80,
-    0.90
-]
-
-CLOSE_LEVELS = [
-    0.10,
-    0.20,
-    0.30,
-    0.40,
-    0.60,
-    0.70,
-    0.80,
-    0.90
-]
-
-REL_VOL_LEVELS = [
-    0.50,
-    0.75,
-    1.00,
-    1.25,
-    1.50,
-    2.00,
-    2.50,
-    3.00
-]
-
-RANGE_RATIO_LEVELS = [
-    0.50,
-    0.75,
-    1.00,
-    1.25,
-    1.50,
-    2.00,
-    2.50,
-    3.00
-]
-
-MOMENTUM_LEVELS = [
-    0.05,
-    0.10,
-    0.15,
-    0.20,
-    0.30,
-    0.50,
-    1.00
-]
-
-
-# ============================================================
-# DOWNLOAD DATA
-# ============================================================
-
-def download_dataset():
-
-    print("=" * 100)
-    print("DOWNLOADING NSE DATA")
-    print("=" * 100)
-
-    response = requests.get(
-        DATA_URL,
-        timeout=900
+    return (
+        f"{minutes // 60:02d}:"
+        f"{minutes % 60:02d}"
     )
 
-    response.raise_for_status()
 
-    print(
-        f"Downloaded "
-        f"{len(response.content) / 1024 / 1024:.1f} MB"
+def direction(candle):
+
+    if candle["close"] > candle["open"]:
+        return "BULL"
+
+    if candle["close"] < candle["open"]:
+        return "BEAR"
+
+    return "DOJI"
+
+
+def candle_metrics(candle):
+
+    rng = candle["high"] - candle["low"]
+
+    body = abs(
+        candle["close"] -
+        candle["open"]
     )
 
-    return response.content
+    if rng > 0:
 
+        body_ratio = body / rng
 
-# ============================================================
-# LOAD ONE STOCK
-# ============================================================
+        close_position = (
+            candle["close"] -
+            candle["low"]
+        ) / rng
 
-def load_stock(zip_file, filename):
+    else:
 
-    try:
+        body_ratio = 0.0
+        close_position = 0.5
 
-        raw = zip_file.read(filename)
+    if candle["open"] != 0:
 
-        df = pd.read_csv(
-            io.BytesIO(raw),
-            compression="gzip"
-        )
-
-        if df.empty:
-            return None
-
-        if "time" not in df.columns:
-            return None
-
-        # ----------------------------------------------------
-        # Timestamp
-        # ----------------------------------------------------
-
-        df["datetime"] = (
-            pd.to_datetime(
-                df["time"],
-                unit="s",
-                utc=True
-            )
-            .dt
-            .tz_convert("Asia/Kolkata")
-        )
-
-        df["date"] = (
-            df["datetime"]
-            .dt
-            .strftime("%Y-%m-%d")
-        )
-
-        df["hm"] = (
-            df["datetime"]
-            .dt
-            .strftime("%H:%M")
-        )
-
-        # ----------------------------------------------------
-        # OHLC
-        # ----------------------------------------------------
-
-        required = [
-            "open",
-            "high",
-            "low",
-            "close"
-        ]
-
-        for column in required:
-
-            if column not in df.columns:
-                return None
-
-            df[column] = pd.to_numeric(
-                df[column],
-                errors="coerce"
-            )
-
-        # ----------------------------------------------------
-        # Volume
-        # ----------------------------------------------------
-
-        if "Volume" in df.columns:
-
-            df["volume"] = pd.to_numeric(
-                df["Volume"],
-                errors="coerce"
-            )
-
-        elif "volume" in df.columns:
-
-            df["volume"] = pd.to_numeric(
-                df["volume"],
-                errors="coerce"
-            )
-
-        else:
-
-            return None
-
-        df = df.dropna(
-            subset=[
-                "open",
-                "high",
-                "low",
-                "close",
-                "volume"
-            ]
-        )
-
-        # ----------------------------------------------------
-        # Only NSE regular session
-        # ----------------------------------------------------
-
-        df = df[
+        momentum = (
             (
-                df["hm"] >= "09:15"
+                candle["close"] -
+                candle["open"]
             )
-            &
-            (
-                df["hm"] <= "15:29"
-            )
-        ].copy()
+            /
+            candle["open"]
+            *
+            100
+        )
 
-        return df[
-            [
-                "date",
-                "hm",
-                "open",
-                "high",
-                "low",
-                "close",
-                "volume"
-            ]
-        ]
+    else:
 
-    except Exception:
+        momentum = 0.0
 
-        return None
+    return {
+        "range": rng,
+        "body": body_ratio,
+        "close_pos": close_position,
+        "momentum": momentum
+    }
 
 
 # ============================================================
-# DAY LOOKUP
-# ============================================================
-
-def make_day_lookup(group):
-
-    result = {}
-
-    for _, row in group.iterrows():
-
-        result[row["hm"]] = {
-            "open": float(row["open"]),
-            "high": float(row["high"]),
-            "low": float(row["low"]),
-            "close": float(row["close"]),
-            "volume": float(row["volume"])
-        }
-
-    return result
-
-
-# ============================================================
-# MINUTE KEY
-# ============================================================
-
-def minute_key(total_minutes):
-
-    hour = total_minutes // 60
-    minute = total_minutes % 60
-
-    return f"{hour:02d}:{minute:02d}"
-
-
-# ============================================================
-# BUILD CANDLE FROM START + END
+# BUILD CANDLE
 # ============================================================
 
 def build_candle(
     day,
-    start_total,
-    end_total
+    start_minutes,
+    end_minutes
 ):
 
     rows = []
 
-    for t in range(
-        start_total,
-        end_total + 1
+    for minute in range(
+        start_minutes,
+        end_minutes + 1
     ):
 
-        key = minute_key(t)
+        key = minute_key(minute)
 
         if key not in day:
             return None
@@ -454,651 +254,568 @@ def build_candle(
 
 
 # ============================================================
-# CANDLE METRICS
+# LOAD STOCK
 # ============================================================
 
-def candle_metrics(candle):
-
-    candle_range = (
-        candle["high"]
-        -
-        candle["low"]
-    )
-
-    body = abs(
-        candle["close"]
-        -
-        candle["open"]
-    )
-
-    if candle_range > 0:
-
-        body_ratio = (
-            body /
-            candle_range
-        )
-
-        close_position = (
-            candle["close"]
-            -
-            candle["low"]
-        ) / candle_range
-
-    else:
-
-        body_ratio = 0.0
-        close_position = 0.5
-
-    if candle["open"] != 0:
-
-        momentum = (
-            (
-                candle["close"]
-                -
-                candle["open"]
-            )
-            /
-            candle["open"]
-            *
-            100
-        )
-
-    else:
-
-        momentum = 0.0
-
-    return {
-        "range": candle_range,
-        "body": body_ratio,
-        "close_pos": close_position,
-        "momentum": momentum
-    }
-
-
-# ============================================================
-# DIRECTION
-# ============================================================
-
-def candle_direction(candle):
-
-    if candle["close"] > candle["open"]:
-        return "BULL"
-
-    if candle["close"] < candle["open"]:
-        return "BEAR"
-
-    return "DOJI"
-
-
-# ============================================================
-# BUILD TIMEFRAME STRUCTURES
-# ============================================================
-
-def build_timeframe_structures(
-    day,
-    timeframe
+def load_stock(
+    zip_file,
+    filename
 ):
 
-    minutes = TIMEFRAMES[timeframe]
+    try:
 
-    structures = {}
-
-    # --------------------------------------------------------
-    # OPENING STRUCTURES
-    # --------------------------------------------------------
-
-    for end_minute in (
-        OPENING_WINDOW_ENDS[
-            timeframe
-        ]
-    ):
-
-        start_total = (
-            9 * 60 + 15
+        raw = zip_file.read(
+            filename
         )
 
-        end_total = (
-            9 * 60 +
-            end_minute
+        df = pd.read_csv(
+            io.BytesIO(raw),
+            compression="gzip"
         )
 
-        candle = build_candle(
-            day,
-            start_total,
-            end_total
+        if df.empty:
+            return None
+
+        if "time" not in df.columns:
+            return None
+
+        df["datetime"] = (
+            pd.to_datetime(
+                df["time"],
+                unit="s",
+                utc=True
+            )
+            .dt
+            .tz_convert(
+                "Asia/Kolkata"
+            )
         )
 
-        if candle is None:
-            continue
-
-        structures[
-            f"OPEN_{end_minute}"
-        ] = candle
-
-    # --------------------------------------------------------
-    # EOD STRUCTURES
-    # --------------------------------------------------------
-
-    for start_minute in (
-        EOD_STARTS[
-            timeframe
-        ]
-    ):
-
-        # Special handling for 10m / 15m,
-        # where the starts are expressed relative
-        # to the 15:xx portion.
-        #
-        # For starts <= 29 we interpret them as
-        # 15:start_minute.
-        #
-        # 10m starts [0,10,20] means:
-        # 15:00-15:09, etc.
-        #
-        # 15m starts [0,15] means:
-        # 15:00-15:14 and 15:15-15:29.
-
-        start_total = (
-            15 * 60 +
-            start_minute
+        df["date"] = (
+            df["datetime"]
+            .dt
+            .strftime(
+                "%Y-%m-%d"
+            )
         )
 
-        end_total = (
-            start_total +
-            minutes -
-            1
+        df["hm"] = (
+            df["datetime"]
+            .dt
+            .strftime(
+                "%H:%M"
+            )
         )
 
-        # Do not go past 15:29.
-        if end_total > (
-            15 * 60 + 29
-        ):
-            continue
+        for col in [
+            "open",
+            "high",
+            "low",
+            "close"
+        ]:
 
-        candle = build_candle(
-            day,
-            start_total,
-            end_total
-        )
+            if col not in df.columns:
+                return None
 
-        if candle is None:
-            continue
+            df[col] = pd.to_numeric(
+                df[col],
+                errors="coerce"
+            )
 
-        structures[
-            f"EOD_{start_minute}"
-        ] = candle
+        if "Volume" in df.columns:
 
-    return structures
+            df["volume"] = pd.to_numeric(
+                df["Volume"],
+                errors="coerce"
+            )
 
+        elif "volume" in df.columns:
 
-# ============================================================
-# BUILD FEATURES FOR ONE TIMEFRAME
-# ============================================================
-
-def timeframe_features(
-    day,
-    timeframe
-):
-
-    structures = build_timeframe_structures(
-        day,
-        timeframe
-    )
-
-    if not structures:
-        return {}
-
-    features = {}
-
-    # ========================================================
-    # OPENING STRUCTURES
-    # ========================================================
-
-    opening_keys = sorted([
-        k for k in structures
-        if k.startswith("OPEN_")
-    ])
-
-    for key in opening_keys:
-
-        candle = structures[key]
-
-        metrics = candle_metrics(
-            candle
-        )
-
-        prefix = (
-            f"{timeframe}:{key}"
-        )
-
-        features[
-            f"{prefix}:BULL"
-        ] = (
-            candle_direction(
-                candle
-            ) == "BULL"
-        )
-
-        features[
-            f"{prefix}:BEAR"
-        ] = (
-            candle_direction(
-                candle
-            ) == "BEAR"
-        )
-
-        features[
-            f"{prefix}:BODY"
-        ] = metrics[
-            "body"
-        ]
-
-        features[
-            f"{prefix}:CLOSE_POS"
-        ] = metrics[
-            "close_pos"
-        ]
-
-        features[
-            f"{prefix}:MOMENTUM"
-        ] = metrics[
-            "momentum"
-        ]
-
-        features[
-            f"{prefix}:RANGE"
-        ] = metrics[
-            "range"
-        ]
-
-        features[
-            f"{prefix}:VOLUME"
-        ] = candle[
-            "volume"
-        ]
-
-    # ========================================================
-    # EOD STRUCTURES
-    # ========================================================
-
-    eod_keys = sorted([
-        k for k in structures
-        if k.startswith("EOD_")
-    ])
-
-    for key in eod_keys:
-
-        candle = structures[key]
-
-        metrics = candle_metrics(
-            candle
-        )
-
-        prefix = (
-            f"{timeframe}:{key}"
-        )
-
-        features[
-            f"{prefix}:BULL"
-        ] = (
-            candle_direction(
-                candle
-            ) == "BULL"
-        )
-
-        features[
-            f"{prefix}:BEAR"
-        ] = (
-            candle_direction(
-                candle
-            ) == "BEAR"
-        )
-
-        features[
-            f"{prefix}:BODY"
-        ] = metrics[
-            "body"
-        ]
-
-        features[
-            f"{prefix}:CLOSE_POS"
-        ] = metrics[
-            "close_pos"
-        ]
-
-        features[
-            f"{prefix}:MOMENTUM"
-        ] = metrics[
-            "momentum"
-        ]
-
-        features[
-            f"{prefix}:RANGE"
-        ] = metrics[
-            "range"
-        ]
-
-        features[
-            f"{prefix}:VOLUME"
-        ] = candle[
-            "volume"
-        ]
-
-    # ========================================================
-    # OPENING CANDLE RELATIONSHIPS
-    # ========================================================
-
-    for a, b in itertools.combinations(
-        opening_keys,
-        2
-    ):
-
-        candle_a = structures[a]
-        candle_b = structures[b]
-
-        dir_a = candle_direction(
-            candle_a
-        )
-
-        dir_b = candle_direction(
-            candle_b
-        )
-
-        prefix = (
-            f"{timeframe}:{a}_VS_{b}"
-        )
-
-        if dir_a == dir_b and dir_a != "DOJI":
-
-            features[
-                f"{prefix}:SAME_DIRECTION"
-            ] = True
+            df["volume"] = pd.to_numeric(
+                df["volume"],
+                errors="coerce"
+            )
 
         else:
 
-            features[
-                f"{prefix}:SAME_DIRECTION"
-            ] = False
+            return None
 
-        if (
-            dir_a != dir_b
-            and
-            dir_a != "DOJI"
-            and
-            dir_b != "DOJI"
-        ):
-
-            features[
-                f"{prefix}:OPPOSITE_DIRECTION"
-            ] = True
-
-        else:
-
-            features[
-                f"{prefix}:OPPOSITE_DIRECTION"
-            ] = False
-
-        if candle_a["volume"] > candle_b["volume"]:
-
-            features[
-                f"{prefix}:A_VOLUME_MORE"
-            ] = True
-
-        else:
-
-            features[
-                f"{prefix}:A_VOLUME_MORE"
-            ] = False
-
-        if candle_b["volume"] > candle_a["volume"]:
-
-            features[
-                f"{prefix}:B_VOLUME_MORE"
-            ] = True
-
-        else:
-
-            features[
-                f"{prefix}:B_VOLUME_MORE"
-            ] = False
-
-    # ========================================================
-    # EOD CANDLE RELATIONSHIPS
-    # ========================================================
-
-    for a, b in itertools.combinations(
-        eod_keys,
-        2
-    ):
-
-        candle_a = structures[a]
-        candle_b = structures[b]
-
-        dir_a = candle_direction(
-            candle_a
-        )
-
-        dir_b = candle_direction(
-            candle_b
-        )
-
-        prefix = (
-            f"{timeframe}:{a}_VS_{b}"
-        )
-
-        features[
-            f"{prefix}:SAME_DIRECTION"
-        ] = (
-            dir_a == dir_b
-            and
-            dir_a != "DOJI"
-        )
-
-        features[
-            f"{prefix}:OPPOSITE_DIRECTION"
-        ] = (
-            dir_a != dir_b
-            and
-            dir_a != "DOJI"
-            and
-            dir_b != "DOJI"
-        )
-
-        features[
-            f"{prefix}:A_VOLUME_MORE"
-        ] = (
-            candle_a["volume"]
-            >
-            candle_b["volume"]
-        )
-
-        features[
-            f"{prefix}:B_VOLUME_MORE"
-        ] = (
-            candle_b["volume"]
-            >
-            candle_a["volume"]
-        )
-
-    # ========================================================
-    # OPENING VS EOD
-    # ========================================================
-
-    for opening_key in opening_keys:
-
-        for eod_key in eod_keys:
-
-            opening = structures[
-                opening_key
+        df = df.dropna(
+            subset=[
+                "open",
+                "high",
+                "low",
+                "close",
+                "volume"
             ]
+        )
 
-            eod = structures[
-                eod_key
+        df = df[
+            (df["hm"] >= "09:15")
+            &
+            (df["hm"] <= "15:29")
+        ].copy()
+
+        return df[
+            [
+                "date",
+                "hm",
+                "open",
+                "high",
+                "low",
+                "close",
+                "volume"
             ]
+        ]
 
-            opening_dir = candle_direction(
-                opening
-            )
+    except Exception:
 
-            eod_dir = candle_direction(
-                eod
-            )
-
-            prefix = (
-                f"{timeframe}:"
-                f"{opening_key}_VS_"
-                f"{eod_key}"
-            )
-
-            features[
-                f"{prefix}:SAME_DIRECTION"
-            ] = (
-                opening_dir ==
-                eod_dir
-                and
-                opening_dir != "DOJI"
-            )
-
-            features[
-                f"{prefix}:OPPOSITE_DIRECTION"
-            ] = (
-                opening_dir !=
-                eod_dir
-                and
-                opening_dir != "DOJI"
-                and
-                eod_dir != "DOJI"
-            )
-
-            features[
-                f"{prefix}:OPEN_VOLUME_MORE"
-            ] = (
-                opening["volume"]
-                >
-                eod["volume"]
-            )
-
-            features[
-                f"{prefix}:EOD_VOLUME_MORE"
-            ] = (
-                eod["volume"]
-                >
-                opening["volume"]
-            )
-
-    return features
+        return None
 
 
 # ============================================================
-# BUILD COMPLETE PREVIOUS-DAY FEATURE SET
+# DAY LOOKUP
+# ============================================================
+
+def make_day_lookup(group):
+
+    result = {}
+
+    for _, row in group.iterrows():
+
+        result[row["hm"]] = {
+            "open":
+                float(row["open"]),
+
+            "high":
+                float(row["high"]),
+
+            "low":
+                float(row["low"]),
+
+            "close":
+                float(row["close"]),
+
+            "volume":
+                float(row["volume"])
+        }
+
+    return result
+
+
+# ============================================================
+# BUILD FEATURES
 # ============================================================
 
 def build_features(day):
 
     features = {}
 
-    for timeframe in TIMEFRAMES:
+    # ========================================================
+    # 15m BASE
+    # ========================================================
 
-        tf_features = timeframe_features(
-            day,
-            timeframe
-        )
+    first_15 = build_candle(
+        day,
+        15 * 60,
+        15 * 60 + 14
+    )
 
-        features.update(
-            tf_features
-        )
+    second_15 = build_candle(
+        day,
+        15 * 60 + 15,
+        15 * 60 + 29
+    )
+
+    if (
+        first_15 is None
+        or
+        second_15 is None
+    ):
+        return None
+
+    # --------------------------------------------------------
+    # BASE MUST BE:
+    #
+    # first = BULL
+    # second = BEAR
+    # --------------------------------------------------------
+
+    if (
+        direction(first_15) != "BULL"
+        or
+        direction(second_15) != "BEAR"
+    ):
+
+        return None
+
+    m1 = candle_metrics(
+        first_15
+    )
+
+    m2 = candle_metrics(
+        second_15
+    )
+
+    features[
+        "BASE_15M_FIRST_BODY"
+    ] = m1["body"]
+
+    features[
+        "BASE_15M_SECOND_BODY"
+    ] = m2["body"]
+
+    features[
+        "BASE_15M_FIRST_CLOSE_POS"
+    ] = m1["close_pos"]
+
+    features[
+        "BASE_15M_SECOND_CLOSE_POS"
+    ] = m2["close_pos"]
+
+    features[
+        "BASE_15M_FIRST_VOLUME"
+    ] = first_15["volume"]
+
+    features[
+        "BASE_15M_SECOND_VOLUME"
+    ] = second_15["volume"]
+
+    features[
+        "BASE_15M_FIRST_RANGE"
+    ] = m1["range"]
+
+    features[
+        "BASE_15M_SECOND_RANGE"
+    ] = m2["range"]
+
+    features[
+        "BASE_15M_FIRST_MOMENTUM"
+    ] = m1["momentum"]
+
+    features[
+        "BASE_15M_SECOND_MOMENTUM"
+    ] = m2["momentum"]
 
     # ========================================================
-    # WHOLE-DAY FEATURES
+    # BASE RELATIONSHIPS
+    # ========================================================
+
+    features[
+        "BASE_SECOND_VOLUME_MORE"
+    ] = (
+        second_15["volume"]
+        >
+        first_15["volume"]
+    )
+
+    features[
+        "BASE_FIRST_VOLUME_MORE"
+    ] = (
+        first_15["volume"]
+        >
+        second_15["volume"]
+    )
+
+    features[
+        "BASE_SECOND_RANGE_MORE"
+    ] = (
+        m2["range"]
+        >
+        m1["range"]
+    )
+
+    features[
+        "BASE_FIRST_RANGE_MORE"
+    ] = (
+        m1["range"]
+        >
+        m2["range"]
+    )
+
+    features[
+        "BASE_SECOND_BODY_MORE"
+    ] = (
+        m2["body"]
+        >
+        m1["body"]
+    )
+
+    features[
+        "BASE_FIRST_BODY_MORE"
+    ] = (
+        m1["body"]
+        >
+        m2["body"]
+    )
+
+    # ========================================================
+    # PREVIOUS DAY WHOLE-DAY FEATURES
     # ========================================================
 
     if (
-        "09:15" in day
-        and
-        "15:29" in day
+        "09:15" not in day
+        or
+        "15:29" not in day
     ):
 
-        day_open = day[
-            "09:15"
-        ]["open"]
+        return None
 
-        day_close = day[
-            "15:29"
-        ]["close"]
+    day_open = day[
+        "09:15"
+    ]["open"]
 
-        if day_open > 0:
+    day_close = day[
+        "15:29"
+    ]["close"]
 
-            day_return = (
-                (
-                    day_close
-                    -
-                    day_open
-                )
-                /
-                day_open
-                *
-                100
-            )
+    day_high = max(
+        x["high"]
+        for x in day.values()
+    )
 
-        else:
+    day_low = min(
+        x["low"]
+        for x in day.values()
+    )
 
-            day_return = 0
+    if day_open <= 0:
+        return None
 
-        features[
-            "DAY:RETURN"
-        ] = day_return
-
-        # ----------------------------------------------------
-        # Whole day high / low
-        # ----------------------------------------------------
-
-        highs = [
-            x["high"]
-            for x in day.values()
-        ]
-
-        lows = [
-            x["low"]
-            for x in day.values()
-        ]
-
-        day_high = max(highs)
-        day_low = min(lows)
-
-        day_range = (
-            day_high -
-            day_low
+    day_return = (
+        (
+            day_close -
+            day_open
         )
+        /
+        day_open
+        *
+        100
+    )
 
-        if day_range > 0:
+    day_range = (
+        day_high -
+        day_low
+    )
 
-            features[
-                "DAY:CLOSE_POSITION"
-            ] = (
-                (
-                    day_close
-                    -
-                    day_low
-                )
-                /
-                day_range
+    if day_range > 0:
+
+        day_close_position = (
+            day_close -
+            day_low
+        ) / day_range
+
+    else:
+
+        day_close_position = 0.5
+
+    features[
+        "DAY_RETURN"
+    ] = day_return
+
+    features[
+        "DAY_RANGE"
+    ] = day_range
+
+    features[
+        "DAY_CLOSE_POSITION"
+    ] = day_close_position
+
+    # ========================================================
+    # OPENING STRUCTURES
+    # ========================================================
+
+    for tf, minutes in TIMEFRAMES.items():
+
+        for end_minute in (
+            OPENING_ENDS[tf]
+        ):
+
+            start = (
+                9 * 60 +
+                15
             )
 
-        else:
+            end = (
+                9 * 60 +
+                end_minute
+            )
+
+            candle = build_candle(
+                day,
+                start,
+                end
+            )
+
+            if candle is None:
+                continue
+
+            metrics = candle_metrics(
+                candle
+            )
+
+            prefix = (
+                f"{tf}_OPEN_{end_minute}"
+            )
 
             features[
-                "DAY:CLOSE_POSITION"
-            ] = 0.5
+                prefix + "_BULL"
+            ] = (
+                direction(candle)
+                ==
+                "BULL"
+            )
 
-        features[
-            "DAY:RANGE"
-        ] = day_range
+            features[
+                prefix + "_BEAR"
+            ] = (
+                direction(candle)
+                ==
+                "BEAR"
+            )
+
+            features[
+                prefix + "_BODY"
+            ] = metrics[
+                "body"
+            ]
+
+            features[
+                prefix + "_CLOSE_POS"
+            ] = metrics[
+                "close_pos"
+            ]
+
+            features[
+                prefix + "_RANGE"
+            ] = metrics[
+                "range"
+            ]
+
+            features[
+                prefix + "_MOMENTUM"
+            ] = metrics[
+                "momentum"
+            ]
+
+            features[
+                prefix + "_VOLUME"
+            ] = candle[
+                "volume"
+            ]
+
+    # ========================================================
+    # LATE-DAY CANDLES FROM OTHER TIMEFRAMES
+    # ========================================================
+
+    late_specs = {
+
+        "1m":
+            [(15*60+24, 15*60+24),
+             (15*60+25, 15*60+25),
+             (15*60+26, 15*60+26),
+             (15*60+27, 15*60+27),
+             (15*60+28, 15*60+28),
+             (15*60+29, 15*60+29)],
+
+        "2m":
+            [(15*60+23, 15*60+24),
+             (15*60+25, 15*60+26),
+             (15*60+27, 15*60+28)],
+
+        "3m":
+            [(15*60+18, 15*60+20),
+             (15*60+21, 15*60+23),
+             (15*60+24, 15*60+26),
+             (15*60+27, 15*60+29)],
+
+        "5m":
+            [(15*60+10, 15*60+14),
+             (15*60+15, 15*60+19),
+             (15*60+20, 15*60+24),
+             (15*60+25, 15*60+29)],
+
+        "10m":
+            [(15*60+10, 15*60+19),
+             (15*60+20, 15*60+29)],
+
+    }
+
+    for tf, ranges in late_specs.items():
+
+        for idx, (
+            start,
+            end
+        ) in enumerate(ranges):
+
+            candle = build_candle(
+                day,
+                start,
+                end
+            )
+
+            if candle is None:
+                continue
+
+            metrics = candle_metrics(
+                candle
+            )
+
+            prefix = (
+                f"{tf}_EOD_{idx+1}"
+            )
+
+            features[
+                prefix + "_BULL"
+            ] = (
+                direction(candle)
+                ==
+                "BULL"
+            )
+
+            features[
+                prefix + "_BEAR"
+            ] = (
+                direction(candle)
+                ==
+                "BEAR"
+            )
+
+            features[
+                prefix + "_BODY"
+            ] = metrics[
+                "body"
+            ]
+
+            features[
+                prefix + "_CLOSE_POS"
+            ] = metrics[
+                "close_pos"
+            ]
+
+            features[
+                prefix + "_RANGE"
+            ] = metrics[
+                "range"
+            ]
+
+            features[
+                prefix + "_MOMENTUM"
+            ] = metrics[
+                "momentum"
+            ]
+
+            features[
+                prefix + "_VOLUME"
+            ] = candle[
+                "volume"
+            ]
 
     return features
 
 
 # ============================================================
-# BUILD EVENTS
+# EXTRACT EVENTS
 # ============================================================
 
 def extract_events(
@@ -1169,28 +886,24 @@ def extract_events(
         )
 
         # ----------------------------------------------------
-        # FIXED NEXT-DAY ENTRY
+        # NEXT DAY EXECUTION DATA
         # ----------------------------------------------------
 
         if ENTRY_TIME not in next_day:
             continue
 
-        # ----------------------------------------------------
-        # FIXED NEXT-DAY EXIT
-        # ----------------------------------------------------
-
         if EXIT_TIME not in next_day:
             continue
 
         # ----------------------------------------------------
-        # BUILD SIGNAL FROM PREVIOUS DAY ONLY
+        # PREVIOUS DAY BASE SIGNAL
         # ----------------------------------------------------
 
         features = build_features(
             previous_day
         )
 
-        if not features:
+        if features is None:
             continue
 
         entry = next_day[
@@ -1206,8 +919,7 @@ def extract_events(
 
         raw_return = (
             (
-                exit_price
-                -
+                exit_price -
                 entry
             )
             /
@@ -1231,16 +943,48 @@ def extract_events(
                     next_date
                 ),
 
-            "LONG_RETURN":
-                raw_return,
-
-            "SHORT_RETURN":
+            # BASE IS SHORT
+            "RETURN":
                 -raw_return,
 
             **features
+
         })
 
     return events
+
+
+# ============================================================
+# DOWNLOAD
+# ============================================================
+
+def download_data():
+
+    print(
+        "=" * 100
+    )
+
+    print(
+        "DOWNLOADING DATA"
+    )
+
+    print(
+        "=" * 100
+    )
+
+    response = requests.get(
+        DATA_URL,
+        timeout=900
+    )
+
+    response.raise_for_status()
+
+    print(
+        f"Downloaded "
+        f"{len(response.content) / 1024 / 1024:.1f} MB"
+    )
+
+    return response.content
 
 
 # ============================================================
@@ -1249,58 +993,61 @@ def extract_events(
 
 def create_dataset():
 
-    raw = download_dataset()
+    raw = download_data()
 
-    zip_file = zipfile.ZipFile(
+    z = zipfile.ZipFile(
         io.BytesIO(raw)
     )
 
     files = [
         x
-        for x in zip_file.namelist()
+        for x in z.namelist()
         if x.endswith(
             ".csv.gz"
         )
     ]
 
-    print()
     print(
         f"Stocks found: "
         f"{len(files):,}"
     )
 
-    all_events = []
+    events = []
 
-    for number, filename in enumerate(
+    for i, filename in enumerate(
         files,
         1
     ):
 
         print(
             f"\rProcessing "
-            f"{number:,}/{len(files):,}",
+            f"{i:,}/{len(files):,}",
             end=""
         )
 
-        events = extract_events(
-            zip_file,
-            filename
-        )
+        try:
 
-        all_events.extend(
-            events
-        )
+            events.extend(
+                extract_events(
+                    z,
+                    filename
+                )
+            )
+
+        except Exception:
+
+            continue
 
     print()
 
     df = pd.DataFrame(
-        all_events
+        events
     )
 
     if df.empty:
 
         raise RuntimeError(
-            "No events were created."
+            "No qualifying BASE events found."
         )
 
     df = df.sort_values(
@@ -1313,12 +1060,12 @@ def create_dataset():
 
 
 # ============================================================
-# TRAIN / VALIDATION / TEST
+# SPLIT
 # ============================================================
 
-def chronological_split(df):
+def split_data(df):
 
-    unique_dates = sorted(
+    dates = sorted(
         df[
             "event_date"
         ]
@@ -1327,52 +1074,40 @@ def chronological_split(df):
         .unique()
     )
 
-    n = len(unique_dates)
+    n = len(dates)
 
-    train_end_index = int(
-        n * 0.60
-    )
-
-    validation_end_index = int(
-        n * 0.80
-    )
-
-    train_end = unique_dates[
-        train_end_index
+    train_end = dates[
+        int(n * 0.60)
     ]
 
-    validation_end = unique_dates[
-        validation_end_index
+    validation_end = dates[
+        int(n * 0.80)
     ]
 
     train = df[
-        df[
-            "event_date"
-        ].dt.normalize()
-        < train_end
+        df["event_date"].dt.normalize()
+        <
+        train_end
     ].copy()
 
     validation = df[
         (
-            df[
-                "event_date"
-            ].dt.normalize()
-            >= train_end
+            df["event_date"].dt.normalize()
+            >=
+            train_end
         )
         &
         (
-            df[
-                "event_date"
-            ].dt.normalize()
-            < validation_end
+            df["event_date"].dt.normalize()
+            <
+            validation_end
         )
     ].copy()
 
     test = df[
-        df[
-            "event_date"
-        ].dt.normalize()
-        >= validation_end
+        df["event_date"].dt.normalize()
+        >=
+        validation_end
     ].copy()
 
     return (
@@ -1385,169 +1120,12 @@ def chronological_split(df):
 
 
 # ============================================================
-# CONDITION GENERATION
+# BASE STATISTICS
 # ============================================================
 
-def generate_conditions(df):
-
-    conditions = {}
-
-    # ========================================================
-    # BOOLEAN CONDITIONS
-    # ========================================================
-
-    for column in df.columns:
-
-        if (
-            column in [
-                "symbol",
-                "signal_date",
-                "event_date",
-                "LONG_RETURN",
-                "SHORT_RETURN"
-            ]
-        ):
-            continue
-
-        if (
-            df[column].dtype
-            == bool
-        ):
-
-            conditions[
-                column
-            ] = (
-                df[column]
-                .fillna(False)
-                .astype(bool)
-            )
-
-    # ========================================================
-    # NUMERIC CONDITIONS
-    # ========================================================
-
-    numeric_columns = []
-
-    for column in df.columns:
-
-        if (
-            column in [
-                "LONG_RETURN",
-                "SHORT_RETURN",
-                "symbol",
-                "signal_date",
-                "event_date"
-            ]
-        ):
-            continue
-
-        if pd.api.types.is_numeric_dtype(
-            df[column]
-        ):
-
-            numeric_columns.append(
-                column
-            )
-
-    for column in numeric_columns:
-
-        series = pd.to_numeric(
-            df[column],
-            errors="coerce"
-        )
-
-        # ----------------------------------------------------
-        # Only create threshold conditions for meaningful
-        # numeric features.
-        # ----------------------------------------------------
-
-        if series.notna().sum() < 100:
-            continue
-
-        # Quantile thresholds prevent arbitrary overfitting.
-        quantiles = [
-            0.05,
-            0.10,
-            0.20,
-            0.30,
-            0.50,
-            0.70,
-            0.80,
-            0.90,
-            0.95
-        ]
-
-        values = (
-            series
-            .dropna()
-            .quantile(
-                quantiles
-            )
-            .unique()
-        )
-
-        for value in values:
-
-            if not np.isfinite(value):
-                continue
-
-            conditions[
-                f"{column}<=Q{value:.6g}"
-            ] = (
-                series <= value
-            )
-
-            conditions[
-                f"{column}>=Q{value:.6g}"
-            ] = (
-                series >= value
-            )
-
-    # ========================================================
-    # REMOVE DUPLICATE BOOLEAN MASKS
-    # ========================================================
-
-    unique_conditions = {}
-
-    seen = set()
-
-    for name, mask in conditions.items():
-
-        mask = (
-            pd.Series(
-                mask,
-                index=df.index
-            )
-            .fillna(False)
-            .astype(bool)
-        )
-
-        # Pack boolean mask into bytes.
-        signature = np.packbits(
-            mask.to_numpy(
-                dtype=np.uint8
-            )
-        ).tobytes()
-
-        if signature in seen:
-            continue
-
-        seen.add(
-            signature
-        )
-
-        unique_conditions[
-            name
-        ] = mask
-
-    return unique_conditions
-
-
-# ============================================================
-# STATISTICS
-# ============================================================
-
-def stats(returns):
+def calculate_stats(
+    returns
+):
 
     returns = pd.Series(
         returns
@@ -1557,8 +1135,7 @@ def stats(returns):
         return None
 
     net = (
-        returns
-        -
+        returns -
         ROUND_TRIP_COST
     )
 
@@ -1583,14 +1160,14 @@ def stats(returns):
 
     if gross_loss > 0:
 
-        profit_factor = (
+        pf = (
             gross_profit /
             gross_loss
         )
 
     else:
 
-        profit_factor = np.inf
+        pf = np.inf
 
     return {
 
@@ -1604,7 +1181,7 @@ def stats(returns):
             net.mean(),
 
         "profit_factor":
-            profit_factor,
+            pf,
 
         "total":
             net.sum()
@@ -1612,305 +1189,146 @@ def stats(returns):
 
 
 # ============================================================
-# DIRECTION EVALUATION
+# CONDITION GENERATION
 # ============================================================
 
-def evaluate_mask(
-    df,
-    mask
+def generate_conditions(
+    df
 ):
 
-    subset = df[
-        mask
+    conditions = {}
+
+    numeric_columns = [
+        "BASE_15M_FIRST_BODY",
+        "BASE_15M_SECOND_BODY",
+        "BASE_15M_FIRST_CLOSE_POS",
+        "BASE_15M_SECOND_CLOSE_POS",
+        "BASE_15M_FIRST_VOLUME",
+        "BASE_15M_SECOND_VOLUME",
+        "BASE_15M_FIRST_RANGE",
+        "BASE_15M_SECOND_RANGE",
+        "BASE_15M_FIRST_MOMENTUM",
+        "BASE_15M_SECOND_MOMENTUM",
+        "DAY_RETURN",
+        "DAY_RANGE",
+        "DAY_CLOSE_POSITION"
     ]
 
-    if len(subset) < MIN_TRAIN_TRADES:
-        return None
+    # Add all other numeric feature columns.
+    for column in df.columns:
 
-    long_stats = stats(
-        subset[
-            "LONG_RETURN"
-        ]
-    )
-
-    short_stats = stats(
-        subset[
-            "SHORT_RETURN"
-        ]
-    )
-
-    if (
-        long_stats[
-            "win_rate"
-        ]
-        >=
-        short_stats[
-            "win_rate"
-        ]
-    ):
-
-        direction = "LONG"
-        selected = long_stats
-
-    else:
-
-        direction = "SHORT"
-        selected = short_stats
-
-    return {
-
-        "direction":
-            direction,
-
-        "trades":
-            selected["trades"],
-
-        "win_rate":
-            selected["win_rate"],
-
-        "average":
-            selected["average"],
-
-        "profit_factor":
-            selected["profit_factor"],
-
-        "total":
-            selected["total"]
-    }
-
-
-# ============================================================
-# CANDIDATE SCORING
-# ============================================================
-
-def candidate_score(row):
-
-    pf = row["profit_factor"]
-
-    if not np.isfinite(pf):
-        pf = 10
-
-    # Win rate dominates.
-    # PF and average return reward profitable setups.
-    # Trade count provides a mild stability preference.
-
-    return (
-        row["win_rate"]
-        +
-        10 *
-        np.log1p(
-            max(pf, 0)
-        )
-        +
-        2 *
-        np.log1p(
-            max(
-                row["trades"],
-                1
-            )
-        )
-        +
-        5 *
-        max(
-            row["average"],
-            -1
-        )
-    )
-
-
-# ============================================================
-# SEARCH DEPTH 1
-# ============================================================
-
-def search_depth_1(
-    df,
-    conditions
-):
-
-    print()
-    print("=" * 100)
-    print("SEARCHING DEPTH 1")
-    print("=" * 100)
-
-    rows = []
-
-    for name, mask in conditions.items():
-
-        result = evaluate_mask(
-            df,
-            mask
-        )
-
-        if result is None:
+        if column in [
+            "RETURN",
+            "symbol",
+            "signal_date",
+            "event_date"
+        ]:
             continue
 
-        if (
-            result["win_rate"]
-            <
-            MIN_TRAIN_WIN_FOR_EXPANSION
+        if pd.api.types.is_numeric_dtype(
+            df[column]
         ):
+
+            if column not in numeric_columns:
+
+                numeric_columns.append(
+                    column
+                )
+
+    # --------------------------------------------------------
+    # BOOLEAN FEATURES
+    # --------------------------------------------------------
+
+    for column in df.columns:
+
+        if column in [
+            "RETURN",
+            "symbol",
+            "signal_date",
+            "event_date"
+        ]:
             continue
 
-        rows.append({
+        if df[column].dtype == bool:
 
-            "depth": 1,
-            "pattern": name,
-            "_mask": mask,
-            **result
-        })
-
-    if not rows:
-        return []
-
-    rows.sort(
-        key=candidate_score,
-        reverse=True
-    )
-
-    return rows[
-        :MAX_ATOMIC_CANDIDATES
-    ]
-
-
-# ============================================================
-# COMBINATION SEARCH
-# ============================================================
-
-def search_next_depth(
-    df,
-    previous_survivors,
-    all_conditions,
-    depth
-):
-
-    print()
-    print("=" * 100)
-    print(
-        f"SEARCHING DEPTH {depth}"
-    )
-    print("=" * 100)
-
-    results = []
-
-    checked = 0
-
-    # --------------------------------------------------------
-    # Candidate conditions are kept separate so the same
-    # atomic condition cannot appear twice.
-    # --------------------------------------------------------
-
-    condition_items = list(
-        all_conditions.items()
-    )
-
-    for survivor in previous_survivors:
-
-        previous_parts = set(
-            survivor[
-                "pattern"
-            ].split(
-                " + "
+            conditions[
+                column
+            ] = (
+                df[column]
+                .fillna(False)
+                .astype(bool)
             )
+
+    # --------------------------------------------------------
+    # NUMERIC THRESHOLDS
+    # --------------------------------------------------------
+
+    for column in numeric_columns:
+
+        if column not in df.columns:
+            continue
+
+        s = pd.to_numeric(
+            df[column],
+            errors="coerce"
         )
 
-        for condition_name, condition_mask in condition_items:
+        if s.notna().sum() < 100:
+            continue
 
-            if (
-                condition_name
-                in previous_parts
-            ):
+        # Quantile-based thresholds.
+        qs = [
+            0.10,
+            0.20,
+            0.30,
+            0.50,
+            0.70,
+            0.80,
+            0.90
+        ]
+
+        values = (
+            s.dropna()
+            .quantile(qs)
+            .unique()
+        )
+
+        for value in values:
+
+            if not np.isfinite(value):
                 continue
 
-            # Avoid adding conditions that are
-            # mathematically identical to an existing
-            # condition.
-            #
-            # The signature is calculated directly.
-
-            checked += 1
-
-            combined_mask = (
-                survivor[
-                    "_mask"
-                ]
-                &
-                condition_mask
+            conditions[
+                f"{column}<= {value:.8g}"
+            ] = (
+                s <= value
             )
 
-            result = evaluate_mask(
-                df,
-                combined_mask
+            conditions[
+                f"{column}>= {value:.8g}"
+            ] = (
+                s >= value
             )
-
-            if result is None:
-                continue
-
-            if (
-                result["win_rate"]
-                <
-                MIN_TRAIN_WIN_FOR_EXPANSION
-            ):
-                continue
-
-            pattern_parts = (
-                previous_parts
-                |
-                {condition_name}
-            )
-
-            # Canonical ordering prevents:
-            #
-            # A + B
-            # B + A
-            #
-            # from being counted twice.
-
-            pattern = " + ".join(
-                sorted(
-                    pattern_parts
-                )
-            )
-
-            results.append({
-
-                "depth":
-                    depth,
-
-                "pattern":
-                    pattern,
-
-                "_mask":
-                    combined_mask,
-
-                **result
-            })
-
-    print(
-        f"Combinations checked: "
-        f"{checked:,}"
-    )
-
-    print(
-        f"Qualifying combinations: "
-        f"{len(results):,}"
-    )
-
-    if not results:
-        return []
 
     # --------------------------------------------------------
-    # Remove duplicate masks.
+    # REMOVE DUPLICATE MASKS
     # --------------------------------------------------------
 
     unique = {}
 
-    for row in results:
+    for name, mask in conditions.items():
+
+        mask = (
+            pd.Series(
+                mask,
+                index=df.index
+            )
+            .fillna(False)
+            .astype(bool)
+        )
 
         signature = np.packbits(
-            row[
-                "_mask"
-            ]
-            .to_numpy(
+            mask.to_numpy(
                 dtype=np.uint8
             )
         ).tobytes()
@@ -1919,61 +1337,271 @@ def search_next_depth(
 
             unique[
                 signature
-            ] = row
+            ] = (
+                name,
+                mask
+            )
 
-    results = list(
-        unique.values()
+    return {
+        name: mask
+        for name, mask
+        in unique.values()
+    }
+
+
+# ============================================================
+# SCORE
+# ============================================================
+
+def score(result):
+
+    pf = result[
+        "profit_factor"
+    ]
+
+    if not np.isfinite(pf):
+        pf = 10
+
+    return (
+        result["win_rate"]
+        +
+        5 *
+        np.log1p(
+            max(pf, 0)
+        )
+        +
+        3 *
+        result["average"]
+    )
+
+
+# ============================================================
+# SEARCH
+# ============================================================
+
+def search(
+    train,
+    conditions
+):
+
+    print()
+    print(
+        "=" * 100
     )
 
     print(
-        f"Unique combinations: "
-        f"{len(results):,}"
+        "SEARCHING FILTERS AROUND BASE STRATEGY"
     )
 
+    print(
+        "=" * 100
+    )
+
+    candidates = []
+
     # --------------------------------------------------------
-    # Rank.
+    # DEPTH 1
     # --------------------------------------------------------
 
-    results.sort(
-        key=candidate_score,
+    for name, mask in conditions.items():
+
+        subset = train[
+            mask
+        ]
+
+        if len(subset) < MIN_TRAIN_TRADES:
+            continue
+
+        result = calculate_stats(
+            subset["RETURN"]
+        )
+
+        if result is None:
+            continue
+
+        candidates.append({
+
+            "pattern":
+                name,
+
+            "_mask":
+                mask,
+
+            **result
+        })
+
+    candidates.sort(
+        key=score,
         reverse=True
     )
 
-    return results[
+    candidates = candidates[
         :MAX_SURVIVORS
     ]
+
+    print(
+        f"Depth 1 survivors: "
+        f"{len(candidates):,}"
+    )
+
+    all_results = []
+
+    for c in candidates:
+
+        all_results.append(
+            c.copy()
+        )
+
+    # --------------------------------------------------------
+    # DEPTH 2 / 3
+    # --------------------------------------------------------
+
+    for depth in [
+        2,
+        3
+    ]:
+
+        new_candidates = []
+
+        checked = 0
+
+        for candidate in candidates:
+
+            existing = set(
+                candidate[
+                    "pattern"
+                ].split(
+                    " + "
+                )
+            )
+
+            for name, mask in conditions.items():
+
+                if name in existing:
+                    continue
+
+                checked += 1
+
+                combined = (
+                    candidate["_mask"]
+                    &
+                    mask
+                )
+
+                subset = train[
+                    combined
+                ]
+
+                if (
+                    len(subset)
+                    <
+                    MIN_TRAIN_TRADES
+                ):
+                    continue
+
+                result = calculate_stats(
+                    subset["RETURN"]
+                )
+
+                if result is None:
+                    continue
+
+                new_pattern = (
+                    " + ".join(
+                        sorted(
+                            existing |
+                            {name}
+                        )
+                    )
+                )
+
+                new_candidates.append({
+
+                    "pattern":
+                        new_pattern,
+
+                    "_mask":
+                        combined,
+
+                    **result
+                })
+
+        print()
+        print(
+            f"Depth {depth}: "
+            f"{checked:,} combinations checked"
+        )
+
+        # ----------------------------------------------------
+        # Remove duplicate masks.
+        # ----------------------------------------------------
+
+        unique = {}
+
+        for c in new_candidates:
+
+            signature = np.packbits(
+                c["_mask"]
+                .to_numpy(
+                    dtype=np.uint8
+                )
+            ).tobytes()
+
+            if signature not in unique:
+
+                unique[
+                    signature
+                ] = c
+
+        new_candidates = list(
+            unique.values()
+        )
+
+        new_candidates.sort(
+            key=score,
+            reverse=True
+        )
+
+        candidates = new_candidates[
+            :MAX_SURVIVORS
+        ]
+
+        print(
+            f"Depth {depth} survivors: "
+            f"{len(candidates):,}"
+        )
+
+        for c in candidates:
+
+            all_results.append(
+                c.copy()
+            )
+
+    return all_results
 
 
 # ============================================================
 # VALIDATION
 # ============================================================
 
-def evaluate_survivors_on_validation(
-    train_survivors,
+def validate(
+    training_results,
     validation
 ):
 
-    survivors = []
+    conditions = generate_conditions(
+        validation
+    )
 
-    for row in train_survivors:
+    results = []
 
-        pattern = row[
+    for candidate in training_results:
+
+        parts = candidate[
             "pattern"
-        ]
-
-        # ----------------------------------------------------
-        # Pattern is represented by its conditions.
-        # We reconstruct masks from the stored condition
-        # masks by using the names.
-        # ----------------------------------------------------
-
-        parts = [
-            x.strip()
-            for x
-            in pattern.split(
-                " + "
-            )
-        ]
+        ].split(
+            " + "
+        )
 
         mask = pd.Series(
             True,
@@ -1982,10 +1610,6 @@ def evaluate_survivors_on_validation(
 
         valid = True
 
-        conditions = generate_conditions(
-            validation
-        )
-
         for part in parts:
 
             if part not in conditions:
@@ -1993,12 +1617,9 @@ def evaluate_survivors_on_validation(
                 valid = False
                 break
 
-            mask &= (
-                conditions[
-                    part
-                ]
-                .astype(bool)
-            )
+            mask &= conditions[
+                part
+            ]
 
         if not valid:
             continue
@@ -2014,46 +1635,29 @@ def evaluate_survivors_on_validation(
         ):
             continue
 
-        if row[
-            "direction"
-        ] == "LONG":
-
-            returns = subset[
-                "LONG_RETURN"
-            ]
-
-        else:
-
-            returns = subset[
-                "SHORT_RETURN"
-            ]
-
-        result = stats(
-            returns
+        result = calculate_stats(
+            subset["RETURN"]
         )
 
         if result is None:
             continue
 
-        survivors.append({
-
-            "depth":
-                row["depth"],
+        results.append({
 
             "pattern":
-                pattern,
-
-            "direction":
-                row["direction"],
+                candidate["pattern"],
 
             "train_trades":
-                row["trades"],
+                candidate["trades"],
 
             "train_win":
-                row["win_rate"],
+                candidate["win_rate"],
+
+            "train_average":
+                candidate["average"],
 
             "train_pf":
-                row["profit_factor"],
+                candidate["profit_factor"],
 
             "validation_trades":
                 result["trades"],
@@ -2065,53 +1669,35 @@ def evaluate_survivors_on_validation(
                 result["average"],
 
             "validation_pf":
-                result["profit_factor"],
-
-            "validation_total":
-                result["total"]
+                result["profit_factor"]
         })
 
-    if not survivors:
+    if not results:
         return pd.DataFrame()
 
-    frame = pd.DataFrame(
-        survivors
+    result_df = pd.DataFrame(
+        results
     )
 
-    frame[
-        "validation_score"
-    ] = (
-        frame[
-            "validation_win"
-        ]
-        +
-        10 *
-        np.log1p(
-            frame[
-                "validation_pf"
-            ].clip(
-                lower=0
-            )
-        )
-        +
-        5 *
-        frame[
-            "validation_average"
-        ]
-    )
-
-    frame = (
-        frame
+    result_df = (
+        result_df
         .sort_values(
-            "validation_score",
+            [
+                "validation_win",
+                "validation_pf",
+                "validation_average"
+            ],
             ascending=False
+        )
+        .head(
+            MAX_SURVIVORS
         )
         .reset_index(
             drop=True
         )
     )
 
-    return frame
+    return result_df
 
 
 # ============================================================
@@ -2119,31 +1705,25 @@ def evaluate_survivors_on_validation(
 # ============================================================
 
 def final_test(
-    validation_survivors,
+    validation_results,
     test
 ):
-
-    results = []
 
     conditions = generate_conditions(
         test
     )
 
-    for _, row in (
-        validation_survivors
-        .head(MAX_SURVIVORS)
-        .iterrows()
+    results = []
+
+    for _, candidate in (
+        validation_results.iterrows()
     ):
 
-        parts = [
-            x.strip()
-            for x
-            in row[
-                "pattern"
-            ].split(
-                " + "
-            )
-        ]
+        parts = candidate[
+            "pattern"
+        ].split(
+            " + "
+        )
 
         mask = pd.Series(
             True,
@@ -2159,12 +1739,9 @@ def final_test(
                 valid = False
                 break
 
-            mask &= (
-                conditions[
-                    part
-                ]
-                .astype(bool)
-            )
+            mask &= conditions[
+                part
+            ]
 
         if not valid:
             continue
@@ -2180,22 +1757,8 @@ def final_test(
         ):
             continue
 
-        if row[
-            "direction"
-        ] == "LONG":
-
-            returns = subset[
-                "LONG_RETURN"
-            ]
-
-        else:
-
-            returns = subset[
-                "SHORT_RETURN"
-            ]
-
-        result = stats(
-            returns
+        result = calculate_stats(
+            subset["RETURN"]
         )
 
         if result is None:
@@ -2203,102 +1766,61 @@ def final_test(
 
         results.append({
 
-            "depth":
-                row["depth"],
-
             "pattern":
-                row["pattern"],
-
-            "direction":
-                row["direction"],
+                candidate["pattern"],
 
             "train_trades":
-                row["train_trades"],
+                candidate["train_trades"],
 
             "train_win":
-                row["train_win"],
+                candidate["train_win"],
 
             "train_pf":
-                row["train_pf"],
+                candidate["train_pf"],
 
             "validation_trades":
-                row[
+                candidate[
                     "validation_trades"
                 ],
 
             "validation_win":
-                row[
+                candidate[
                     "validation_win"
                 ],
 
             "validation_pf":
-                row[
+                candidate[
                     "validation_pf"
                 ],
 
             "test_trades":
-                result[
-                    "trades"
-                ],
+                result["trades"],
 
             "test_win":
-                result[
-                    "win_rate"
-                ],
+                result["win_rate"],
 
             "test_average":
-                result[
-                    "average"
-                ],
+                result["average"],
 
             "test_pf":
-                result[
-                    "profit_factor"
-                ],
+                result["profit_factor"],
 
             "test_total":
-                result[
-                    "total"
-                ]
+                result["total"]
         })
 
     if not results:
         return pd.DataFrame()
 
-    result_df = pd.DataFrame(
-        results
-    )
-
-    result_df[
-        "final_score"
-    ] = (
-        result_df[
-            "test_win"
-        ]
-        +
-        10 *
-        np.log1p(
-            result_df[
-                "test_pf"
-            ].clip(
-                lower=0
-            )
-        )
-        +
-        5 *
-        result_df[
-            "test_average"
-        ]
-    )
-
     return (
-        result_df
+        pd.DataFrame(
+            results
+        )
         .sort_values(
             [
                 "test_win",
                 "test_pf",
-                "test_average",
-                "test_trades"
+                "test_average"
             ],
             ascending=False
         )
@@ -2309,25 +1831,18 @@ def final_test(
 
 
 # ============================================================
-# YEARLY STABILITY
+# YEARLY TEST
 # ============================================================
 
-def yearly_results(
+def yearly_analysis(
     test,
     pattern,
-    direction
+    conditions
 ):
 
-    conditions = generate_conditions(
-        test
+    parts = pattern.split(
+        " + "
     )
-
-    parts = [
-        x.strip()
-        for x in pattern.split(
-            " + "
-        )
-    ]
 
     mask = pd.Series(
         True,
@@ -2337,14 +1852,12 @@ def yearly_results(
     for part in parts:
 
         if part not in conditions:
+
             return pd.DataFrame()
 
-        mask &= (
-            conditions[
-                part
-            ]
-            .astype(bool)
-        )
+        mask &= conditions[
+            part
+        ]
 
     subset = test[
         mask
@@ -2354,7 +1867,7 @@ def yearly_results(
         return pd.DataFrame()
 
     subset[
-        "YEAR"
+        "year"
     ] = (
         subset[
             "event_date"
@@ -2367,24 +1880,12 @@ def yearly_results(
 
     for year, group in (
         subset.groupby(
-            "YEAR"
+            "year"
         )
     ):
 
-        if direction == "LONG":
-
-            returns = group[
-                "LONG_RETURN"
-            ]
-
-        else:
-
-            returns = group[
-                "SHORT_RETURN"
-            ]
-
-        s = stats(
-            returns
+        s = calculate_stats(
+            group["RETURN"]
         )
 
         if s is None:
@@ -2417,46 +1918,40 @@ def yearly_results(
 
 
 # ============================================================
-# PRINT TOP RESULTS
-# ============================================================
-
-def print_top(
-    df,
-    title,
-    n=30
-):
-
-    print()
-    print("=" * 100)
-    print(title)
-    print("=" * 100)
-
-    if df is None or df.empty:
-
-        print("NONE")
-
-        return
-
-    print(
-        df.head(n)
-        .to_string(
-            index=False
-        )
-    )
-
-
-# ============================================================
 # MAIN
 # ============================================================
 
 def main():
 
     print()
-    print("=" * 100)
     print(
-        "EXHAUSTIVE PREVIOUS-DAY OPENING + EOD SEARCH"
+        "=" * 100
     )
-    print("=" * 100)
+
+    print(
+        "15-MINUTE REVERSAL BASE STRATEGY OPTIMIZER"
+    )
+
+    print(
+        "=" * 100
+    )
+
+    print()
+    print(
+        "BASE:"
+    )
+
+    print(
+        "Previous day 15m first candle = BULL"
+    )
+
+    print(
+        "Previous day 15m second candle = BEAR"
+    )
+
+    print(
+        "SHORT next day"
+    )
 
     print()
     print(
@@ -2469,26 +1964,7 @@ def main():
 
     print()
     print(
-        "SIGNAL INFORMATION:"
-    )
-
-    print(
-        "PREVIOUS TRADING DAY ONLY"
-    )
-
-    print()
-    print(
-        "TIMEFRAMES:"
-    )
-
-    print(
-        "1m / 2m / 3m / 5m / 10m / 15m"
-    )
-
-    print()
-    print(
-        f"TARGET FINAL TEST WIN RATE: "
-        f"{TARGET_WIN_RATE:.0f}%"
+        "NO NEXT-DAY INFORMATION IS USED."
     )
 
     # ========================================================
@@ -2499,7 +1975,7 @@ def main():
 
     print()
     print(
-        f"TOTAL OBSERVATIONS: "
+        f"BASE EVENTS: "
         f"{len(df):,}"
     )
 
@@ -2513,37 +1989,80 @@ def main():
         test,
         train_end,
         validation_end
-    ) = chronological_split(
+    ) = split_data(
         df
     )
 
     print()
-    print("=" * 100)
+    print(
+        "=" * 100
+    )
 
     print(
-        f"TRAIN: "
+        f"TRAIN       : "
         f"{len(train):,}"
     )
 
     print(
-        f"VALIDATION: "
+        f"VALIDATION  : "
         f"{len(validation):,}"
     )
 
     print(
-        f"FINAL TEST: "
+        f"FINAL TEST  : "
         f"{len(test):,}"
     )
 
     print()
     print(
-        f"TRAIN ENDS: "
+        f"TRAIN ENDS  : "
         f"{train_end}"
     )
 
     print(
-        f"VALIDATION ENDS: "
+        f"VALIDATION ENDS : "
         f"{validation_end}"
+    )
+
+    # ========================================================
+    # BASE PERFORMANCE
+    # ========================================================
+
+    base = calculate_stats(
+        train["RETURN"]
+    )
+
+    print()
+    print(
+        "=" * 100
+    )
+
+    print(
+        "BASE TRAINING PERFORMANCE"
+    )
+
+    print(
+        "=" * 100
+    )
+
+    print(
+        f"Trades       : "
+        f"{base['trades']:,}"
+    )
+
+    print(
+        f"Win rate     : "
+        f"{base['win_rate']:.2f}%"
+    )
+
+    print(
+        f"Average      : "
+        f"{base['average']:.4f}%"
+    )
+
+    print(
+        f"Profit factor: "
+        f"{base['profit_factor']:.3f}"
     )
 
     # ========================================================
@@ -2551,208 +2070,174 @@ def main():
     # ========================================================
 
     print()
-    print("=" * 100)
     print(
-        "GENERATING PREVIOUS-DAY CONDITIONS"
+        "GENERATING FILTER CONDITIONS..."
     )
-    print("=" * 100)
 
     conditions = generate_conditions(
         train
     )
 
     print(
-        f"TOTAL UNIQUE CONDITIONS: "
+        f"Conditions: "
         f"{len(conditions):,}"
     )
 
     # ========================================================
-    # DEPTH 1
+    # SEARCH
     # ========================================================
 
-    survivors = search_depth_1(
+    training_results = search(
         train,
         conditions
     )
 
-    print(
-        f"DEPTH 1 SURVIVORS: "
-        f"{len(survivors):,}"
-    )
-
-    all_training_results = []
-
-    for row in survivors:
-
-        all_training_results.append({
+    # Remove private masks.
+    training_output = pd.DataFrame([
+        {
             k: v
             for k, v in row.items()
             if k != "_mask"
-        })
+        }
+        for row in training_results
+    ])
 
-    # ========================================================
-    # DEPTH 2-4
-    # ========================================================
-
-    for depth in range(
-        2,
-        MAX_DEPTH + 1
-    ):
-
-        if not survivors:
-
-            print(
-                f"No survivors for depth "
-                f"{depth}."
-            )
-
-            break
-
-        survivors = search_next_depth(
-            train,
-            survivors,
-            conditions,
-            depth
-        )
-
-        print(
-            f"DEPTH {depth} SURVIVORS: "
-            f"{len(survivors):,}"
-        )
-
-        for row in survivors:
-
-            all_training_results.append({
-                k: v
-                for k, v in row.items()
-                if k != "_mask"
-            })
-
-    # ========================================================
-    # SAVE TRAINING
-    # ========================================================
-
-    training_df = pd.DataFrame(
-        all_training_results
+    training_output.to_csv(
+        "BASE_STRATEGY_TRAINING.csv",
+        index=False
     )
 
-    if not training_df.empty:
+    print()
+    print(
+        "=" * 100
+    )
 
-        training_df.to_csv(
-            "EXHAUSTIVE_EOD_OPEN_TRAINING.csv",
+    print(
+        "TOP TRAINING FILTERS"
+    )
+
+    print(
+        "=" * 100
+    )
+
+    print(
+        training_output
+        .head(30)
+        .to_string(
             index=False
         )
-
-    print_top(
-        training_df,
-        "TOP TRAINING PATTERNS",
-        50
     )
 
     # ========================================================
     # VALIDATION
     # ========================================================
 
-    print()
-    print("=" * 100)
-    print(
-        "VALIDATING SURVIVING PATTERNS"
+    validation_results = validate(
+        training_results,
+        validation
     )
-    print("=" * 100)
 
-    if not survivors:
+    if validation_results.empty:
 
         print(
-            "No training survivors."
+            "\nNO PATTERNS SURVIVED VALIDATION."
         )
 
         return
 
-    # --------------------------------------------------------
-    # Validate the final survivors from deepest search.
-    # --------------------------------------------------------
-
-    validation_df = (
-        evaluate_survivors_on_validation(
-            survivors,
-            validation
-        )
-    )
-
-    print_top(
-        validation_df,
-        "VALIDATION SURVIVORS",
-        50
-    )
-
-    if validation_df.empty:
-
-        print()
-        print(
-            "NO PATTERNS SURVIVED VALIDATION."
-        )
-
-        return
-
-    validation_df.to_csv(
-        "EXHAUSTIVE_EOD_OPEN_VALIDATION.csv",
+    validation_results.to_csv(
+        "BASE_STRATEGY_VALIDATION.csv",
         index=False
+    )
+
+    print()
+    print(
+        "=" * 100
+    )
+
+    print(
+        "TOP VALIDATION RESULTS"
+    )
+
+    print(
+        "=" * 100
+    )
+
+    print(
+        validation_results
+        .head(30)
+        .to_string(
+            index=False
+        )
     )
 
     # ========================================================
     # FINAL TEST
     # ========================================================
 
-    print()
-    print("=" * 100)
-    print(
-        "FINAL UNSEEN TEST"
-    )
-    print("=" * 100)
-
-    final_df = final_test(
-        validation_df,
+    final_results = final_test(
+        validation_results,
         test
     )
 
-    if final_df.empty:
+    if final_results.empty:
 
         print(
-            "NO PATTERNS SURVIVED "
-            "FINAL TEST REQUIREMENTS."
+            "\nNO PATTERNS SURVIVED FINAL TEST."
         )
 
         return
 
-    final_df.to_csv(
-        "EXHAUSTIVE_EOD_OPEN_FINAL_TEST.csv",
+    final_results.to_csv(
+        "BASE_STRATEGY_FINAL_TEST.csv",
         index=False
     )
 
-    print_top(
-        final_df,
-        "TOP FINAL TEST RESULTS",
-        50
+    print()
+    print(
+        "=" * 100
+    )
+
+    print(
+        "FINAL UNSEEN TEST"
+    )
+
+    print(
+        "=" * 100
+    )
+
+    print(
+        final_results
+        .head(50)
+        .to_string(
+            index=False
+        )
     )
 
     # ========================================================
-    # 85% RESULTS
+    # 85% TARGET
     # ========================================================
 
+    target = final_results[
+        final_results[
+            "test_win"
+        ] >= TARGET_WIN_RATE
+    ]
+
     print()
-    print("=" * 100)
+    print(
+        "=" * 100
+    )
+
     print(
         "FINAL TEST >= 85%"
     )
-    print("=" * 100)
 
-    over_85 = final_df[
-        final_df[
-            "test_win"
-        ] >= TARGET_WIN_RATE
-    ].copy()
+    print(
+        "=" * 100
+    )
 
-    if over_85.empty:
+    if target.empty:
 
         print(
             "NONE"
@@ -2761,211 +2246,137 @@ def main():
     else:
 
         print(
-            over_85
-            .sort_values(
-                [
-                    "test_win",
-                    "test_pf",
-                    "test_average"
-                ],
-                ascending=False
-            )
-            .to_string(
+            target.to_string(
                 index=False
             )
         )
 
     # ========================================================
-    # 80% RESULTS
+    # BEST
     # ========================================================
 
+    best = final_results.iloc[0]
+
     print()
-    print("=" * 100)
     print(
-        "FINAL TEST >= 80%"
+        "=" * 100
     )
-    print("=" * 100)
 
-    over_80 = final_df[
-        final_df[
-            "test_win"
-        ] >= 80
-    ]
+    print(
+        "BEST FINAL TEST STRATEGY"
+    )
 
-    if over_80.empty:
+    print(
+        "=" * 100
+    )
 
-        print("NONE")
+    print(
+        f"\nPattern:"
+    )
+
+    print(
+        best["pattern"]
+    )
+
+    print(
+        f"\nTest trades:"
+        f" {int(best['test_trades']):,}"
+    )
+
+    print(
+        f"Test win rate:"
+        f" {best['test_win']:.2f}%"
+    )
+
+    print(
+        f"Test average:"
+        f" {best['test_average']:.4f}%"
+    )
+
+    print(
+        f"Test profit factor:"
+        f" {best['test_pf']:.3f}"
+    )
+
+    print(
+        f"Test total:"
+        f" {best['test_total']:.4f}%"
+    )
+
+    # ========================================================
+    # YEARLY
+    # ========================================================
+
+    test_conditions = generate_conditions(
+        test
+    )
+
+    yearly = yearly_analysis(
+        test,
+        best["pattern"],
+        test_conditions
+    )
+
+    print()
+    print(
+        "=" * 100
+    )
+
+    print(
+        "YEAR-BY-YEAR PERFORMANCE"
+    )
+
+    print(
+        "=" * 100
+    )
+
+    if yearly.empty:
+
+        print(
+            "No yearly results."
+        )
 
     else:
 
         print(
-            over_80
-            .head(50)
-            .to_string(
+            yearly.to_string(
                 index=False
             )
         )
 
     # ========================================================
-    # BEST RESULT
-    # ========================================================
-
-    best = final_df.iloc[0]
-
-    print()
-    print("=" * 100)
-    print(
-        "BEST FINAL TEST RESULT"
-    )
-    print("=" * 100)
-
-    print()
-    print(
-        f"Pattern       : "
-        f"{best['pattern']}"
-    )
-
-    print(
-        f"Direction     : "
-        f"{best['direction']}"
-    )
-
-    print(
-        f"Train trades  : "
-        f"{int(best['train_trades']):,}"
-    )
-
-    print(
-        f"Train win     : "
-        f"{best['train_win']:.2f}%"
-    )
-
-    print(
-        f"Validation    : "
-        f"{best['validation_win']:.2f}%"
-    )
-
-    print(
-        f"Test trades   : "
-        f"{int(best['test_trades']):,}"
-    )
-
-    print(
-        f"TEST WIN RATE : "
-        f"{best['test_win']:.2f}%"
-    )
-
-    print(
-        f"TEST AVG      : "
-        f"{best['test_average']:.4f}%"
-    )
-
-    print(
-        f"TEST PF       : "
-        f"{best['test_pf']:.3f}"
-    )
-
-    print(
-        f"TEST TOTAL    : "
-        f"{best['test_total']:.4f}%"
-    )
-
-    # ========================================================
-    # YEARLY STABILITY
+    # FILES
     # ========================================================
 
     print()
-    print("=" * 100)
     print(
-        "YEAR-BY-YEAR RESULTS OF TOP 10"
-    )
-    print("=" * 100)
-
-    for index, row in (
-        final_df
-        .head(10)
-        .iterrows()
-    ):
-
-        print()
-        print(
-            "-" * 100
-        )
-
-        print(
-            f"{index + 1}. "
-            f"{row['pattern']}"
-        )
-
-        print(
-            f"Direction: "
-            f"{row['direction']}"
-        )
-
-        yearly = yearly_results(
-            test,
-            row["pattern"],
-            row["direction"]
-        )
-
-        if yearly.empty:
-
-            print(
-                "No yearly data."
-            )
-
-        else:
-
-            print(
-                yearly
-                .to_string(
-                    index=False
-                )
-            )
-
-    # ========================================================
-    # FINAL MESSAGE
-    # ========================================================
-
-    print()
-    print("=" * 100)
-    print(
-        "SEARCH COMPLETE"
-    )
-    print("=" * 100)
-
-    print()
-    print(
-        "Files created:"
+        "=" * 100
     )
 
     print(
-        "EXHAUSTIVE_EOD_OPEN_TRAINING.csv"
+        "FILES CREATED"
     )
 
     print(
-        "EXHAUSTIVE_EOD_OPEN_VALIDATION.csv"
+        "=" * 100
     )
 
     print(
-        "EXHAUSTIVE_EOD_OPEN_FINAL_TEST.csv"
+        "BASE_STRATEGY_TRAINING.csv"
+    )
+
+    print(
+        "BASE_STRATEGY_VALIDATION.csv"
+    )
+
+    print(
+        "BASE_STRATEGY_FINAL_TEST.csv"
     )
 
     print()
-
-    if over_85.empty:
-
-        print(
-            "RESULT: NO 85%+ FINAL-TEST "
-            "PATTERN WAS FOUND."
-        )
-
-    else:
-
-        print(
-            "RESULT: 85%+ FINAL-TEST "
-            "PATTERN(S) FOUND."
-        )
+    print(
+        "SEARCH COMPLETE."
+    )
 
 
 # ============================================================
