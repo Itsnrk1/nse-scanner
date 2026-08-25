@@ -1,39 +1,28 @@
-"""
-================================================================================
-NSE Daily Scanner — runs automatically on GitHub's servers via GitHub Actions.
-================================================================================
-It checks each stock's most recently completed trading day against:
-
-1) 3-min candles 15:24 & 15:27 -> opposite trends,
-   15:24 volume > 15:27 volume
-
-2) 3-min candles 9:15 & 9:18 -> both match 15:24's direction
-
-3) 1-min candle 15:28 -> matches 15:24's direction,
-   15:28 volume > 15:29 volume
-
-4) 1-min candles 9:15 & 9:16 -> both match 15:28's direction
-
-This rule is DIRECTIONAL: a PASS results in either a LONG or SHORT entry
-at tomorrow's 9:15 open, depending on which way 15:24 went.
-"""
+# =============================================================================
+# NSE Daily Scanner — FAST VERSION
+# Runs automatically on GitHub Actions
+# =============================================================================
 
 # =============================================================================
 # SETUP
 # =============================================================================
-# pip install yfinance pandas nselib
+
+# pip install yfinance pandas nselib requests
 
 import time
 import sys
-import os
-from datetime import datetime, timedelta
+from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import pandas as pd
 
 try:
     import yfinance as yf
 except ImportError:
-    print("Missing dependency. Run: pip install yfinance pandas --break-system-packages")
+    print(
+        "Missing dependency. Run: "
+        "pip install yfinance pandas --break-system-packages"
+    )
     sys.exit(1)
 
 
@@ -93,15 +82,17 @@ try:
     from nselib import indices
 
     df = indices.constituent_stock_list(
-        index_category='BroadMarketIndices',
-        index_name='Nifty 500'
+        index_category="BroadMarketIndices",
+        index_name="Nifty 500"
     )
 
-    fetched = df['Symbol'].tolist()
+    fetched = df["Symbol"].tolist()
 
     if len(fetched) > 100:
         STOCK_UNIVERSE = fetched
-        print(f"Loaded {len(STOCK_UNIVERSE)} symbols from nselib (Nifty 500)")
+        print(
+            f"Loaded {len(STOCK_UNIVERSE)} symbols from nselib (Nifty 500)"
+        )
 
 except Exception as e:
     print(
@@ -111,30 +102,30 @@ except Exception as e:
 
 
 # =============================================================================
-# TRY NSE'S FULL OFFICIAL EQUITY LIST
+# TRY NSE FULL OFFICIAL EQUITY LIST
 # =============================================================================
 
 try:
     import requests
 
     headers = {
-        'User-Agent':
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
-            'AppleWebKit/537.36',
-        'Accept':
-            'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        "User-Agent":
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36",
+        "Accept":
+            "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     }
 
     session = requests.Session()
     session.headers.update(headers)
 
     session.get(
-        'https://www.nseindia.com',
+        "https://www.nseindia.com",
         timeout=20
     )
 
     resp = session.get(
-        'https://nsearchives.nseindia.com/content/equities/sec_list.csv',
+        "https://nsearchives.nseindia.com/content/equities/sec_list.csv",
         timeout=30
     )
 
@@ -145,7 +136,7 @@ try:
     full_df = pd.read_csv(StringIO(resp.text))
 
     symbol_col = next(
-        (c for c in full_df.columns if 'symbol' in c.lower()),
+        (c for c in full_df.columns if "symbol" in c.lower()),
         None
     )
 
@@ -156,7 +147,7 @@ try:
         )
 
     series_col = next(
-        (c for c in full_df.columns if 'series' in c.lower()),
+        (c for c in full_df.columns if "series" in c.lower()),
         None
     )
 
@@ -164,7 +155,7 @@ try:
         before = len(full_df)
 
         full_df = full_df[
-            full_df[series_col].astype(str).str.strip() == 'EQ'
+            full_df[series_col].astype(str).str.strip() == "EQ"
         ]
 
         print(
@@ -173,26 +164,26 @@ try:
         )
 
     name_col = next(
-        (c for c in full_df.columns if 'name' in c.lower()),
+        (c for c in full_df.columns if "name" in c.lower()),
         None
     )
 
     NON_STOCK_KEYWORDS = [
-        'ETF',
-        'LIQUID',
-        'GILT',
-        'BEES',
-        'FUND',
-        'INDEX FUND',
-        'EXCHANGE TRADED',
-        'MUTUAL FUND',
-        'NIFTY 50',
-        'NIFTY50 ',
-        'NIFTYIETF',
-        'BETA',
-        'MOMENTUM',
-        'ALPHA',
-        'QUALITY30'
+        "ETF",
+        "LIQUID",
+        "GILT",
+        "BEES",
+        "FUND",
+        "INDEX FUND",
+        "EXCHANGE TRADED",
+        "MUTUAL FUND",
+        "NIFTY 50",
+        "NIFTY50 ",
+        "NIFTYIETF",
+        "BETA",
+        "MOMENTUM",
+        "ALPHA",
+        "QUALITY30",
     ]
 
     if name_col is not None:
@@ -201,7 +192,7 @@ try:
         name_upper = full_df[name_col].astype(str).str.upper()
 
         mask = ~name_upper.str.contains(
-            '|'.join(NON_STOCK_KEYWORDS),
+            "|".join(NON_STOCK_KEYWORDS),
             na=False
         )
 
@@ -215,7 +206,7 @@ try:
     symbol_upper = full_df[symbol_col].astype(str).str.upper()
 
     sym_mask = ~symbol_upper.str.contains(
-        'ETF|IETF|BEES|LIQUID|GILT',
+        "ETF|IETF|BEES|LIQUID|GILT",
         na=False
     )
 
@@ -245,6 +236,7 @@ try:
             f"NSE's full equity list "
             f"(column: {symbol_col}) — using this broadest option"
         )
+
     else:
         print(
             f"NSE full list returned {len(full_list)} symbols, "
@@ -273,32 +265,22 @@ NEEDED_HM = [
 
 
 def evaluate_rows(rows):
-    """
-    rows: DataFrame with columns date, hm, open, close, volume.
-
-    Finds the latest date with all needed candles present and checks the rule.
-
-    This rule is DIRECTIONAL:
-    the resulting trade may be LONG or SHORT depending on
-    which way the 15:24 3-minute candle went.
-    """
 
     by_date = {}
 
     for _, r in rows.iterrows():
-        by_date.setdefault(r['date'], {})[r['hm']] = r
+        by_date.setdefault(r["date"], {})[r["hm"]] = r
 
     def valid_candle(r):
         try:
             return (
-                pd.notna(r['open']) and
-                pd.notna(r['close']) and
-                pd.notna(r['volume']) and
-                float(r['open']) > 0 and
-                float(r['close']) > 0 and
-                float(r['volume']) >= 0
+                pd.notna(r["open"]) and
+                pd.notna(r["close"]) and
+                pd.notna(r["volume"]) and
+                float(r["open"]) > 0 and
+                float(r["close"]) > 0 and
+                float(r["volume"]) >= 0
             )
-
         except (TypeError, ValueError):
             return False
 
@@ -312,7 +294,9 @@ def evaluate_rows(rows):
     )
 
     if not valid_dates:
-        return {"status": "INSUFFICIENT"}
+        return {
+            "status": "INSUFFICIENT"
+        }
 
     d = valid_dates[-1]
     m = by_date[d]
@@ -321,119 +305,141 @@ def evaluate_rows(rows):
         return (x > 0) - (x < 0)
 
     def aggregate_3m(minutes):
+
         rows_3m = [m[hm] for hm in minutes]
 
         return {
-            'open': float(rows_3m[0]['open']),
-            'close': float(rows_3m[-1]['close']),
-            'volume': sum(
-                float(r['volume'])
+            "open": float(rows_3m[0]["open"]),
+            "close": float(rows_3m[-1]["close"]),
+            "volume": sum(
+                float(r["volume"])
                 for r in rows_3m
             ),
         }
 
-    candle_1524 = aggregate_3m([1524, 1525, 1526])
-    candle_1527 = aggregate_3m([1527, 1528, 1529])
+    # -------------------------------------------------------------------------
+    # 3-MIN CANDLES
+    # -------------------------------------------------------------------------
 
-    candle_915 = aggregate_3m([915, 916, 917])
-    candle_918 = aggregate_3m([918, 919, 920])
+    candle_1524 = aggregate_3m(
+        [1524, 1525, 1526]
+    )
 
+    candle_1527 = aggregate_3m(
+        [1527, 1528, 1529]
+    )
 
-    # =========================================================================
-    # CONDITION 1
-    # 3-min 15:24 and 15:27 must be opposite trends.
-    # 15:24 volume must be greater than 15:27 volume.
-    # =========================================================================
+    candle_915 = aggregate_3m(
+        [915, 916, 917]
+    )
+
+    candle_918 = aggregate_3m(
+        [918, 919, 920]
+    )
+
+    # -------------------------------------------------------------------------
+    # DIRECTIONS
+    # -------------------------------------------------------------------------
 
     dir_1524 = sign(
-        candle_1524['close'] -
-        candle_1524['open']
+        candle_1524["close"] -
+        candle_1524["open"]
     )
 
     dir_1527 = sign(
-        candle_1527['close'] -
-        candle_1527['open']
+        candle_1527["close"] -
+        candle_1527["open"]
     )
 
-    vol_1524 = candle_1524['volume']
-    vol_1527 = candle_1527['volume']
+    # -------------------------------------------------------------------------
+    # CONDITION 1
+    #
+    # 15:27 volume > 15:24 volume
+    #
+    # NO opposite-trend requirement.
+    # -------------------------------------------------------------------------
+
+    vol_1524 = candle_1524["volume"]
+    vol_1527 = candle_1527["volume"]
 
     cond1 = (
-        dir_1524 != 0 and
         dir_1527 != 0 and
-        dir_1524 != dir_1527 and
-        vol_1524 > vol_1527
+        vol_1527 > vol_1524
     )
 
-
-    # =========================================================================
+    # -------------------------------------------------------------------------
     # CONDITION 2
-    # 3-min 9:15 and 9:18 must both match 15:24 direction.
-    # =========================================================================
+    #
+    # 3-min 9:15 and 9:18
+    # must both match 3-min 15:27.
+    # -------------------------------------------------------------------------
 
     dir_915_3m = sign(
-        candle_915['close'] -
-        candle_915['open']
+        candle_915["close"] -
+        candle_915["open"]
     )
 
     dir_918_3m = sign(
-        candle_918['close'] -
-        candle_918['open']
+        candle_918["close"] -
+        candle_918["open"]
     )
 
     cond2 = (
-        dir_915_3m == dir_1524 and
-        dir_918_3m == dir_1524
+        dir_1527 != 0 and
+        dir_915_3m == dir_1527 and
+        dir_918_3m == dir_1527
     )
 
-
-    # =========================================================================
+    # -------------------------------------------------------------------------
     # CONDITION 3
-    # 1-min 15:28 must match 15:24 direction.
-    # 15:28 volume must be GREATER than 15:29 volume.
-    # =========================================================================
+    #
+    # 1-min 15:28 must match 3-min 15:27.
+    # 15:28 volume > 15:29 volume.
+    # -------------------------------------------------------------------------
 
     dir_1528_1m = sign(
-        m[1528]['close'] -
-        m[1528]['open']
+        m[1528]["close"] -
+        m[1528]["open"]
     )
 
     dir_1529_1m = sign(
-        m[1529]['close'] -
-        m[1529]['open']
+        m[1529]["close"] -
+        m[1529]["open"]
     )
 
     cond3 = (
         dir_1528_1m != 0 and
-        dir_1528_1m == dir_1524 and
-        m[1528]['volume'] > m[1529]['volume']
+        dir_1528_1m == dir_1527 and
+        m[1528]["volume"] >
+        m[1529]["volume"]
     )
 
-
-    # =========================================================================
+    # -------------------------------------------------------------------------
     # CONDITION 4
-    # 1-min 9:15 and 9:16 must BOTH match 15:28 direction.
-    # =========================================================================
+    #
+    # 1-min 9:15 and 9:16
+    # must both match 1-min 15:28.
+    # -------------------------------------------------------------------------
 
     dir_915_1m = sign(
-        m[915]['close'] -
-        m[915]['open']
+        m[915]["close"] -
+        m[915]["open"]
     )
 
     dir_916_1m = sign(
-        m[916]['close'] -
-        m[916]['open']
+        m[916]["close"] -
+        m[916]["open"]
     )
 
     cond4 = (
+        dir_1528_1m != 0 and
         dir_915_1m == dir_1528_1m and
         dir_916_1m == dir_1528_1m
     )
 
-
-    # =========================================================================
+    # -------------------------------------------------------------------------
     # FINAL RESULT
-    # =========================================================================
+    # -------------------------------------------------------------------------
 
     passed = (
         cond1 and
@@ -442,12 +448,13 @@ def evaluate_rows(rows):
         cond4
     )
 
+    # FINAL DIRECTION IS DETERMINED BY 3-MIN 15:27
     direction = (
-        'LONG'
-        if dir_1524 == 1
+        "LONG"
+        if dir_1527 == 1
         else (
-            'SHORT'
-            if dir_1524 == -1
+            "SHORT"
+            if dir_1527 == -1
             else None
         )
     )
@@ -476,10 +483,6 @@ def evaluate_rows(rows):
 # =============================================================================
 
 def fetch_symbol_rows(symbol):
-    """
-    Pulls recent 1-min data via yfinance and reshapes it
-    for evaluate_rows.
-    """
 
     ticker = symbol + ".NS"
 
@@ -503,6 +506,7 @@ def fetch_symbol_rows(symbol):
                 break
 
         except Exception as e:
+
             last_error = e
 
         if attempt < 2:
@@ -518,78 +522,255 @@ def fetch_symbol_rows(symbol):
     df = df.reset_index()
 
     if isinstance(df.columns, pd.MultiIndex):
-        df.columns = [c[0] for c in df.columns]
+
+        df.columns = [
+            c[0]
+            for c in df.columns
+        ]
 
     ts_col = (
-        'Datetime'
-        if 'Datetime' in df.columns
+        "Datetime"
+        if "Datetime" in df.columns
         else df.columns[0]
     )
 
-    ts = pd.to_datetime(df[ts_col])
+    ts = pd.to_datetime(
+        df[ts_col]
+    )
 
     if ts.dt.tz is not None:
-        ts = ts.dt.tz_convert('Asia/Kolkata')
+
+        ts = ts.dt.tz_convert(
+            "Asia/Kolkata"
+        )
 
     out = pd.DataFrame({
-        'date': ts.dt.strftime('%Y-%m-%d'),
 
-        'hm': (
+        "date":
+            ts.dt.strftime("%Y-%m-%d"),
+
+        "hm":
             ts.dt.hour * 100 +
-            ts.dt.minute
-        ),
+            ts.dt.minute,
 
-        'open': pd.to_numeric(
-            df['Open'],
-            errors='coerce'
-        ).values,
+        "open":
+            pd.to_numeric(
+                df["Open"],
+                errors="coerce"
+            ).values,
 
-        'close': pd.to_numeric(
-            df['Close'],
-            errors='coerce'
-        ).values,
+        "close":
+            pd.to_numeric(
+                df["Close"],
+                errors="coerce"
+            ).values,
 
-        'volume': pd.to_numeric(
-            df['Volume'],
-            errors='coerce'
-        ).values,
+        "volume":
+            pd.to_numeric(
+                df["Volume"],
+                errors="coerce"
+            ).values,
     })
 
     out = out.drop_duplicates(
-        subset=['date', 'hm'],
-        keep='last'
+        subset=[
+            "date",
+            "hm"
+        ],
+        keep="last"
     )
 
     out = out[
-        out['hm'].between(915, 1529)
+        out["hm"].between(
+            915,
+            1529
+        )
     ]
 
     return out
 
 
 # =============================================================================
+# FAST PARALLEL SCANNER
+# =============================================================================
+
+# 8-12 is a reasonable range.
+# Increase carefully because Yahoo may rate-limit aggressive requests.
+MAX_WORKERS = 10
+
+
+def scan_one_symbol(symbol):
+
+    try:
+
+        rows = fetch_symbol_rows(
+            symbol
+        )
+
+        if rows is None or rows.empty:
+
+            return {
+                "symbol": symbol,
+                "status": "SKIP"
+            }
+
+        result = evaluate_rows(
+            rows
+        )
+
+        result["symbol"] = symbol
+
+        return result
+
+    except Exception as e:
+
+        return {
+            "symbol": symbol,
+            "status": "ERROR",
+            "error": str(e)
+        }
+
+
+def scan_all_symbols(symbols):
+
+    all_results = []
+
+    total = len(symbols)
+
+    completed = 0
+
+    print(
+        f"Scanning {total} symbols "
+        f"with {MAX_WORKERS} "
+        f"parallel workers...\n"
+    )
+
+    with ThreadPoolExecutor(
+        max_workers=MAX_WORKERS
+    ) as executor:
+
+        future_to_symbol = {
+            executor.submit(
+                scan_one_symbol,
+                symbol
+            ): symbol
+
+            for symbol in symbols
+        }
+
+        for future in as_completed(
+            future_to_symbol
+        ):
+
+            symbol = (
+                future_to_symbol[future]
+            )
+
+            try:
+
+                result = (
+                    future.result()
+                )
+
+            except Exception as e:
+
+                result = {
+                    "symbol": symbol,
+                    "status": "ERROR",
+                    "error": str(e)
+                }
+
+            all_results.append(
+                result
+            )
+
+            completed += 1
+
+            if result["status"] == "PASS":
+
+                print(
+                    f"[{completed}/{total}] "
+                    f"{symbol:<15} "
+                    f"MATCH "
+                    f"({result['direction']}) "
+                    f"(signal day "
+                    f"{result['date']})"
+                )
+
+            elif result["status"] == "ERROR":
+
+                print(
+                    f"[{completed}/{total}] "
+                    f"{symbol:<15} "
+                    f"ERROR: "
+                    f"{result.get('error', 'unknown error')}"
+                )
+
+            elif result["status"] == "SKIP":
+
+                print(
+                    f"[{completed}/{total}] "
+                    f"{symbol:<15} "
+                    f"skipped (no data)"
+                )
+
+            elif result["status"] == "INSUFFICIENT":
+
+                print(
+                    f"[{completed}/{total}] "
+                    f"{symbol:<15} "
+                    f"skipped "
+                    f"(insufficient data)"
+                )
+
+            else:
+
+                print(
+                    f"[{completed}/{total}] "
+                    f"{symbol:<15} "
+                    f"no match"
+                )
+
+    # Keep output deterministic.
+    all_results.sort(
+        key=lambda x:
+            x.get("symbol", "")
+    )
+
+    return all_results
+
+
+# =============================================================================
 # HTML REPORT
 # =============================================================================
 
-def generate_html_report(all_results, scan_time):
+def generate_html_report(
+    all_results,
+    scan_time
+):
 
     matches = [
-        r for r in all_results
-        if r['status'] == 'PASS'
+        r
+        for r in all_results
+        if r["status"] == "PASS"
     ]
 
     checked = [
-        r for r in all_results
-        if r['status'] in ('PASS', 'FAIL')
+        r
+        for r in all_results
+        if r["status"]
+        in ("PASS", "FAIL")
     ]
 
     skipped = [
-        r for r in all_results
-        if r['status'] not in ('PASS', 'FAIL')
+        r
+        for r in all_results
+        if r["status"]
+        not in ("PASS", "FAIL")
     ]
 
-
     def cond_badge(ok):
+
         return (
             f'<span class="badge '
             f'{"pass" if ok else "fail"}">'
@@ -597,15 +778,15 @@ def generate_html_report(all_results, scan_time):
             f'</span>'
         )
 
-
     if matches:
 
         matches_html = (
             '<div class="match-list">' +
-            ''.join(
+            "".join(
+
                 f'<div class="match-item">'
                 f'<span class="dir-badge '
-                f'{"long" if r["direction"]=="LONG" else "short"}">'
+                f'{"long" if r["direction"] == "LONG" else "short"}">'
                 f'{r["direction"]}'
                 f'</span> '
                 f'{r["symbol"]} '
@@ -613,9 +794,11 @@ def generate_html_report(all_results, scan_time):
                 f'(signal day {r["date"]})'
                 f'</span>'
                 f'</div>'
+
                 for r in matches
+
             ) +
-            '</div>'
+            "</div>"
         )
 
         banner_class = "banner-pass"
@@ -629,40 +812,49 @@ def generate_html_report(all_results, scan_time):
 
         matches_html = (
             '<p class="none-text">'
-            'No stocks matched the rule on this run.'
-            '</p>'
+            "No stocks matched the rule on this run."
+            "</p>"
         )
 
         banner_class = "banner-none"
+
         banner_text = "No matches today"
 
-
-    rows_html = ''
+    rows_html = ""
 
     for r in sorted(
         checked,
         key=lambda x: (
-            x['status'] != 'PASS',
-            x['symbol']
+            x["status"] != "PASS",
+            x["symbol"]
         )
     ):
 
         dir_display = (
-            r.get('direction') or '—'
+            r.get("direction")
+            or "—"
         )
 
         rows_html += f"""
         <tr>
-          <td class="sym">{r['symbol']}</td>
-          <td>{r.get('date','—')}</td>
-          <td>{dir_display}</td>
+          <td class="sym">
+            {r['symbol']}
+          </td>
+
+          <td>
+            {r.get('date', '—')}
+          </td>
+
+          <td>
+            {dir_display}
+          </td>
 
           <td>
             {cond_badge(r.get('cond1'))}<br>
             <small>
-              {r.get('details', {}).get('15:24_vol','—')}
-              /
-              {r.get('details', {}).get('15:27_vol','—')}
+              {r.get('details', {}).get('15:24_vol', '—')}
+              &nbsp;/&nbsp;
+              {r.get('details', {}).get('15:27_vol', '—')}
             </small>
           </td>
 
@@ -673,9 +865,9 @@ def generate_html_report(all_results, scan_time):
           <td>
             {cond_badge(r.get('cond3'))}<br>
             <small>
-              {r.get('details', {}).get('15:28_vol','—')}
+              {r.get('details', {}).get('15:28_vol', '—')}
               &gt;
-              {r.get('details', {}).get('15:29_vol','—')}
+              {r.get('details', {}).get('15:29_vol', '—')}
             </small>
           </td>
 
@@ -693,22 +885,23 @@ def generate_html_report(all_results, scan_time):
         </tr>
         """
 
-
-    skipped_html = ''
+    skipped_html = ""
 
     if skipped:
 
         skipped_html = (
-            '<p class="skip-note">' +
+            '<p class="skip-note">'
+            +
             f"{len(skipped)} symbol(s) skipped "
-            f"(insufficient data or fetch error): " +
-            ', '.join(
-                r['symbol']
+            f"(insufficient data or fetch error): "
+            +
+            ", ".join(
+                r["symbol"]
                 for r in skipped
-            ) +
-            '</p>'
+            )
+            +
+            "</p>"
         )
-
 
     html = f"""<!DOCTYPE html>
 
@@ -919,10 +1112,10 @@ Generated {scan_time} · data via Yahoo Finance
 <th>Symbol</th>
 <th>Signal day</th>
 <th>Direction</th>
-<th>15:24/27 opp,vol</th>
-<th>9:15/18 match</th>
-<th>15:28 match+vol</th>
-<th>9:15/16 match</th>
+<th>15:27 vol &gt; 15:24</th>
+<th>3-min morning</th>
+<th>15:28 match + vol</th>
+<th>1-min morning</th>
 <th>Result</th>
 </tr>
 
@@ -936,24 +1129,40 @@ Generated {scan_time} · data via Yahoo Finance
 
 Rule:
 
-3-min 15:24 &amp; 15:27 opposite trends with
-15:24 volume &gt; 15:27 ·
+<br>
+
+3-min 15:27 volume &gt; 15:24.
+No opposite-trend requirement.
+
+<br>
 
 3-min 9:15 &amp; 9:18 both match
-15:24's direction ·
+15:27's direction.
 
-1-min 15:28 matches 15:24's direction with
-15:28 volume &gt; 15:29 volume ·
+<br>
+
+1-min 15:28 matches
+3-min 15:27's direction with
+15:28 volume &gt; 15:29 volume.
+
+<br>
 
 1-min 9:15 &amp; 9:16 both match
 15:28's direction.
 
-A PASS results in a LONG or SHORT entry
-at the next 9:15 open (direction shown per stock),
-exit 15:27.
+<br>
 
-Re-run the script to regenerate this page
-with fresh data.
+A PASS results in a LONG or SHORT entry
+at the next 9:15 open, with direction
+determined by 3-min 15:27.
+Exit 15:27.
+
+<br>
+
+Scanner uses {MAX_WORKERS}
+parallel workers.
+
+<br>
 
 Scanned {len(all_results)} stocks this run.
 
@@ -966,11 +1175,10 @@ Scanned {len(all_results)} stocks this run.
 </html>
 """
 
-
     with open(
-        'index.html',
-        'w',
-        encoding='utf-8'
+        "index.html",
+        "w",
+        encoding="utf-8"
     ) as f:
 
         f.write(html)
@@ -982,104 +1190,23 @@ Scanned {len(all_results)} stocks this run.
 
 def main():
 
-    print(
-        f"Scanning {len(STOCK_UNIVERSE)} symbols..."
+    all_results = scan_all_symbols(
+        STOCK_UNIVERSE
     )
-
-    print(
-        "(This calls Yahoo Finance once per symbol "
-        "with a short delay between calls to avoid "
-        "rate-limiting — expect roughly 1-2 seconds "
-        "per stock.)\n"
-    )
-
-
-    all_results = []
-
-
-    for i, symbol in enumerate(
-        STOCK_UNIVERSE,
-        1
-    ):
-
-        try:
-
-            rows = fetch_symbol_rows(symbol)
-
-            if rows is None or rows.empty:
-
-                all_results.append({
-                    "symbol": symbol,
-                    "status": "SKIP"
-                })
-
-                print(
-                    f"[{i}/{len(STOCK_UNIVERSE)}] "
-                    f"{symbol:<15} skipped (no data)"
-                )
-
-                continue
-
-
-            result = evaluate_rows(rows)
-
-            result['symbol'] = symbol
-
-            all_results.append(result)
-
-
-            if result['status'] == 'PASS':
-
-                print(
-                    f"[{i}/{len(STOCK_UNIVERSE)}] "
-                    f"{symbol:<15} MATCH "
-                    f"({result['direction']}) "
-                    f"(signal day {result['date']})"
-                )
-
-            elif result['status'] == 'FAIL':
-
-                print(
-                    f"[{i}/{len(STOCK_UNIVERSE)}] "
-                    f"{symbol:<15} no match"
-                )
-
-            else:
-
-                print(
-                    f"[{i}/{len(STOCK_UNIVERSE)}] "
-                    f"{symbol:<15} skipped "
-                    f"(insufficient data)"
-                )
-
-
-        except Exception as e:
-
-            all_results.append({
-                "symbol": symbol,
-                "status": "ERROR"
-            })
-
-            print(
-                f"[{i}/{len(STOCK_UNIVERSE)}] "
-                f"{symbol:<15} ERROR: {e}"
-            )
-
 
     matches = [
-        r for r in all_results
-        if r['status'] == 'PASS'
+        r
+        for r in all_results
+        if r["status"] == "PASS"
     ]
 
-
     print("\n" + "=" * 60)
-
 
     if matches:
 
         print(
             f"MATCHES FOUND ({len(matches)}) "
-            f"— candidates for entry at next 9:15 open:"
+            "— candidates for entry at next 9:15 open:"
         )
 
         for r in matches:
@@ -1092,14 +1219,14 @@ def main():
 
     else:
 
-        print("NO MATCHES today.")
-
+        print(
+            "NO MATCHES today."
+        )
 
     print("=" * 60)
 
-
     scan_time = datetime.now().strftime(
-        '%Y-%m-%d %H:%M'
+        "%Y-%m-%d %H:%M"
     )
 
     generate_html_report(
@@ -1113,4 +1240,5 @@ def main():
 
 
 if __name__ == "__main__":
+
     main()
