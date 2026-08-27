@@ -1,24 +1,35 @@
 # =============================================================================
-# NSE DAILY SCANNER — FAST VERSION
+# NSE DAILY SCANNER — FAST / IMPROVED VERSION
 # =============================================================================
-# Strategy logic:
 #
-# 1) 3-min 15:24 and 15:27 must be SAME TREND
-#    15:27 volume > 15:24 volume
+# FINAL STRATEGY CONDITIONS
 #
-# 2) 3-min 9:15 and 9:18 must BOTH match 15:27 direction
+# 1) 3-MIN:
+#       15:24 and 15:27 must be OPPOSITE trends
+#       15:27 volume > 15:24 volume
 #
-# 3) 1-min 15:28 must match 3-min 15:27 direction
-#    15:28 volume > 15:29 volume
+# 2) 3-MIN MORNING:
+#       9:15 and 9:18 must BOTH match 15:27 direction
 #
-# 4) 1-min 9:15 and 9:16 must BOTH match 1-min 15:28 direction
+# 3) 1-MIN:
+#       15:28 and 15:29 must be OPPOSITE trends
+#       15:28 volume > 15:29 volume
 #
-# 5) Final LONG/SHORT direction is determined by 3-min 15:27
+# 4) 1-MIN / 3-MIN CONFIRMATION:
+#       1-min 15:28 must match 3-min 15:27 direction
 #
-# Entry: Next trading day at 9:15 open
-# Exit: 15:27
+# 5) 1-MIN MORNING:
+#       9:15 and 9:16 must BOTH match 15:28 direction
 #
-# Scanner uses parallel workers for faster scanning.
+# 6) FINAL DIRECTION:
+#       Determined by 3-min 15:27
+#
+# ENTRY:
+#       Next trading day at 9:15 open
+#
+# EXIT:
+#       15:27
+#
 # =============================================================================
 
 
@@ -30,23 +41,51 @@
 
 import time
 import sys
+
 from datetime import datetime
-from concurrent.futures import ThreadPoolExecutor, as_completed
+
+from concurrent.futures import (
+    ThreadPoolExecutor,
+    as_completed
+)
 
 import pandas as pd
 
 
 try:
+
     import yfinance as yf
 
 except ImportError:
 
     print(
-        "Missing dependency. Run: "
-        "pip install yfinance pandas --break-system-packages"
+        "Missing dependency. Run:"
+        " pip install yfinance pandas nselib requests "
+        "--break-system-packages"
     )
 
     sys.exit(1)
+
+
+# =============================================================================
+# CONFIGURATION
+# =============================================================================
+
+# Number of stocks downloaded simultaneously.
+#
+# 10 is a good starting point.
+#
+# If Yahoo starts rate limiting:
+#     try 6 or 8.
+#
+# If everything is stable:
+#     try 12.
+#
+MAX_WORKERS = 10
+
+
+# Number of Yahoo download attempts.
+MAX_RETRIES = 3
 
 
 # =============================================================================
@@ -54,49 +93,232 @@ except ImportError:
 # =============================================================================
 
 NIFTY_50 = [
-    "RELIANCE", "TCS", "HDFCBANK", "ICICIBANK", "INFY", "HINDUNILVR", "ITC",
-    "SBIN", "BHARTIARTL", "KOTAKBANK", "LT", "AXISBANK", "BAJFINANCE",
-    "ASIANPAINT", "MARUTI", "HCLTECH", "SUNPHARMA", "TITAN", "ULTRACEMCO",
-    "NESTLEIND", "WIPRO", "ADANIENT", "ONGC", "NTPC", "POWERGRID", "M&M",
-    "JSWSTEEL", "TATASTEEL", "TATAMOTORS", "COALINDIA", "BAJAJFINSV",
-    "TECHM", "INDUSINDBK", "HDFCLIFE", "SBILIFE", "GRASIM", "DRREDDY",
-    "DIVISLAB", "EICHERMOT", "BRITANNIA", "CIPLA", "APOLLOHOSP",
-    "HEROMOTOCO", "BPCL", "TATACONSUM", "ADANIPORTS", "HINDALCO",
-    "BAJAJ-AUTO", "SHRIRAMFIN", "LTIM", "UPL",
+
+    "RELIANCE",
+    "TCS",
+    "HDFCBANK",
+    "ICICIBANK",
+    "INFY",
+    "HINDUNILVR",
+    "ITC",
+    "SBIN",
+    "BHARTIARTL",
+    "KOTAKBANK",
+    "LT",
+    "AXISBANK",
+    "BAJFINANCE",
+    "ASIANPAINT",
+    "MARUTI",
+    "HCLTECH",
+    "SUNPHARMA",
+    "TITAN",
+    "ULTRACEMCO",
+    "NESTLEIND",
+    "WIPRO",
+    "ADANIENT",
+    "ONGC",
+    "NTPC",
+    "POWERGRID",
+    "M&M",
+    "JSWSTEEL",
+    "TATASTEEL",
+    "TATAMOTORS",
+    "COALINDIA",
+    "BAJAJFINSV",
+    "TECHM",
+    "INDUSINDBK",
+    "HDFCLIFE",
+    "SBILIFE",
+    "GRASIM",
+    "DRREDDY",
+    "DIVISLAB",
+    "EICHERMOT",
+    "BRITANNIA",
+    "CIPLA",
+    "APOLLOHOSP",
+    "HEROMOTOCO",
+    "BPCL",
+    "TATACONSUM",
+    "ADANIPORTS",
+    "HINDALCO",
+    "BAJAJ-AUTO",
+    "SHRIRAMFIN",
+    "LTIM",
+    "UPL",
+
 ]
 
 
 NIFTY_NEXT_150 = [
-    "ABB", "ADANIENSOL", "ADANIGREEN", "ADANIPOWER", "AMBUJACEM", "DMART",
-    "BANKBARODA", "BERGEPAINT", "BEL", "BOSCHLTD", "CANBK", "CHOLAFIN",
-    "COLPAL", "DABUR", "DLF", "GAIL", "GODREJCP", "HAVELLS", "HAL",
-    "ICICIGI", "ICICIPRULI", "IOC", "IRCTC", "IRFC", "JINDALSTEL", "JIOFIN",
-    "LICI", "LODHA", "LUPIN", "MARICO", "MOTHERSON", "MRF", "NAUKRI",
-    "NHPC", "PIDILITIND", "PFC", "PNB", "RECLTD", "SIEMENS", "SRF",
-    "TATAPOWER", "TORNTPHARM", "TVSMOTOR", "UNIONBANK", "VBL", "VEDL",
-    "ZOMATO", "ZYDUSLIFE", "PAYTM", "POLICYBZR", "PERSISTENT", "COFORGE",
-    "MPHASIS", "OBEROIRLTY", "PIIND", "ASHOKLEY", "AUROPHARMA", "BANDHANBNK",
-    "BATAINDIA", "BHARATFORG", "BHEL", "CGPOWER", "CONCOR", "CUMMINSIND",
-    "DEEPAKNTR", "DIXON", "ESCORTS", "EXIDEIND", "FEDERALBNK", "GLAND",
-    "GMRAIRPORT", "GODREJPROP", "GUJGASLTD", "HDFCAMC", "HINDPETRO",
-    "IDEA", "IDFCFIRSTB", "IGL", "INDHOTEL", "INDIGO", "INDUSTOWER",
-    "IPCALAB", "JSWENERGY", "JUBLFOOD", "KALYANKJIL", "L&TFH", "LALPATHLAB",
-    "LAURUSLABS", "LTTS", "M&MFIN", "MANKIND", "MAXHEALTH", "METROPOLIS",
-    "MFSL", "MUTHOOTFIN", "NATIONALUM", "NAVINFLUOR", "NMDC", "OFSS",
-    "PAGEIND", "PATANJALI", "PETRONET", "PHOENIXLTD", "POLYCAB", "PRESTIGE",
-    "RAMCOCEM", "RVNL", "SAIL", "SBICARD", "SCHAEFFLER", "SHREECEM",
-    "SJVN", "SOLARINDS", "SONACOMS", "STARHEALTH", "SUNDARMFIN", "SUPREMEIND",
-    "SUZLON", "SYNGENE", "TATACHEM", "TATACOMM", "TATAELXSI", "THERMAX",
-    "TIINDIA", "TORNTPOWER", "TRENT", "TRIDENT", "UBL", "UCOBANK",
-    "VOLTAS", "WHIRLPOOL", "YESBANK", "ZEEL", "ABCAPITAL", "ABFRL",
-    "ALKEM", "APLAPOLLO", "APOLLOTYRE", "ASTRAL", "AUBANK", "BALKRISIND",
-    "BANKINDIA", "BSOFT", "CANFINHOME", "CENTRALBK", "CROMPTON", "CYIENT",
-    "DALBHARAT", "DELHIVERY", "DEVYANI", "EMAMILTD", "GICRE", "GLENMARK",
-    "GNFC", "GODIGIT", "GRANULES", "GRSE", "HFCL", "HONAUT",
+
+    "ABB",
+    "ADANIENSOL",
+    "ADANIGREEN",
+    "ADANIPOWER",
+    "AMBUJACEM",
+    "DMART",
+    "BANKBARODA",
+    "BERGEPAINT",
+    "BEL",
+    "BOSCHLTD",
+    "CANBK",
+    "CHOLAFIN",
+    "COLPAL",
+    "DABUR",
+    "DLF",
+    "GAIL",
+    "GODREJCP",
+    "HAVELLS",
+    "HAL",
+    "ICICIGI",
+    "ICICIPRULI",
+    "IOC",
+    "IRCTC",
+    "IRFC",
+    "JINDALSTEL",
+    "JIOFIN",
+    "LICI",
+    "LODHA",
+    "LUPIN",
+    "MARICO",
+    "MOTHERSON",
+    "MRF",
+    "NAUKRI",
+    "NHPC",
+    "PIDILITIND",
+    "PFC",
+    "PNB",
+    "RECLTD",
+    "SIEMENS",
+    "SRF",
+    "TATAPOWER",
+    "TORNTPHARM",
+    "TVSMOTOR",
+    "UNIONBANK",
+    "VBL",
+    "VEDL",
+    "ZOMATO",
+    "ZYDUSLIFE",
+    "PAYTM",
+    "POLICYBZR",
+    "PERSISTENT",
+    "COFORGE",
+    "MPHASIS",
+    "OBEROIRLTY",
+    "PIIND",
+    "ASHOKLEY",
+    "AUROPHARMA",
+    "BANDHANBNK",
+    "BATAINDIA",
+    "BHARATFORG",
+    "BHEL",
+    "CGPOWER",
+    "CONCOR",
+    "CUMMINSIND",
+    "DEEPAKNTR",
+    "DIXON",
+    "ESCORTS",
+    "EXIDEIND",
+    "FEDERALBNK",
+    "GLAND",
+    "GMRAIRPORT",
+    "GODREJPROP",
+    "GUJGASLTD",
+    "HDFCAMC",
+    "HINDPETRO",
+    "IDEA",
+    "IDFCFIRSTB",
+    "IGL",
+    "INDHOTEL",
+    "INDIGO",
+    "INDUSTOWER",
+    "IPCALAB",
+    "JSWENERGY",
+    "JUBLFOOD",
+    "KALYANKJIL",
+    "L&TFH",
+    "LALPATHLAB",
+    "LAURUSLABS",
+    "LTTS",
+    "M&MFIN",
+    "MANKIND",
+    "MAXHEALTH",
+    "METROPOLIS",
+    "MFSL",
+    "MUTHOOTFIN",
+    "NATIONALUM",
+    "NAVINFLUOR",
+    "NMDC",
+    "OFSS",
+    "PAGEIND",
+    "PATANJALI",
+    "PETRONET",
+    "PHOENIXLTD",
+    "POLYCAB",
+    "PRESTIGE",
+    "RAMCOCEM",
+    "RVNL",
+    "SAIL",
+    "SBICARD",
+    "SCHAEFFLER",
+    "SHREECEM",
+    "SJVN",
+    "SOLARINDS",
+    "SONACOMS",
+    "STARHEALTH",
+    "SUNDARMFIN",
+    "SUPREMEIND",
+    "SUZLON",
+    "SYNGENE",
+    "TATACHEM",
+    "TATACOMM",
+    "TATAELXSI",
+    "THERMAX",
+    "TIINDIA",
+    "TORNTPOWER",
+    "TRENT",
+    "TRIDENT",
+    "UBL",
+    "UCOBANK",
+    "VOLTAS",
+    "WHIRLPOOL",
+    "YESBANK",
+    "ZEEL",
+    "ABCAPITAL",
+    "ABFRL",
+    "ALKEM",
+    "APLAPOLLO",
+    "APOLLOTYRE",
+    "ASTRAL",
+    "AUBANK",
+    "BALKRISIND",
+    "BANKINDIA",
+    "BSOFT",
+    "CANFINHOME",
+    "CENTRALBK",
+    "CROMPTON",
+    "CYIENT",
+    "DALBHARAT",
+    "DELHIVERY",
+    "DEVYANI",
+    "EMAMILTD",
+    "GICRE",
+    "GLENMARK",
+    "GNFC",
+    "GODIGIT",
+    "GRANULES",
+    "GRSE",
+    "HFCL",
+    "HONAUT",
+
 ]
 
 
-STOCK_UNIVERSE = NIFTY_50 + NIFTY_NEXT_150
+STOCK_UNIVERSE = (
+    NIFTY_50
+    +
+    NIFTY_NEXT_150
+)
 
 
 # =============================================================================
@@ -108,26 +330,40 @@ try:
     from nselib import indices
 
     df = indices.constituent_stock_list(
+
         index_category="BroadMarketIndices",
+
         index_name="Nifty 500"
+
     )
 
-    fetched = df["Symbol"].tolist()
+
+    fetched = (
+        df["Symbol"]
+        .tolist()
+    )
+
 
     if len(fetched) > 100:
 
         STOCK_UNIVERSE = fetched
 
         print(
-            f"Loaded {len(STOCK_UNIVERSE)} symbols from "
-            f"nselib (Nifty 500)"
+            f"Loaded "
+            f"{len(STOCK_UNIVERSE)} "
+            f"symbols from nselib "
+            f"(Nifty 500)"
         )
+
 
 except Exception as e:
 
     print(
-        f"nselib Nifty 500 fetch failed ({e}) — "
-        f"keeping current {len(STOCK_UNIVERSE)}-stock list"
+
+        f"nselib Nifty 500 fetch failed "
+        f"({e}) — keeping current "
+        f"{len(STOCK_UNIVERSE)}-stock list"
+
     )
 
 
@@ -139,88 +375,151 @@ try:
 
     import requests
 
+
     headers = {
+
         "User-Agent":
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "Mozilla/5.0 "
+            "(Windows NT 10.0; Win64; x64) "
             "AppleWebKit/537.36",
 
         "Accept":
-            "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "text/html,application/xhtml+xml,"
+            "application/xml;q=0.9,*/*;q=0.8",
+
     }
+
 
     session = requests.Session()
 
-    session.headers.update(headers)
+    session.headers.update(
+        headers
+    )
+
 
     session.get(
+
         "https://www.nseindia.com",
+
         timeout=20
+
     )
 
+
     resp = session.get(
-        "https://nsearchives.nseindia.com/content/equities/sec_list.csv",
+
+        "https://nsearchives.nseindia.com/"
+        "content/equities/sec_list.csv",
+
         timeout=30
+
     )
+
 
     resp.raise_for_status()
 
+
     from io import StringIO
 
+
     full_df = pd.read_csv(
-        StringIO(resp.text)
+
+        StringIO(
+            resp.text
+        )
+
     )
 
+
     symbol_col = next(
+
         (
+
             c
+
             for c in full_df.columns
-            if "symbol" in c.lower()
+
+            if "symbol"
+            in c.lower()
+
         ),
+
         None
+
     )
+
 
     if symbol_col is None:
 
         raise ValueError(
-            f"No symbol-like column found. "
-            f"Columns present: {list(full_df.columns)}"
+
+            "No symbol-like column found. "
+            f"Columns present: "
+            f"{list(full_df.columns)}"
+
         )
 
 
     series_col = next(
+
         (
+
             c
+
             for c in full_df.columns
-            if "series" in c.lower()
+
+            if "series"
+            in c.lower()
+
         ),
+
         None
+
     )
 
 
     if series_col is not None:
 
-        before = len(full_df)
+        before = len(
+            full_df
+        )
+
 
         full_df = full_df[
+
             full_df[series_col]
             .astype(str)
             .str.strip()
-            == "EQ"
+            ==
+            "EQ"
+
         ]
 
+
         print(
+
             f"Filtered to EQ series: "
-            f"{before} -> {len(full_df)} rows"
+            f"{before} -> "
+            f"{len(full_df)} rows"
+
         )
 
 
     name_col = next(
+
         (
+
             c
+
             for c in full_df.columns
-            if "name" in c.lower()
+
+            if "name"
+            in c.lower()
+
         ),
+
         None
+
     )
 
 
@@ -247,95 +546,148 @@ try:
 
     if name_col is not None:
 
-        before = len(full_df)
+        before = len(
+            full_df
+        )
+
 
         name_upper = (
+
             full_df[name_col]
             .astype(str)
             .str.upper()
+
         )
+
 
         mask = ~name_upper.str.contains(
-            "|".join(NON_STOCK_KEYWORDS),
+
+            "|".join(
+                NON_STOCK_KEYWORDS
+            ),
+
             na=False
+
         )
 
-        full_df = full_df[mask]
+
+        full_df = full_df[
+            mask
+        ]
+
 
         print(
-            f"Filtered out ETF/fund-like names: "
-            f"{before} -> {len(full_df)} rows"
+
+            f"Filtered out "
+            f"ETF/fund-like names: "
+            f"{before} -> "
+            f"{len(full_df)} rows"
+
         )
 
 
     symbol_upper = (
+
         full_df[symbol_col]
         .astype(str)
         .str.upper()
+
     )
+
 
     sym_mask = ~symbol_upper.str.contains(
+
         "ETF|IETF|BEES|LIQUID|GILT",
+
         na=False
+
     )
 
-    before = len(full_df)
 
-    full_df = full_df[sym_mask]
+    before = len(
+        full_df
+    )
+
+
+    full_df = full_df[
+        sym_mask
+    ]
+
 
     if len(full_df) != before:
 
         print(
-            f"Filtered out ETF-like symbol patterns: "
-            f"{before} -> {len(full_df)} rows"
+
+            f"Filtered out "
+            f"ETF-like symbol patterns: "
+            f"{before} -> "
+            f"{len(full_df)} rows"
+
         )
 
 
     full_list = (
+
         full_df[symbol_col]
         .dropna()
         .astype(str)
         .str.strip()
         .tolist()
+
     )
 
 
-    if len(full_list) > len(STOCK_UNIVERSE):
+    if len(full_list) > len(
+        STOCK_UNIVERSE
+    ):
 
         STOCK_UNIVERSE = full_list
 
+
         print(
-            f"Loaded {len(STOCK_UNIVERSE)} symbols from "
-            f"NSE's full equity list "
-            f"(column: {symbol_col}) — "
-            f"using this broadest option"
+
+            f"Loaded "
+            f"{len(STOCK_UNIVERSE)} "
+            f"symbols from NSE's "
+            f"full equity list "
+            f"(column: {symbol_col})"
+
         )
 
     else:
 
         print(
-            f"NSE full list returned {len(full_list)} symbols, "
-            f"not larger than current {len(STOCK_UNIVERSE)} — "
+
+            f"NSE full list returned "
+            f"{len(full_list)} symbols, "
+            f"not larger than current "
+            f"{len(STOCK_UNIVERSE)} — "
             f"keeping current list"
+
         )
 
 
 except Exception as e:
 
     print(
-        f"NSE full equity list fetch failed ({e}) — "
-        f"keeping current {len(STOCK_UNIVERSE)}-stock list"
+
+        f"NSE full equity list fetch failed "
+        f"({e}) — keeping current "
+        f"{len(STOCK_UNIVERSE)}-stock list"
+
     )
 
 
 print(
+
     f"FINAL universe size: "
     f"{len(STOCK_UNIVERSE)} stocks"
+
 )
 
 
 # =============================================================================
-# SCAN LOGIC
+# REQUIRED MINUTE CANDLES
 # =============================================================================
 
 NEEDED_HM = [
@@ -343,6 +695,7 @@ NEEDED_HM = [
     915,
     916,
     917,
+
     918,
     919,
     920,
@@ -350,6 +703,7 @@ NEEDED_HM = [
     1524,
     1525,
     1526,
+
     1527,
     1528,
     1529,
@@ -357,33 +711,19 @@ NEEDED_HM = [
 ]
 
 
+# =============================================================================
+# SCAN LOGIC
+# =============================================================================
+
 def evaluate_rows(rows):
 
     """
     Evaluate the latest completed trading day.
-
-    FINAL CONDITIONS:
-
-    1. 3-min 15:24 and 15:27 SAME TREND.
-       15:27 volume > 15:24 volume.
-
-    2. 3-min 9:15 and 9:18 BOTH match
-       3-min 15:27 direction.
-
-    3. 1-min 15:28 matches
-       3-min 15:27 direction.
-       15:28 volume > 15:29 volume.
-
-    4. 1-min 9:15 and 9:16 BOTH match
-       1-min 15:28 direction.
-
-    5. Final LONG/SHORT direction comes
-       from 3-min 15:27.
     """
 
 
     # -------------------------------------------------------------------------
-    # GROUP DATA BY DATE
+    # GROUP BY DATE
     # -------------------------------------------------------------------------
 
     by_date = {}
@@ -392,13 +732,16 @@ def evaluate_rows(rows):
     for _, r in rows.iterrows():
 
         by_date.setdefault(
+
             r["date"],
+
             {}
+
         )[r["hm"]] = r
 
 
     # -------------------------------------------------------------------------
-    # VALIDATE CANDLES
+    # VALID CANDLE CHECK
     # -------------------------------------------------------------------------
 
     def valid_candle(r):
@@ -407,27 +750,39 @@ def evaluate_rows(rows):
 
             return (
 
-                pd.notna(r["open"])
+                pd.notna(
+                    r["open"]
+                )
 
                 and
 
-                pd.notna(r["close"])
+                pd.notna(
+                    r["close"]
+                )
 
                 and
 
-                pd.notna(r["volume"])
+                pd.notna(
+                    r["volume"]
+                )
 
                 and
 
-                float(r["open"]) > 0
+                float(
+                    r["open"]
+                ) > 0
 
                 and
 
-                float(r["close"]) > 0
+                float(
+                    r["close"]
+                ) > 0
 
                 and
 
-                float(r["volume"]) >= 0
+                float(
+                    r["volume"]
+                ) >= 0
 
             )
 
@@ -440,7 +795,7 @@ def evaluate_rows(rows):
 
 
     # -------------------------------------------------------------------------
-    # FIND LATEST DATE WITH ALL REQUIRED CANDLES
+    # FIND LATEST COMPLETE DAY
     # -------------------------------------------------------------------------
 
     valid_dates = sorted(
@@ -452,8 +807,12 @@ def evaluate_rows(rows):
         if all(
 
             hm in m
+
             and
-            valid_candle(m[hm])
+
+            valid_candle(
+                m[hm]
+            )
 
             for hm in NEEDED_HM
 
@@ -465,7 +824,10 @@ def evaluate_rows(rows):
     if not valid_dates:
 
         return {
-            "status": "INSUFFICIENT"
+
+            "status":
+                "INSUFFICIENT"
+
         }
 
 
@@ -475,7 +837,7 @@ def evaluate_rows(rows):
 
 
     # -------------------------------------------------------------------------
-    # DIRECTION FUNCTION
+    # DIRECTION
     # -------------------------------------------------------------------------
 
     def sign(x):
@@ -488,71 +850,96 @@ def evaluate_rows(rows):
 
 
     # -------------------------------------------------------------------------
-    # BUILD 3-MIN CANDLES
+    # AGGREGATE 3-MIN CANDLE
     # -------------------------------------------------------------------------
 
-    def aggregate_3m(minutes):
+    def aggregate_3m(
+        minutes
+    ):
 
         rows_3m = [
+
             m[hm]
+
             for hm in minutes
+
         ]
 
 
         return {
 
             "open":
+
                 float(
                     rows_3m[0]["open"]
                 ),
 
             "close":
+
                 float(
                     rows_3m[-1]["close"]
                 ),
 
             "volume":
+
                 sum(
-                    float(r["volume"])
+
+                    float(
+                        r["volume"]
+                    )
+
                     for r in rows_3m
+
                 ),
 
         }
 
 
+    # -------------------------------------------------------------------------
+    # 3-MIN CANDLES
+    # -------------------------------------------------------------------------
+
     candle_1524 = aggregate_3m(
+
         [
             1524,
             1525,
             1526
         ]
+
     )
 
 
     candle_1527 = aggregate_3m(
+
         [
             1527,
             1528,
             1529
         ]
+
     )
 
 
     candle_915 = aggregate_3m(
+
         [
             915,
             916,
             917
         ]
+
     )
 
 
     candle_918 = aggregate_3m(
+
         [
             918,
             919,
             920
         ]
+
     )
 
 
@@ -581,14 +968,16 @@ def evaluate_rows(rows):
     # =========================================================================
     # CONDITION 1
     #
-    # 3-MIN 15:24 AND 15:27 MUST BE SAME TREND
+    # 3-MIN 15:24 AND 15:27
+    # MUST BE OPPOSITE.
     #
-    # 15:27 VOLUME MUST BE GREATER THAN 15:24
+    # 15:27 VOLUME > 15:24 VOLUME.
     # =========================================================================
 
     vol_1524 = (
         candle_1524["volume"]
     )
+
 
     vol_1527 = (
         candle_1527["volume"]
@@ -605,7 +994,7 @@ def evaluate_rows(rows):
 
         and
 
-        dir_1527 == dir_1524
+        dir_1527 != dir_1524
 
         and
 
@@ -617,8 +1006,8 @@ def evaluate_rows(rows):
     # =========================================================================
     # CONDITION 2
     #
-    # 3-MIN 9:15 AND 9:18 MUST BOTH
-    # MATCH 15:27 DIRECTION
+    # 3-MIN 9:15 AND 9:18
+    # MUST BOTH MATCH 15:27.
     # =========================================================================
 
     dir_915_3m = sign(
@@ -657,9 +1046,10 @@ def evaluate_rows(rows):
     # =========================================================================
     # CONDITION 3
     #
-    # 1-MIN 15:28 MUST MATCH 3-MIN 15:27
+    # 1-MIN 15:28 AND 15:29
+    # MUST BE OPPOSITE.
     #
-    # 15:28 VOLUME > 15:29 VOLUME
+    # 15:28 VOLUME > 15:29 VOLUME.
     # =========================================================================
 
     dir_1528_1m = sign(
@@ -686,7 +1076,11 @@ def evaluate_rows(rows):
 
         and
 
-        dir_1528_1m == dir_1527
+        dir_1529_1m != 0
+
+        and
+
+        dir_1528_1m != dir_1529_1m
 
         and
 
@@ -700,8 +1094,30 @@ def evaluate_rows(rows):
     # =========================================================================
     # CONDITION 4
     #
-    # 1-MIN 9:15 AND 9:16 MUST BOTH
-    # MATCH 1-MIN 15:28
+    # 1-MIN 15:28 MUST MATCH
+    # 3-MIN 15:27.
+    # =========================================================================
+
+    cond4 = (
+
+        dir_1528_1m != 0
+
+        and
+
+        dir_1527 != 0
+
+        and
+
+        dir_1528_1m == dir_1527
+
+    )
+
+
+    # =========================================================================
+    # CONDITION 5
+    #
+    # 1-MIN 9:15 AND 9:16
+    # MUST BOTH MATCH 15:28.
     # =========================================================================
 
     dir_915_1m = sign(
@@ -722,7 +1138,7 @@ def evaluate_rows(rows):
     )
 
 
-    cond4 = (
+    cond5 = (
 
         dir_1528_1m != 0
 
@@ -738,7 +1154,7 @@ def evaluate_rows(rows):
 
 
     # =========================================================================
-    # FINAL RESULT
+    # FINAL PASS
     # =========================================================================
 
     passed = (
@@ -757,13 +1173,17 @@ def evaluate_rows(rows):
 
         cond4
 
+        and
+
+        cond5
+
     )
 
 
     # =========================================================================
     # FINAL DIRECTION
     #
-    # DIRECTION IS DETERMINED BY 3-MIN 15:27
+    # DETERMINED BY 3-MIN 15:27.
     # =========================================================================
 
     direction = (
@@ -787,34 +1207,51 @@ def evaluate_rows(rows):
     )
 
 
+    # =========================================================================
+    # RETURN RESULT
+    # =========================================================================
+
     return {
 
         "status":
+
             "PASS"
             if passed
             else
             "FAIL",
 
+
         "date":
             d,
 
+
         "direction":
+
             direction
             if passed
             else
             None,
 
+
         "cond1":
             cond1,
+
 
         "cond2":
             cond2,
 
+
         "cond3":
             cond3,
 
+
         "cond4":
             cond4,
+
+
+        "cond5":
+            cond5,
+
 
         "details": {
 
@@ -836,10 +1273,12 @@ def evaluate_rows(rows):
 
 
 # =============================================================================
-# FETCH DATA
+# FETCH DATA FROM YAHOO
 # =============================================================================
 
-def fetch_symbol_rows(symbol):
+def fetch_symbol_rows(
+    symbol
+):
 
     ticker = (
         symbol
@@ -854,10 +1293,12 @@ def fetch_symbol_rows(symbol):
 
 
     # -------------------------------------------------------------------------
-    # RETRY UP TO 3 TIMES
+    # RETRIES
     # -------------------------------------------------------------------------
 
-    for attempt in range(3):
+    for attempt in range(
+        MAX_RETRIES
+    ):
 
         try:
 
@@ -879,9 +1320,13 @@ def fetch_symbol_rows(symbol):
 
 
             if (
+
                 df is not None
+
                 and
+
                 not df.empty
+
             ):
 
                 break
@@ -892,7 +1337,7 @@ def fetch_symbol_rows(symbol):
             last_error = e
 
 
-        if attempt < 2:
+        if attempt < MAX_RETRIES - 1:
 
             time.sleep(
                 2 ** attempt
@@ -904,9 +1349,13 @@ def fetch_symbol_rows(symbol):
     # -------------------------------------------------------------------------
 
     if (
+
         df is None
+
         or
+
         df.empty
+
     ):
 
         if last_error:
@@ -924,22 +1373,28 @@ def fetch_symbol_rows(symbol):
 
 
     # -------------------------------------------------------------------------
-    # HANDLE MULTIINDEX
+    # MULTIINDEX HANDLING
     # -------------------------------------------------------------------------
 
     if isinstance(
+
         df.columns,
+
         pd.MultiIndex
+
     ):
 
         df.columns = [
+
             c[0]
+
             for c in df.columns
+
         ]
 
 
     # -------------------------------------------------------------------------
-    # FIND TIMESTAMP COLUMN
+    # TIMESTAMP
     # -------------------------------------------------------------------------
 
     ts_col = (
@@ -962,7 +1417,7 @@ def fetch_symbol_rows(symbol):
 
 
     # -------------------------------------------------------------------------
-    # CONVERT TO INDIA TIME
+    # INDIA TIMEZONE
     # -------------------------------------------------------------------------
 
     if ts.dt.tz is not None:
@@ -973,17 +1428,20 @@ def fetch_symbol_rows(symbol):
 
 
     # -------------------------------------------------------------------------
-    # CREATE CLEAN DATAFRAME
+    # CLEAN DATAFRAME
     # -------------------------------------------------------------------------
 
     out = pd.DataFrame({
 
         "date":
+
             ts.dt.strftime(
                 "%Y-%m-%d"
             ),
 
+
         "hm":
+
             (
                 ts.dt.hour
                 *
@@ -992,22 +1450,37 @@ def fetch_symbol_rows(symbol):
                 ts.dt.minute
             ),
 
+
         "open":
+
             pd.to_numeric(
+
                 df["Open"],
+
                 errors="coerce"
+
             ).values,
+
 
         "close":
+
             pd.to_numeric(
+
                 df["Close"],
+
                 errors="coerce"
+
             ).values,
 
+
         "volume":
+
             pd.to_numeric(
+
                 df["Volume"],
+
                 errors="coerce"
+
             ).values,
 
     })
@@ -1030,14 +1503,16 @@ def fetch_symbol_rows(symbol):
 
 
     # -------------------------------------------------------------------------
-    # KEEP MARKET HOURS
+    # KEEP REQUIRED MARKET TIME RANGE
     # -------------------------------------------------------------------------
 
     out = out[
+
         out["hm"].between(
             915,
             1529
         )
+
     ]
 
 
@@ -1045,23 +1520,12 @@ def fetch_symbol_rows(symbol):
 
 
 # =============================================================================
-# FAST PARALLEL SCANNER
+# SCAN ONE STOCK
 # =============================================================================
 
-# Number of stocks fetched simultaneously.
-#
-# 10 is a reasonable starting point.
-#
-# If Yahoo starts rate-limiting:
-#     reduce to 6 or 8.
-#
-# If everything is stable:
-#     you can test 12.
-#
-MAX_WORKERS = 10
-
-
-def scan_one_symbol(symbol):
+def scan_one_symbol(
+    symbol
+):
 
     try:
 
@@ -1071,9 +1535,13 @@ def scan_one_symbol(symbol):
 
 
         if (
+
             rows is None
+
             or
+
             rows.empty
+
         ):
 
             return {
@@ -1117,10 +1585,12 @@ def scan_one_symbol(symbol):
 
 
 # =============================================================================
-# SCAN ALL STOCKS IN PARALLEL
+# FAST PARALLEL SCAN
 # =============================================================================
 
-def scan_all_symbols(symbols):
+def scan_all_symbols(
+    symbols
+):
 
     all_results = []
 
@@ -1131,18 +1601,25 @@ def scan_all_symbols(symbols):
     completed = 0
 
 
+    print()
+
     print(
-
-        f"Scanning {total} symbols "
-        f"with {MAX_WORKERS} "
-        f"parallel workers...\n"
-
+        f"Scanning {total} stocks "
+        f"using {MAX_WORKERS} "
+        f"parallel workers..."
     )
 
+    print()
+
+
+    # -------------------------------------------------------------------------
+    # CREATE THREAD POOL
+    # -------------------------------------------------------------------------
 
     with ThreadPoolExecutor(
 
-        max_workers=MAX_WORKERS
+        max_workers=
+            MAX_WORKERS
 
     ) as executor:
 
@@ -1150,8 +1627,11 @@ def scan_all_symbols(symbols):
         future_to_symbol = {
 
             executor.submit(
+
                 scan_one_symbol,
+
                 symbol
+
             ):
                 symbol
 
@@ -1161,15 +1641,22 @@ def scan_all_symbols(symbols):
 
 
         # ---------------------------------------------------------------------
-        # PROCESS RESULTS AS THEY FINISH
+        # RECEIVE RESULTS AS THEY FINISH
         # ---------------------------------------------------------------------
 
         for future in as_completed(
+
             future_to_symbol
+
         ):
 
+
             symbol = (
-                future_to_symbol[future]
+
+                future_to_symbol[
+                    future
+                ]
+
             )
 
 
@@ -1205,7 +1692,7 @@ def scan_all_symbols(symbols):
 
 
             # -----------------------------------------------------------------
-            # MATCH
+            # PRINT MATCH
             # -----------------------------------------------------------------
 
             if result["status"] == "PASS":
@@ -1215,7 +1702,8 @@ def scan_all_symbols(symbols):
                     f"[{completed}/{total}] "
                     f"{symbol:<15} "
                     f"MATCH "
-                    f"({result['direction']}) "
+                    f"{result['direction']} "
+                    f""
                     f"(signal day "
                     f"{result['date']})"
 
@@ -1223,7 +1711,7 @@ def scan_all_symbols(symbols):
 
 
             # -----------------------------------------------------------------
-            # ERROR
+            # PRINT ERROR
             # -----------------------------------------------------------------
 
             elif result["status"] == "ERROR":
@@ -1233,44 +1721,33 @@ def scan_all_symbols(symbols):
                     f"[{completed}/{total}] "
                     f"{symbol:<15} "
                     f"ERROR: "
-                    f"{result.get('error', 'unknown error')}"
+                    f"{result.get('error', 'unknown')}"
 
                 )
 
 
             # -----------------------------------------------------------------
-            # SKIP
+            # PRINT SKIP
             # -----------------------------------------------------------------
 
-            elif result["status"] == "SKIP":
+            elif result["status"] in (
+
+                "SKIP",
+                "INSUFFICIENT"
+
+            ):
 
                 print(
 
                     f"[{completed}/{total}] "
                     f"{symbol:<15} "
-                    f"skipped (no data)"
+                    f"skipped"
 
                 )
 
 
             # -----------------------------------------------------------------
-            # INSUFFICIENT DATA
-            # -----------------------------------------------------------------
-
-            elif result["status"] == "INSUFFICIENT":
-
-                print(
-
-                    f"[{completed}/{total}] "
-                    f"{symbol:<15} "
-                    f"skipped "
-                    f"(insufficient data)"
-
-                )
-
-
-            # -----------------------------------------------------------------
-            # FAIL
+            # PRINT FAIL
             # -----------------------------------------------------------------
 
             else:
@@ -1285,7 +1762,7 @@ def scan_all_symbols(symbols):
 
 
     # -------------------------------------------------------------------------
-    # SORT RESULTS
+    # SORT
     # -------------------------------------------------------------------------
 
     all_results.sort(
@@ -1307,9 +1784,13 @@ def scan_all_symbols(symbols):
 # =============================================================================
 
 def generate_html_report(
+
     all_results,
+
     scan_time
+
 ):
+
 
     matches = [
 
@@ -1329,6 +1810,7 @@ def generate_html_report(
         for r in all_results
 
         if r["status"]
+
         in (
             "PASS",
             "FAIL"
@@ -1344,6 +1826,7 @@ def generate_html_report(
         for r in all_results
 
         if r["status"]
+
         not in (
             "PASS",
             "FAIL"
@@ -1352,21 +1835,27 @@ def generate_html_report(
     ]
 
 
+    # -------------------------------------------------------------------------
+    # BADGE
+    # -------------------------------------------------------------------------
+
     def cond_badge(ok):
 
         return (
 
             f'<span class="badge '
             f'{"pass" if ok else "fail"}">'
+
             f'{"PASS" if ok else "FAIL"}'
+
             f'</span>'
 
         )
 
 
-    # =========================================================================
-    # MATCH BANNER
-    # =========================================================================
+    # -------------------------------------------------------------------------
+    # MATCHES
+    # -------------------------------------------------------------------------
 
     if matches:
 
@@ -1381,6 +1870,7 @@ def generate_html_report(
                 f'<div class="match-item">'
 
                 f'<span class="dir-badge '
+
                 f'{"long" if r["direction"] == "LONG" else "short"}">'
 
                 f'{r["direction"]}'
@@ -1445,9 +1935,9 @@ def generate_html_report(
         )
 
 
-    # =========================================================================
-    # TABLE
-    # =========================================================================
+    # -------------------------------------------------------------------------
+    # TABLE ROWS
+    # -------------------------------------------------------------------------
 
     rows_html = ""
 
@@ -1496,8 +1986,14 @@ def generate_html_report(
             {dir_display}
           </td>
 
+
           <td>
-            {cond_badge(r.get('cond1'))}<br>
+
+            {cond_badge(
+                r.get('cond1')
+            )}
+
+            <br>
 
             <small>
 
@@ -1513,12 +2009,23 @@ def generate_html_report(
 
           </td>
 
-          <td>
-            {cond_badge(r.get('cond2'))}
-          </td>
 
           <td>
-            {cond_badge(r.get('cond3'))}<br>
+
+            {cond_badge(
+                r.get('cond2')
+            )}
+
+          </td>
+
+
+          <td>
+
+            {cond_badge(
+                r.get('cond3')
+            )}
+
+            <br>
 
             <small>
 
@@ -1534,14 +2041,35 @@ def generate_html_report(
 
           </td>
 
+
           <td>
-            {cond_badge(r.get('cond4'))}
+
+            {cond_badge(
+                r.get('cond4')
+            )}
+
           </td>
 
+
+          <td>
+
+            {cond_badge(
+                r.get('cond5')
+            )}
+
+          </td>
+
+
           <td class="{
+
               'overall-pass'
+
               if r['status'] == 'PASS'
-              else 'overall-fail'
+
+              else
+
+              'overall-fail'
+
           }">
 
             {r['status']}
@@ -1553,9 +2081,9 @@ def generate_html_report(
         """
 
 
-    # =========================================================================
+    # -------------------------------------------------------------------------
     # SKIPPED
-    # =========================================================================
+    # -------------------------------------------------------------------------
 
     skipped_html = ""
 
@@ -1634,7 +2162,7 @@ body {{
 .wrap {{
 
     max-width:
-        720px;
+        900px;
 
     margin:
         0 auto;
@@ -2037,7 +2565,7 @@ Direction
 </th>
 
 <th>
-15:24/15:27
+3-min 15:24/15:27
 </th>
 
 <th>
@@ -2045,7 +2573,11 @@ Direction
 </th>
 
 <th>
-15:28 match + vol
+1-min 15:28/15:29
+</th>
+
+<th>
+1-min 15:28 match
 </th>
 
 <th>
@@ -2080,14 +2612,13 @@ Current scanner rule:
 
 
 3-min 15:24 and 15:27
-must be in the same trend.
+must be opposite trends.
 
 
 <br>
 
-
-15:27 volume must be greater
-than 15:24 volume.
+3-min 15:27 volume must be
+greater than 15:24 volume.
 
 
 <br><br>
@@ -2100,15 +2631,21 @@ must both match 15:27 direction.
 <br><br>
 
 
-1-min 15:28 must match
-3-min 15:27 direction.
+1-min 15:28 and 15:29
+must be opposite trends.
 
 
 <br>
 
-
 1-min 15:28 volume must be
 greater than 15:29 volume.
+
+
+<br><br>
+
+
+1-min 15:28 must match
+3-min 15:27 direction.
 
 
 <br><br>
@@ -2152,10 +2689,11 @@ Exit:
 
 
 <b>
-Parallel workers:
+Scanner speed:
 </b>
 
 {MAX_WORKERS}
+parallel workers.
 
 
 <br><br>
@@ -2179,9 +2717,9 @@ stocks this run.
 """
 
 
-    # =========================================================================
-    # WRITE HTML
-    # =========================================================================
+    # -------------------------------------------------------------------------
+    # WRITE REPORT
+    # -------------------------------------------------------------------------
 
     with open(
 
@@ -2205,16 +2743,28 @@ stocks this run.
 def main():
 
     # -------------------------------------------------------------------------
-    # SCAN
+    # START SCAN
     # -------------------------------------------------------------------------
 
+    start_time = time.time()
+
+
     all_results = scan_all_symbols(
+
         STOCK_UNIVERSE
+
+    )
+
+
+    elapsed = (
+        time.time()
+        -
+        start_time
     )
 
 
     # -------------------------------------------------------------------------
-    # FIND MATCHES
+    # MATCHES
     # -------------------------------------------------------------------------
 
     matches = [
@@ -2228,16 +2778,16 @@ def main():
     ]
 
 
+    # -------------------------------------------------------------------------
+    # CONSOLE SUMMARY
+    # -------------------------------------------------------------------------
+
+    print()
+
     print(
-        "\n"
-        +
-        "=" * 60
+        "=" * 70
     )
 
-
-    # -------------------------------------------------------------------------
-    # PRINT MATCHES
-    # -------------------------------------------------------------------------
 
     if matches:
 
@@ -2245,18 +2795,21 @@ def main():
 
             f"MATCHES FOUND "
             f"({len(matches)}) "
-            f"— candidates for entry "
-            f"at next 9:15 open:"
+            f"— candidates for "
+            f"next 9:15 open:"
 
         )
+
+
+        print()
 
 
         for r in matches:
 
             print(
 
-                f"  {r['symbol']}  "
-                f"{r['direction']}  "
+                f"  {r['symbol']:<15} "
+                f"{r['direction']:<6} "
                 f"(signal day: "
                 f"{r['date']})"
 
@@ -2270,20 +2823,30 @@ def main():
         )
 
 
+    print()
+
     print(
-        "=" * 60
+        f"Scan completed in "
+        f"{elapsed:.1f} seconds."
+    )
+
+
+    print(
+        "=" * 70
     )
 
 
     # -------------------------------------------------------------------------
-    # GENERATE REPORT
+    # GENERATE HTML
     # -------------------------------------------------------------------------
 
     scan_time = (
+
         datetime.now()
         .strftime(
             "%Y-%m-%d %H:%M"
         )
+
     )
 
 
@@ -2296,8 +2859,10 @@ def main():
     )
 
 
+    print()
+
     print(
-        "\nReport written to index.html"
+        "Report written to index.html"
     )
 
 
