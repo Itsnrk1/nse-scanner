@@ -1,36 +1,44 @@
 # ============================================================
-# 3-MIN + 1-MIN EOD + PREVIOUS-DAY OPENING TREND STRATEGY
+# EXACT STRATEGY BACKTEST
 # ============================================================
 #
-# SIGNAL DAY = previous trading day
+# SIGNAL DAY = PREVIOUS TRADING DAY
 #
-# PREVIOUS DAY CONDITIONS:
+# ============================================================
 #
-# 3-MIN:
-#   15:24 and 15:27 must be OPPOSITE trends
-#   15:27 volume > 15:24 volume
+# 3-MINUTE CONDITIONS
+# ============================================================
 #
-# 3-MIN OPENING:
-#   09:15 and 09:18 must BOTH match 15:27 direction
+# 15:24 and 15:27 = OPPOSITE TRENDS
 #
-# 1-MIN EOD:
-#   15:28 and 15:29 must be OPPOSITE trends
-#   15:28 volume > 15:29 volume
+# Volume(15:27) > Volume(15:24)
 #
-# 1-MIN / 3-MIN CONFIRMATION:
-#   15:28 must match 3-min 15:27 direction
+# 09:15 and 09:18 = SAME TREND AS 15:27
 #
-# 1-MIN OPENING:
-#   09:15 and 09:16 must BOTH match 15:28 direction
+# ============================================================
 #
-# FINAL DIRECTION:
-#   determined by 3-min 15:27
+# 1-MINUTE CONDITIONS
+# ============================================================
 #
-# ENTRY:
-#   NEXT TRADING DAY 09:15 OPEN
+# 15:28 and 15:29 = OPPOSITE TRENDS
 #
-# EXIT:
-#   SAME TRADING DAY 15:27 OPEN
+# Volume(15:28) > Volume(15:29)
+#
+# 15:28 = SAME TREND AS 3-MIN 15:27
+#
+# 09:15 and 09:16 = SAME TREND AS 15:28
+#
+# ============================================================
+#
+# TRADE
+# ============================================================
+#
+# DIRECTION = TREND OF 3-MIN 15:27
+#
+# NEXT DAY:
+#
+# ENTRY = 09:15 OPEN
+# EXIT  = 15:27 OPEN
 #
 # ============================================================
 
@@ -49,47 +57,53 @@ DATA_FOLDER = "./data"
 ENTRY_TIME = "09:15"
 EXIT_TIME = "15:27"
 
-# Set to 0 for raw results.
-# Example: 0.10 means 0.10% total round-trip cost.
+# Total round-trip cost in percentage points.
+#
+# Example:
+# 0.10 = subtract 0.10% from every trade.
+#
+# Set to 0.0 for raw/gross results.
 ROUND_TRIP_COST = 0.10
 
 
 # ============================================================
-# TREND FUNCTION
+# TREND
 # ============================================================
 
-def candle_trend(row):
+def trend(open_price, close_price):
     """
     Returns:
-        1  = bullish
-        -1 = bearish
+        +1 = bullish / GREEN
+        -1 = bearish / RED
          0 = doji
     """
 
-    if row["close"] > row["open"]:
+    if close_price > open_price:
         return 1
 
-    if row["close"] < row["open"]:
+    if close_price < open_price:
         return -1
 
     return 0
 
 
 # ============================================================
-# LOAD DATA
+# LOAD ONE STOCK
 # ============================================================
 
-def load_data(file_path):
+def load_stock(file_path):
 
-    df = pd.read_csv(file_path)
+    df = pd.read_csv(
+        file_path
+    )
 
     # --------------------------------------------------------
-    # Try to identify datetime column
+    # Find datetime column
     # --------------------------------------------------------
 
-    datetime_col = None
+    datetime_column = None
 
-    for col in [
+    for column in [
         "datetime",
         "Datetime",
         "date_time",
@@ -98,51 +112,56 @@ def load_data(file_path):
         "Date"
     ]:
 
-        if col in df.columns:
+        if column in df.columns:
 
-            datetime_col = col
+            datetime_column = column
             break
 
-    if datetime_col is None:
+    if datetime_column is None:
 
         raise ValueError(
-            f"No datetime column found in {file_path}"
+            f"No datetime column found in "
+            f"{file_path}"
         )
 
+    # --------------------------------------------------------
+    # Datetime
+    # --------------------------------------------------------
+
     df["datetime"] = pd.to_datetime(
-        df[datetime_col]
+        df[datetime_column]
     )
 
     # --------------------------------------------------------
     # Standardize OHLCV
     # --------------------------------------------------------
 
-    rename_map = {}
+    rename = {}
 
-    for col in df.columns:
+    for column in df.columns:
 
-        lower = col.lower()
+        name = column.lower()
 
-        if lower == "open":
-            rename_map[col] = "open"
+        if name == "open":
+            rename[column] = "open"
 
-        elif lower == "high":
-            rename_map[col] = "high"
+        elif name == "high":
+            rename[column] = "high"
 
-        elif lower == "low":
-            rename_map[col] = "low"
+        elif name == "low":
+            rename[column] = "low"
 
-        elif lower == "close":
-            rename_map[col] = "close"
+        elif name == "close":
+            rename[column] = "close"
 
-        elif lower in [
+        elif name in [
             "volume",
             "vol"
         ]:
-            rename_map[col] = "volume"
+            rename[column] = "volume"
 
     df = df.rename(
-        columns=rename_map
+        columns=rename
     )
 
     required = [
@@ -152,17 +171,21 @@ def load_data(file_path):
         "close"
     ]
 
-    for col in required:
+    for column in required:
 
-        if col not in df.columns:
+        if column not in df.columns:
 
             raise ValueError(
-                f"Missing column: {col}"
+                f"{column} column missing "
+                f"in {file_path}"
             )
 
     if "volume" not in df.columns:
 
-        df["volume"] = 0
+        raise ValueError(
+            f"Volume column missing "
+            f"in {file_path}"
+        )
 
     # --------------------------------------------------------
     # Clean
@@ -174,13 +197,20 @@ def load_data(file_path):
             "open",
             "high",
             "low",
-            "close"
+            "close",
+            "volume"
         ]
-    )
+    ).copy()
 
     df = df.sort_values(
         "datetime"
+    ).reset_index(
+        drop=True
     )
+
+    # --------------------------------------------------------
+    # Date/time columns
+    # --------------------------------------------------------
 
     df["date"] = (
         df["datetime"]
@@ -189,26 +219,13 @@ def load_data(file_path):
 
     df["time"] = (
         df["datetime"]
-        .dt.strftime("%H:%M")
-    )
-
-    return df
-
-
-# ============================================================
-# BUILD 3-MINUTE CANDLES
-# ============================================================
-
-def build_3min_candles(df):
-
-    df = df.copy()
-
-    df["datetime"] = pd.to_datetime(
-        df["datetime"]
+        .dt.strftime(
+            "%H:%M"
+        )
     )
 
     # --------------------------------------------------------
-    # Only NSE regular session
+    # NSE regular trading session
     # --------------------------------------------------------
 
     df = df[
@@ -221,58 +238,96 @@ def build_3min_candles(df):
         )
     ].copy()
 
+    return df
+
+
+# ============================================================
+# CREATE EXACT 3-MINUTE CANDLES
+# ============================================================
+
+def create_3min_candles(df):
+    """
+    Creates candles aligned to the NSE open:
+
+        09:15 - 09:17
+        09:18 - 09:20
+        09:21 - 09:23
+        ...
+        15:24 - 15:26
+        15:27 - 15:29
+
+    Therefore:
+
+        09:15 = 09:15-09:17
+        09:18 = 09:18-09:20
+
+        15:24 = 15:24-15:26
+        15:27 = 15:27-15:29
+    """
+
+    x = df.copy()
+
     # --------------------------------------------------------
-    # Create 3-minute bucket
-    #
-    # 09:15-09:17
-    # 09:18-09:20
-    # ...
-    # 15:24-15:26
-    # 15:27-15:29
+    # Minutes since 09:15
     # --------------------------------------------------------
 
-    minutes_from_open = (
-        df["datetime"].dt.hour * 60
+    total_minutes = (
+        x["datetime"].dt.hour * 60
         +
-        df["datetime"].dt.minute
-        -
-        (9 * 60 + 15)
+        x["datetime"].dt.minute
     )
 
-    df["bucket"] = (
+    market_open_minutes = (
+        9 * 60 + 15
+    )
+
+    minutes_from_open = (
+        total_minutes -
+        market_open_minutes
+    )
+
+    # --------------------------------------------------------
+    # 3-minute bucket
+    # --------------------------------------------------------
+
+    x["bucket"] = (
         minutes_from_open // 3
     )
 
-    df["candle_time"] = (
-        9 * 60 + 15
+    # --------------------------------------------------------
+    # Starting minute of each bucket
+    # --------------------------------------------------------
+
+    candle_start = (
+        market_open_minutes
         +
-        df["bucket"] * 3
+        x["bucket"] * 3
     )
 
-    df["candle_h"] = (
-        df["candle_time"] // 60
+    candle_hour = (
+        candle_start // 60
     )
 
-    df["candle_m"] = (
-        df["candle_time"] % 60
+    candle_minute = (
+        candle_start % 60
     )
 
-    df["candle_time"] = (
-        df["candle_h"].astype(str)
+    x["candle_time"] = (
+        candle_hour.astype(str)
         .str.zfill(2)
         +
         ":"
         +
-        df["candle_m"].astype(str)
+        candle_minute.astype(str)
         .str.zfill(2)
     )
 
     # --------------------------------------------------------
-    # Aggregate
+    # Aggregate 1-minute data
     # --------------------------------------------------------
 
     candles = (
-        df
+        x
         .groupby(
             [
                 "date",
@@ -281,12 +336,36 @@ def build_3min_candles(df):
             sort=True
         )
         .agg(
-            open=("open", "first"),
-            high=("high", "max"),
-            low=("low", "min"),
-            close=("close", "last"),
-            volume=("volume", "sum"),
-            bars=("close", "count")
+
+            open=(
+                "open",
+                "first"
+            ),
+
+            high=(
+                "high",
+                "max"
+            ),
+
+            low=(
+                "low",
+                "min"
+            ),
+
+            close=(
+                "close",
+                "last"
+            ),
+
+            volume=(
+                "volume",
+                "sum"
+            ),
+
+            minute_count=(
+                "close",
+                "count"
+            )
         )
         .reset_index()
     )
@@ -295,289 +374,340 @@ def build_3min_candles(df):
 
 
 # ============================================================
-# CHECK PREVIOUS DAY SIGNAL
+# GET EXACT 3-MIN CANDLE
 # ============================================================
 
-def get_signal(previous_day_1m):
+def get_3min_candle(
+    candles,
+    date,
+    time
+):
 
-    previous_day_1m = previous_day_1m.copy()
+    result = candles[
+        (
+            candles["date"]
+            ==
+            date
+        )
+        &
+        (
+            candles["candle_time"]
+            ==
+            time
+        )
+    ]
 
-    previous_day_1m["time"] = (
-        previous_day_1m["datetime"]
-        .dt.strftime("%H:%M")
+    if result.empty:
+
+        return None
+
+    return result.iloc[0]
+
+
+# ============================================================
+# GET EXACT 1-MIN CANDLE
+# ============================================================
+
+def get_1min_candle(
+    df,
+    date,
+    time
+):
+
+    result = df[
+        (
+            df["date"]
+            ==
+            date
+        )
+        &
+        (
+            df["time"]
+            ==
+            time
+        )
+    ]
+
+    if result.empty:
+
+        return None
+
+    return result.iloc[0]
+
+
+# ============================================================
+# CHECK PREVIOUS-DAY SIGNAL
+# ============================================================
+
+def check_previous_day_signal(
+    df,
+    candles_3m,
+    previous_date
+):
+    """
+    Returns:
+
+        +1 = LONG
+        -1 = SHORT
+         0 = NO SIGNAL
+    """
+
+    # ========================================================
+    # 3-MINUTE CANDLES
+    # ========================================================
+
+    c3_0915 = get_3min_candle(
+        candles_3m,
+        previous_date,
+        "09:15"
+    )
+
+    c3_0918 = get_3min_candle(
+        candles_3m,
+        previous_date,
+        "09:18"
+    )
+
+    c3_1524 = get_3min_candle(
+        candles_3m,
+        previous_date,
+        "15:24"
+    )
+
+    c3_1527 = get_3min_candle(
+        candles_3m,
+        previous_date,
+        "15:27"
     )
 
     # --------------------------------------------------------
-    # BUILD 3-MINUTE CANDLES
+    # All required 3-min candles must exist
     # --------------------------------------------------------
 
-    candles_3m = build_3min_candles(
-        previous_day_1m
-    )
-
-    if candles_3m.empty:
+    if any(
+        c is None
+        for c in [
+            c3_0915,
+            c3_0918,
+            c3_1524,
+            c3_1527
+        ]
+    ):
 
         return 0
 
-    day_3m = (
-        candles_3m
-        .set_index("candle_time")
+    # --------------------------------------------------------
+    # 3-min trends
+    # --------------------------------------------------------
+
+    t3_0915 = trend(
+        c3_0915["open"],
+        c3_0915["close"]
     )
 
-    day_1m = (
-        previous_day_1m
-        .set_index("time")
+    t3_0918 = trend(
+        c3_0918["open"],
+        c3_0918["close"]
     )
 
-    # --------------------------------------------------------
-    # REQUIRED 3-MINUTE CANDLES
-    # --------------------------------------------------------
-
-    required_3m_times = [
-        "09:15",
-        "09:18",
-        "15:24",
-        "15:27"
-    ]
-
-    # --------------------------------------------------------
-    # REQUIRED 1-MINUTE CANDLES
-    # --------------------------------------------------------
-
-    required_1m_times = [
-        "09:15",
-        "09:16",
-        "15:28",
-        "15:29"
-    ]
-
-    # --------------------------------------------------------
-    # CHECK 3-MINUTE CANDLES
-    # --------------------------------------------------------
-
-    for t in required_3m_times:
-
-        if t not in day_3m.index:
-
-            return 0
-
-    # --------------------------------------------------------
-    # CHECK 1-MINUTE CANDLES
-    # --------------------------------------------------------
-
-    for t in required_1m_times:
-
-        if t not in day_1m.index:
-
-            return 0
-
-    # --------------------------------------------------------
-    # EXTRACT 3-MINUTE CANDLES
-    # --------------------------------------------------------
-
-    c_0915_3m = day_3m.loc["09:15"]
-    c_0918_3m = day_3m.loc["09:18"]
-
-    c_1524_3m = day_3m.loc["15:24"]
-    c_1527_3m = day_3m.loc["15:27"]
-
-    # --------------------------------------------------------
-    # EXTRACT 1-MINUTE CANDLES
-    # --------------------------------------------------------
-
-    c_0915_1m = day_1m.loc["09:15"]
-    c_0916_1m = day_1m.loc["09:16"]
-
-    c_1528_1m = day_1m.loc["15:28"]
-    c_1529_1m = day_1m.loc["15:29"]
-
-    # --------------------------------------------------------
-    # EXTRACT TRENDS
-    # --------------------------------------------------------
-
-    dir_0915_3m = candle_trend(
-        c_0915_3m
+    t3_1524 = trend(
+        c3_1524["open"],
+        c3_1524["close"]
     )
 
-    dir_0918_3m = candle_trend(
-        c_0918_3m
-    )
-
-    dir_1524_3m = candle_trend(
-        c_1524_3m
-    )
-
-    dir_1527_3m = candle_trend(
-        c_1527_3m
-    )
-
-    dir_0915_1m = candle_trend(
-        c_0915_1m
-    )
-
-    dir_0916_1m = candle_trend(
-        c_0916_1m
-    )
-
-    dir_1528_1m = candle_trend(
-        c_1528_1m
-    )
-
-    dir_1529_1m = candle_trend(
-        c_1529_1m
+    t3_1527 = trend(
+        c3_1527["open"],
+        c3_1527["close"]
     )
 
     # --------------------------------------------------------
-    # DO NOT ALLOW DOJIS
+    # No dojis
     # --------------------------------------------------------
 
-    trends = [
-
-        dir_0915_3m,
-        dir_0918_3m,
-
-        dir_1524_3m,
-        dir_1527_3m,
-
-        dir_0915_1m,
-        dir_0916_1m,
-
-        dir_1528_1m,
-        dir_1529_1m
-
-    ]
-
-    if 0 in trends:
+    if 0 in [
+        t3_0915,
+        t3_0918,
+        t3_1524,
+        t3_1527
+    ]:
 
         return 0
 
     # ========================================================
     # CONDITION 1
     #
-    # 3-MIN 15:24 AND 15:27
-    # MUST BE OPPOSITE.
-    #
-    # 15:27 VOLUME > 15:24 VOLUME.
+    # 15:24 and 15:27 OPPOSITE
     # ========================================================
 
-    cond1 = (
+    if t3_1524 == t3_1527:
 
-        dir_1524_3m
-        !=
-        dir_1527_3m
-
-        and
-
-        c_1527_3m["volume"]
-        >
-        c_1524_3m["volume"]
-
-    )
+        return 0
 
     # ========================================================
     # CONDITION 2
     #
-    # 3-MIN 09:15 AND 09:18
-    # MUST BOTH MATCH 15:27.
+    # Volume(15:27) > Volume(15:24)
     # ========================================================
 
-    cond2 = (
+    if not (
+        c3_1527["volume"]
+        >
+        c3_1524["volume"]
+    ):
 
-        dir_0915_3m
-        ==
-        dir_1527_3m
-
-        and
-
-        dir_0918_3m
-        ==
-        dir_1527_3m
-
-    )
+        return 0
 
     # ========================================================
     # CONDITION 3
     #
-    # 1-MIN 15:28 AND 15:29
-    # MUST BE OPPOSITE.
-    #
-    # 15:28 VOLUME > 15:29 VOLUME.
+    # 09:15 and 09:18 SAME AS 15:27
     # ========================================================
 
-    cond3 = (
+    if t3_0915 != t3_1527:
 
-        dir_1528_1m
-        !=
-        dir_1529_1m
+        return 0
 
-        and
+    if t3_0918 != t3_1527:
 
-        c_1528_1m["volume"]
-        >
-        c_1529_1m["volume"]
+        return 0
 
+    # ========================================================
+    # 1-MINUTE CANDLES
+    # ========================================================
+
+    c1_0915 = get_1min_candle(
+        df,
+        previous_date,
+        "09:15"
     )
+
+    c1_0916 = get_1min_candle(
+        df,
+        previous_date,
+        "09:16"
+    )
+
+    c1_1528 = get_1min_candle(
+        df,
+        previous_date,
+        "15:28"
+    )
+
+    c1_1529 = get_1min_candle(
+        df,
+        previous_date,
+        "15:29"
+    )
+
+    # --------------------------------------------------------
+    # All required 1-min candles must exist
+    # --------------------------------------------------------
+
+    if any(
+        c is None
+        for c in [
+            c1_0915,
+            c1_0916,
+            c1_1528,
+            c1_1529
+        ]
+    ):
+
+        return 0
+
+    # --------------------------------------------------------
+    # 1-min trends
+    # --------------------------------------------------------
+
+    t1_0915 = trend(
+        c1_0915["open"],
+        c1_0915["close"]
+    )
+
+    t1_0916 = trend(
+        c1_0916["open"],
+        c1_0916["close"]
+    )
+
+    t1_1528 = trend(
+        c1_1528["open"],
+        c1_1528["close"]
+    )
+
+    t1_1529 = trend(
+        c1_1529["open"],
+        c1_1529["close"]
+    )
+
+    # --------------------------------------------------------
+    # No dojis
+    # --------------------------------------------------------
+
+    if 0 in [
+        t1_0915,
+        t1_0916,
+        t1_1528,
+        t1_1529
+    ]:
+
+        return 0
 
     # ========================================================
     # CONDITION 4
     #
-    # 1-MIN 15:28 MUST MATCH
-    # 3-MIN 15:27.
+    # 15:28 and 15:29 OPPOSITE
     # ========================================================
 
-    cond4 = (
+    if t1_1528 == t1_1529:
 
-        dir_1528_1m
-        ==
-        dir_1527_3m
-
-    )
+        return 0
 
     # ========================================================
     # CONDITION 5
     #
-    # 1-MIN 09:15 AND 09:16
-    # MUST BOTH MATCH 15:28.
+    # Volume(15:28) > Volume(15:29)
     # ========================================================
 
-    cond5 = (
-
-        dir_0915_1m
-        ==
-        dir_1528_1m
-
-        and
-
-        dir_0916_1m
-        ==
-        dir_1528_1m
-
-    )
-
-    # ========================================================
-    # FINAL SIGNAL
-    # ========================================================
-
-    if (
-
-        cond1
-        and
-        cond2
-        and
-        cond3
-        and
-        cond4
-        and
-        cond5
-
+    if not (
+        c1_1528["volume"]
+        >
+        c1_1529["volume"]
     ):
 
-        # Final direction is determined by
-        # 3-minute 15:27.
+        return 0
 
-        return dir_1527_3m
+    # ========================================================
+    # CONDITION 6
+    #
+    # 1-MIN 15:28 = 3-MIN 15:27
+    # ========================================================
 
-    return 0
+    if t1_1528 != t3_1527:
+
+        return 0
+
+    # ========================================================
+    # CONDITION 7
+    #
+    # 1-MIN 09:15 and 09:16
+    # SAME AS 1-MIN 15:28
+    # ========================================================
+
+    if t1_0915 != t1_1528:
+
+        return 0
+
+    if t1_0916 != t1_1528:
+
+        return 0
+
+    # ========================================================
+    # EVERYTHING PASSED
+    #
+    # DIRECTION = 3-MIN 15:27
+    # ========================================================
+
+    return t3_1527
 
 
 # ============================================================
@@ -588,11 +718,15 @@ def backtest_stock(
     file_path
 ):
 
-    df = load_data(
+    df = load_stock(
         file_path
     )
 
-    if df.empty:
+    candles_3m = create_3min_candles(
+        df
+    )
+
+    if candles_3m.empty:
 
         return []
 
@@ -601,16 +735,11 @@ def backtest_stock(
         .unique()
     )
 
-    if len(dates) < 2:
-
-        return []
-
     results = []
 
-    # --------------------------------------------------------
-    # Day D-1 = signal day
-    # Day D   = trading day
-    # --------------------------------------------------------
+    # ========================================================
+    # PREVIOUS DAY -> NEXT DAY
+    # ========================================================
 
     for i in range(
         1,
@@ -626,125 +755,96 @@ def backtest_stock(
         ]
 
         # ----------------------------------------------------
-        # PREVIOUS DAY RAW 1-MIN DATA
+        # SIGNAL FROM PREVIOUS DAY ONLY
         # ----------------------------------------------------
 
-        previous_day = df[
-            df["date"]
-            ==
+        signal = check_previous_day_signal(
+            df,
+            candles_3m,
             previous_date
-        ].copy()
-
-        # ----------------------------------------------------
-        # CURRENT TRADING DAY
-        # ----------------------------------------------------
-
-        current_day = df[
-            df["date"]
-            ==
-            trade_date
-        ].copy()
-
-        # ----------------------------------------------------
-        # SIGNAL
-        # ----------------------------------------------------
-
-        signal = get_signal(
-            previous_day
         )
 
         if signal == 0:
 
             continue
 
-        # ----------------------------------------------------
-        # 09:15 ENTRY
-        # ----------------------------------------------------
+        # ====================================================
+        # NEXT DAY ENTRY
+        # ====================================================
 
-        entry_rows = current_day[
-            current_day["time"]
-            ==
+        entry_candle = get_1min_candle(
+            df,
+            trade_date,
             ENTRY_TIME
-        ]
+        )
 
-        if entry_rows.empty:
+        if entry_candle is None:
 
             continue
 
         entry_price = float(
-            entry_rows.iloc[0]["open"]
+            entry_candle["open"]
         )
 
-        # ----------------------------------------------------
-        # 15:27 EXIT
-        #
-        # Actual 1-minute 15:27 OPEN.
-        # ----------------------------------------------------
+        # ====================================================
+        # NEXT DAY EXIT
+        # ====================================================
 
-        exit_rows = current_day[
-            current_day["time"]
-            ==
+        exit_candle = get_1min_candle(
+            df,
+            trade_date,
             EXIT_TIME
-        ]
+        )
 
-        if exit_rows.empty:
+        if exit_candle is None:
 
             continue
 
         exit_price = float(
-            exit_rows.iloc[0]["open"]
+            exit_candle["open"]
         )
 
         if entry_price <= 0:
 
             continue
 
-        # ----------------------------------------------------
+        # ====================================================
         # RETURN
-        # ----------------------------------------------------
+        # ====================================================
 
         if signal == 1:
 
-            direction = "LONG"
+            direction_name = "LONG"
 
             gross_return = (
-
                 (
-                    exit_price
-                    -
+                    exit_price -
                     entry_price
                 )
                 /
                 entry_price
                 *
                 100
-
             )
 
         else:
 
-            direction = "SHORT"
+            direction_name = "SHORT"
 
             gross_return = (
-
                 (
-                    entry_price
-                    -
+                    entry_price -
                     exit_price
                 )
                 /
                 entry_price
                 *
                 100
-
             )
 
         net_return = (
-
-            gross_return
-            -
+            gross_return -
             ROUND_TRIP_COST
-
         )
 
         results.append({
@@ -761,7 +861,7 @@ def backtest_stock(
                 trade_date,
 
             "direction":
-                direction,
+                direction_name,
 
             "entry":
                 entry_price,
@@ -774,7 +874,6 @@ def backtest_stock(
 
             "net_return":
                 net_return
-
         })
 
     return results
@@ -790,12 +889,18 @@ def calculate_statistics(
 
     if trades.empty:
 
-        return {}
+        return None
 
     returns = (
-        trades["net_return"]
+        trades[
+            "net_return"
+        ]
         .dropna()
     )
+
+    if returns.empty:
+
+        return None
 
     wins = (
         returns > 0
@@ -806,13 +911,11 @@ def calculate_statistics(
     )
 
     win_rate = (
-
         wins.sum()
         /
         len(returns)
         *
         100
-
     )
 
     average_return = (
@@ -830,21 +933,16 @@ def calculate_statistics(
     )
 
     gross_loss = abs(
-
         returns[
             returns < 0
         ].sum()
-
     )
 
     if gross_loss > 0:
 
         profit_factor = (
-
-            gross_profit
-            /
+            gross_profit /
             gross_loss
-
         )
 
     else:
@@ -879,61 +977,60 @@ def calculate_statistics(
 
         "worst_trade":
             returns.min()
-
     }
 
 
 # ============================================================
-# MAIN BACKTEST
+# MAIN
 # ============================================================
 
 def main():
 
+    print()
     print("=" * 100)
-
     print(
-        "3-MIN + 1-MIN EOD + "
-        "PREVIOUS-DAY OPENING TREND STRATEGY"
+        "EXACT 3-MIN + 1-MIN EOD/OPENING STRATEGY"
     )
-
     print("=" * 100)
 
     print()
-
+    print("PREVIOUS DAY CONDITIONS:")
+    print()
     print(
-        "PREVIOUS DAY:"
+        "3M 15:24 != 3M 15:27"
     )
 
     print(
-        "3-MIN 15:24 + 15:27 = OPPOSITE"
+        "3M Volume(15:27) > Volume(15:24)"
     )
 
     print(
-        "3-MIN 15:27 VOLUME > 15:24 VOLUME"
-    )
-
-    print(
-        "3-MIN 09:15 + 09:18 = 15:27 TREND"
-    )
-
-    print(
-        "1-MIN 15:28 + 15:29 = OPPOSITE"
-    )
-
-    print(
-        "1-MIN 15:28 VOLUME > 15:29 VOLUME"
-    )
-
-    print(
-        "1-MIN 15:28 = 3-MIN 15:27 TREND"
-    )
-
-    print(
-        "1-MIN 09:15 + 09:16 = 15:28 TREND"
+        "3M 09:15 = 3M 09:18 = 3M 15:27"
     )
 
     print()
+    print(
+        "1M 15:28 != 1M 15:29"
+    )
 
+    print(
+        "1M Volume(15:28) > Volume(15:29)"
+    )
+
+    print(
+        "1M 15:28 = 3M 15:27"
+    )
+
+    print(
+        "1M 09:15 = 1M 09:16 = 1M 15:28"
+    )
+
+    print()
+    print(
+        "DIRECTION = 3M 15:27"
+    )
+
+    print()
     print(
         "NEXT DAY:"
     )
@@ -947,49 +1044,56 @@ def main():
     )
 
     print()
-
     print(
-        "Round-trip cost:",
+        "ROUND-TRIP COST =",
         ROUND_TRIP_COST,
         "%"
     )
 
-    # --------------------------------------------------------
+    # ========================================================
     # FIND FILES
-    # --------------------------------------------------------
+    # ========================================================
 
     files = []
 
-    for pattern in [
-        "*.csv",
-        "*.CSV"
-    ]:
-
-        files.extend(
-            glob.glob(
-                os.path.join(
-                    DATA_FOLDER,
-                    pattern
-                )
+    files.extend(
+        glob.glob(
+            os.path.join(
+                DATA_FOLDER,
+                "*.csv"
             )
         )
+    )
+
+    files.extend(
+        glob.glob(
+            os.path.join(
+                DATA_FOLDER,
+                "*.CSV"
+            )
+        )
+    )
+
+    files = sorted(
+        set(files)
+    )
 
     if not files:
 
         raise FileNotFoundError(
-            f"No CSV files found in {DATA_FOLDER}"
+            f"No CSV files found in "
+            f"{DATA_FOLDER}"
         )
 
     print()
-
     print(
         "Stocks found:",
         len(files)
     )
 
-    # --------------------------------------------------------
-    # RUN
-    # --------------------------------------------------------
+    # ========================================================
+    # BACKTEST
+    # ========================================================
 
     all_results = []
 
@@ -1006,39 +1110,44 @@ def main():
 
         try:
 
-            result = backtest_stock(
+            results = backtest_stock(
                 file_path
             )
 
-            if result:
+            if results:
 
                 all_results.extend(
-                    result
+                    results
                 )
 
         except Exception as e:
 
             print(
-                f"\nError in "
+                f"\nERROR in "
                 f"{file_path}: "
                 f"{e}"
             )
 
     print()
 
-    # --------------------------------------------------------
-    # RESULTS
-    # --------------------------------------------------------
+    # ========================================================
+    # NO TRADES
+    # ========================================================
 
     if not all_results:
 
         print()
-
+        print("=" * 100)
         print(
-            "NO TRADES FOUND."
+            "NO QUALIFYING TRADES FOUND"
         )
+        print("=" * 100)
 
         return
+
+    # ========================================================
+    # DATAFRAME
+    # ========================================================
 
     trades = pd.DataFrame(
         all_results
@@ -1053,99 +1162,93 @@ def main():
         drop=True
     )
 
-    # --------------------------------------------------------
-    # OVERALL
-    # --------------------------------------------------------
+    # ========================================================
+    # OVERALL RESULTS
+    # ========================================================
 
-    overall = calculate_statistics(
+    stats = calculate_statistics(
         trades
     )
 
     print()
-
     print("=" * 100)
-
     print(
         "OVERALL RESULTS"
     )
-
     print("=" * 100)
 
     print(
         f"Trades          : "
-        f"{overall['trades']:,}"
+        f"{stats['trades']:,}"
     )
 
     print(
         f"Wins            : "
-        f"{overall['wins']:,}"
+        f"{stats['wins']:,}"
     )
 
     print(
         f"Losses          : "
-        f"{overall['losses']:,}"
+        f"{stats['losses']:,}"
     )
 
     print(
         f"Win rate        : "
-        f"{overall['win_rate']:.2f}%"
+        f"{stats['win_rate']:.2f}%"
     )
 
     print(
         f"Average return  : "
-        f"{overall['average_return']:.4f}%"
+        f"{stats['average_return']:.4f}%"
     )
 
     print(
         f"Total return    : "
-        f"{overall['total_return']:.4f}%"
+        f"{stats['total_return']:.4f}%"
     )
 
     print(
         f"Profit factor   : "
-        f"{overall['profit_factor']:.3f}"
+        f"{stats['profit_factor']:.3f}"
     )
 
     print(
         f"Best trade      : "
-        f"{overall['best_trade']:.4f}%"
+        f"{stats['best_trade']:.4f}%"
     )
 
     print(
         f"Worst trade     : "
-        f"{overall['worst_trade']:.4f}%"
+        f"{stats['worst_trade']:.4f}%"
     )
 
-    # --------------------------------------------------------
-    # LONG
-    # --------------------------------------------------------
+    # ========================================================
+    # LONG / SHORT
+    # ========================================================
 
-    long_trades = trades[
-        trades["direction"]
-        ==
-        "LONG"
-    ].copy()
-
-    short_trades = trades[
-        trades["direction"]
-        ==
+    for side in [
+        "LONG",
         "SHORT"
-    ].copy()
+    ]:
 
-    if not long_trades.empty:
+        subset = trades[
+            trades["direction"]
+            ==
+            side
+        ]
+
+        if subset.empty:
+            continue
 
         s = calculate_statistics(
-            long_trades
+            subset
         )
 
         print()
-
         print("=" * 100)
-
         print(
-            "LONG RESULTS"
+            f"{side} RESULTS"
         )
-
         print("=" * 100)
 
         print(
@@ -1159,7 +1262,7 @@ def main():
         )
 
         print(
-            f"Average        : "
+            f"Average return : "
             f"{s['average_return']:.4f}%"
         )
 
@@ -1168,55 +1271,14 @@ def main():
             f"{s['profit_factor']:.3f}"
         )
 
-    # --------------------------------------------------------
-    # SHORT
-    # --------------------------------------------------------
-
-    if not short_trades.empty:
-
-        s = calculate_statistics(
-            short_trades
-        )
-
-        print()
-
-        print("=" * 100)
-
-        print(
-            "SHORT RESULTS"
-        )
-
-        print("=" * 100)
-
-        print(
-            f"Trades         : "
-            f"{s['trades']:,}"
-        )
-
-        print(
-            f"Win rate       : "
-            f"{s['win_rate']:.2f}%"
-        )
-
-        print(
-            f"Average        : "
-            f"{s['average_return']:.4f}%"
-        )
-
-        print(
-            f"Profit factor  : "
-            f"{s['profit_factor']:.3f}"
-        )
-
-    # --------------------------------------------------------
-    # YEARLY
-    # --------------------------------------------------------
+    # ========================================================
+    # YEARLY RESULTS
+    # ========================================================
 
     trades["year"] = (
         pd.to_datetime(
             trades["trade_date"]
-        )
-        .dt.year
+        ).dt.year
     )
 
     yearly = []
@@ -1237,6 +1299,12 @@ def main():
             "trades":
                 s["trades"],
 
+            "wins":
+                s["wins"],
+
+            "losses":
+                s["losses"],
+
             "win_rate":
                 s["win_rate"],
 
@@ -1248,7 +1316,6 @@ def main():
 
             "total_return":
                 s["total_return"]
-
         })
 
     yearly_df = pd.DataFrame(
@@ -1256,13 +1323,10 @@ def main():
     )
 
     print()
-
     print("=" * 100)
-
     print(
         "YEARLY RESULTS"
     )
-
     print("=" * 100)
 
     print(
@@ -1271,42 +1335,42 @@ def main():
         )
     )
 
-    # --------------------------------------------------------
-    # SAVE
-    # --------------------------------------------------------
+    # ========================================================
+    # SAVE TRADES
+    # ========================================================
 
     trades.to_csv(
-        "EOD_OPENING_5MIN_TRADES.csv",
+        "EXACT_3M_1M_STRATEGY_TRADES.csv",
         index=False
     )
 
     yearly_df.to_csv(
-        "EOD_OPENING_5MIN_YEARLY.csv",
+        "EXACT_3M_1M_STRATEGY_YEARLY.csv",
         index=False
     )
 
+    # ========================================================
+    # FINAL
+    # ========================================================
+
     print()
-
     print("=" * 100)
-
     print(
         "BACKTEST COMPLETE"
     )
-
     print("=" * 100)
 
     print()
-
     print(
         "Saved:"
     )
 
     print(
-        "EOD_OPENING_5MIN_TRADES.csv"
+        "EXACT_3M_1M_STRATEGY_TRADES.csv"
     )
 
     print(
-        "EOD_OPENING_5MIN_YEARLY.csv"
+        "EXACT_3M_1M_STRATEGY_YEARLY.csv"
     )
 
 
