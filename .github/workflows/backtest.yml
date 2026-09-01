@@ -4,12 +4,12 @@ on:
   workflow_dispatch:
     inputs:
       start_date:
-        description: "Backtest start date YYYY-MM-DD"
+        description: "Backtest start date (YYYY-MM-DD)"
         required: false
         default: "2018-01-01"
 
       end_date:
-        description: "Backtest end date YYYY-MM-DD"
+        description: "Backtest end date (YYYY-MM-DD)"
         required: false
         default: "2026-12-31"
 
@@ -29,85 +29,267 @@ jobs:
 
     runs-on: ubuntu-latest
 
-    timeout-minutes: 120
+    timeout-minutes: 180
 
     steps:
 
-      # ---------------------------------------------------------
-      # CHECKOUT YOUR REPOSITORY
-      # ---------------------------------------------------------
+      # ============================================================
+      # 1. CHECKOUT YOUR BACKTESTER
+      # ============================================================
 
-      - name: Checkout backtester
+      - name: Checkout repository
         uses: actions/checkout@v4
 
 
-      # ---------------------------------------------------------
-      # PYTHON
-      # ---------------------------------------------------------
+      # ============================================================
+      # 2. SET UP PYTHON
+      # ============================================================
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.11"
-          cache: "pip"
 
 
-      # ---------------------------------------------------------
-      # INSTALL
-      # ---------------------------------------------------------
+      # ============================================================
+      # 3. INSTALL PYTHON PACKAGES
+      # ============================================================
 
       - name: Install dependencies
+        shell: bash
         run: |
+
           python -m pip install --upgrade pip
 
-          pip install \
+          python -m pip install \
             pandas \
             numpy \
             pyarrow
 
 
-      # ---------------------------------------------------------
-      # DOWNLOAD HISTORICAL DATA
-      # ---------------------------------------------------------
+      # ============================================================
+      # 4. VERIFY PYTHON
+      # ============================================================
 
-      - name: Clone historical NSE data 2018-2025
+      - name: Verify environment
+        shell: bash
         run: |
+
+          python --version
+
+          python -c "import pandas; print('pandas:', pandas.__version__)"
+
+          python -c "import numpy; print('numpy:', numpy.__version__)"
+
+          python -c "import pyarrow; print('pyarrow:', pyarrow.__version__)"
+
+
+      # ============================================================
+      # 5. DOWNLOAD 2018-2025 DATA
+      # ============================================================
+
+      - name: Download NSE historical data 2018-2025
+        shell: bash
+        run: |
+
+          echo "Downloading historical NSE data..."
+
           git clone \
             --depth 1 \
             https://github.com/ganeshbiyer/Nse_Historical_Data.git \
             historical_2018_2025
 
+          echo "2018-2025 repository downloaded."
 
-      - name: Clone historical NSE data 2026
+          echo "Repository contents:"
+
+          find historical_2018_2025 \
+            -maxdepth 2 \
+            -type f \
+            | head -100
+
+
+      # ============================================================
+      # 6. DOWNLOAD 2026 DATA
+      # ============================================================
+
+      - name: Download NSE historical data 2026
+        shell: bash
         run: |
+
+          echo "Downloading 2026 historical NSE data..."
+
           git clone \
             --depth 1 \
             https://github.com/ganeshbiyer/Nse_Historical_Data_2026.git \
             historical_2026
 
+          echo "2026 repository downloaded."
 
-      # ---------------------------------------------------------
-      # RUN BACKTEST
-      # ---------------------------------------------------------
+          echo "Repository contents:"
 
-      - name: Run scanner backtest
+          find historical_2026 \
+            -maxdepth 2 \
+            -type f \
+            | head -100
+
+
+      # ============================================================
+      # 7. FIND PARQUET FILES
+      # ============================================================
+
+      - name: Locate historical data files
+        shell: bash
+        run: |
+
+          echo "Searching for Parquet files..."
+
+          echo ""
+          echo "2018-2025:"
+          find historical_2018_2025 \
+            -type f \
+            \( -name "*.parquet" -o -name "*.pq" \) \
+            | head -30
+
+          echo ""
+          echo "2026:"
+          find historical_2026 \
+            -type f \
+            \( -name "*.parquet" -o -name "*.pq" \) \
+            | head -30
+
+          echo ""
+
+          COUNT_OLD=$(find historical_2018_2025 \
+            -type f \
+            \( -name "*.parquet" -o -name "*.pq" \) \
+            | wc -l)
+
+          COUNT_NEW=$(find historical_2026 \
+            -type f \
+            \( -name "*.parquet" -o -name "*.pq" \) \
+            | wc -l)
+
+          echo "2018-2025 Parquet files: $COUNT_OLD"
+          echo "2026 Parquet files:       $COUNT_NEW"
+
+          TOTAL=$((COUNT_OLD + COUNT_NEW))
+
+          echo "Total Parquet files:      $TOTAL"
+
+          if [ "$TOTAL" -eq 0 ]; then
+
+            echo ""
+            echo "ERROR: No Parquet files found."
+            echo ""
+
+            echo "Full directory structure:"
+            find historical_2018_2025 \
+              -maxdepth 4 \
+              -type f \
+              | head -200
+
+            find historical_2026 \
+              -maxdepth 4 \
+              -type f \
+              | head -200
+
+            exit 1
+
+          fi
+
+
+      # ============================================================
+      # 8. CHECK BACKTEST FILE
+      # ============================================================
+
+      - name: Verify backtest.py
+        shell: bash
+        run: |
+
+          if [ ! -f "backtest.py" ]; then
+
+            echo "ERROR: backtest.py was not found."
+
+            echo ""
+            echo "Repository files:"
+            find . \
+              -maxdepth 2 \
+              -type f \
+              | sort
+
+            exit 1
+
+          fi
+
+          echo "backtest.py found."
+
+
+      # ============================================================
+      # 9. RUN BACKTEST
+      # ============================================================
+
+      - name: Run NSE scanner backtest
+        shell: bash
         env:
           START_DATE: ${{ inputs.start_date }}
           END_DATE: ${{ inputs.end_date }}
           TRADE_SIDE: ${{ inputs.side }}
         run: |
 
-          python backtest.py
+          echo ""
+          echo "=============================================="
+          echo "NSE SCANNER BACKTEST"
+          echo "=============================================="
+          echo ""
+
+          echo "Start date : $START_DATE"
+          echo "End date   : $END_DATE"
+          echo "Side       : $TRADE_SIDE"
+
+          echo ""
+
+          python -u backtest.py
 
 
-      # ---------------------------------------------------------
-      # UPLOAD RESULTS
-      # ---------------------------------------------------------
+      # ============================================================
+      # 10. SHOW RESULT FILES
+      # ============================================================
+
+      - name: Show result files
+        if: always()
+        shell: bash
+        run: |
+
+          echo ""
+          echo "=============================================="
+          echo "RESULT FILES"
+          echo "=============================================="
+          echo ""
+
+          if [ -d "results" ]; then
+
+            find results \
+              -maxdepth 2 \
+              -type f \
+              -printf "%p (%s bytes)\n"
+
+          else
+
+            echo "No results directory found."
+
+          fi
+
+
+      # ============================================================
+      # 11. UPLOAD RESULTS
+      # ============================================================
 
       - name: Upload backtest results
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: NSE-backtest-results
-          path: |
-            results/
+          path: results/
+          if-no-files-found: warn
           retention-days: 30
