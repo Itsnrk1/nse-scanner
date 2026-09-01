@@ -1,49 +1,103 @@
-# ============================================================
-# DIAGNOSTIC BACKTEST
+# =============================================================================
+# NSE SCANNER BACKTEST
+# =============================================================================
 #
-# 3-MIN + 1-MIN PREVIOUS-DAY PATTERN
+# CORE LOGIC = USER'S CURRENT NSE SCANNER
 #
-# ============================================================
-#
-# PREVIOUS DAY:
+# PREVIOUS TRADING DAY
 #
 # 3-MIN:
 #   15:24 and 15:27 opposite
-#   Volume(15:27) > Volume(15:24)
-#   09:15 and 09:18 same as 15:27
+#   15:27 volume > 15:24
+#   09:15 and 09:18 both match 15:27
 #
 # 1-MIN:
 #   15:28 and 15:29 opposite
-#   Volume(15:28) > Volume(15:29)
-#   15:28 same trend as 3-min 15:27
-#   09:15 and 09:16 same as 15:28
+#   15:28 volume > 15:29
+#   15:28 matches 3-MIN 15:27
+#   09:15 and 09:16 both match 15:28
 #
-# NEXT DAY:
-#   09:15 OPEN = ENTRY
-#   15:27 OPEN = EXIT
+# NEXT TRADING DAY:
 #
-# ============================================================
+#   ENTRY = 09:15 OPEN
+#   EXIT  = 15:27 OPEN
+#
+# =============================================================================
 
-import pandas as pd
-import numpy as np
+
 import os
 import glob
+import time
+import traceback
+
+import numpy as np
+import pandas as pd
 
 
-# ============================================================
+# =============================================================================
 # SETTINGS
-# ============================================================
+# =============================================================================
 
-DATA_FOLDER = "./data"
+START_DATE = os.getenv(
+    "START_DATE",
+    "2018-01-01"
+)
+
+END_DATE = os.getenv(
+    "END_DATE",
+    "2026-12-31"
+)
+
+TRADE_SIDE = os.getenv(
+    "TRADE_SIDE",
+    "BOTH"
+).upper()
+
+
+# Round-trip cost in percentage points.
 
 ROUND_TRIP_COST = 0.10
 
 
-# ============================================================
-# TREND
-# ============================================================
+# Minimum required 1-minute candles.
 
-def get_trend(open_price, close_price):
+REQUIRED_MINUTES = {
+
+    "09:15",
+    "09:16",
+    "09:17",
+    "09:18",
+    "09:19",
+    "09:20",
+
+    "15:24",
+    "15:25",
+    "15:26",
+
+    "15:27",
+    "15:28",
+    "15:29",
+
+}
+
+
+# =============================================================================
+# DIRECTORIES
+# =============================================================================
+
+RESULTS_DIR = "results"
+
+os.makedirs(
+    RESULTS_DIR,
+    exist_ok=True
+)
+
+
+# =============================================================================
+# HELPERS
+# =============================================================================
+
+def trend(open_price, close_price):
 
     if close_price > open_price:
         return 1
@@ -54,202 +108,355 @@ def get_trend(open_price, close_price):
     return 0
 
 
-# ============================================================
-# LOAD DATA
-# ============================================================
+def direction_name(value):
 
-def load_data(file_path):
+    if value == 1:
+        return "LONG"
 
-    df = pd.read_csv(file_path)
+    if value == -1:
+        return "SHORT"
 
-    # --------------------------------------------------------
-    # Find datetime column
-    # --------------------------------------------------------
+    return None
 
-    datetime_col = None
 
-    for col in [
-        "datetime",
-        "Datetime",
-        "date_time",
-        "timestamp",
-        "time",
-        "Date"
-    ]:
+def safe_float(value):
 
-        if col in df.columns:
-            datetime_col = col
-            break
+    try:
 
-    if datetime_col is None:
+        value = float(value)
 
-        raise ValueError(
-            f"No datetime column found in {file_path}"
-        )
+        if np.isfinite(value):
 
-    df["datetime"] = pd.to_datetime(
-        df[datetime_col],
-        errors="coerce"
+            return value
+
+    except Exception:
+
+        pass
+
+    return np.nan
+
+
+# =============================================================================
+# LOAD PARQUET
+# =============================================================================
+
+def load_parquet(path):
+
+    df = pd.read_parquet(
+        path
     )
 
-    # --------------------------------------------------------
-    # Standardize columns
-    # --------------------------------------------------------
+
+    if df.empty:
+
+        return None
+
+
+    # ---------------------------------------------------------
+    # NORMALIZE COLUMN NAMES
+    # ---------------------------------------------------------
 
     rename = {}
 
-    for col in df.columns:
+    for column in df.columns:
 
-        c = col.lower()
+        c = str(column).strip().lower()
 
-        if c == "open":
-            rename[col] = "open"
+
+        if c in (
+            "datetime",
+            "date",
+            "timestamp",
+            "time"
+        ):
+
+            rename[column] = "datetime"
+
+
+        elif c == "open":
+
+            rename[column] = "open"
+
 
         elif c == "high":
-            rename[col] = "high"
+
+            rename[column] = "high"
+
 
         elif c == "low":
-            rename[col] = "low"
+
+            rename[column] = "low"
+
 
         elif c == "close":
-            rename[col] = "close"
 
-        elif c in ["volume", "vol"]:
-            rename[col] = "volume"
+            rename[column] = "close"
 
-    df = df.rename(columns=rename)
+
+        elif c in (
+            "volume",
+            "vol"
+        ):
+
+            rename[column] = "volume"
+
+
+    df = df.rename(
+        columns=rename
+    )
+
 
     required = [
+
         "datetime",
         "open",
         "high",
         "low",
         "close",
         "volume"
+
     ]
 
+
     missing = [
-        x for x in required
-        if x not in df.columns
+
+        c
+        for c in required
+        if c not in df.columns
+
     ]
+
 
     if missing:
 
         raise ValueError(
-            f"Missing columns: {missing}"
+            f"Missing columns "
+            f"{missing}"
         )
 
-    # --------------------------------------------------------
-    # Numeric conversion
-    # --------------------------------------------------------
 
-    for col in [
+    # ---------------------------------------------------------
+    # DATETIME
+    # ---------------------------------------------------------
+
+    df["datetime"] = pd.to_datetime(
+        df["datetime"],
+        errors="coerce"
+    )
+
+
+    df = df.dropna(
+        subset=[
+            "datetime"
+        ]
+    )
+
+
+    # ---------------------------------------------------------
+    # TIMEZONE
+    # ---------------------------------------------------------
+
+    if getattr(
+        df["datetime"].dt,
+        "tz",
+        None
+    ) is not None:
+
+        df["datetime"] = (
+            df["datetime"]
+            .dt.tz_convert(
+                "Asia/Kolkata"
+            )
+            .dt.tz_localize(
+                None
+            )
+        )
+
+
+    # ---------------------------------------------------------
+    # NUMERIC
+    # ---------------------------------------------------------
+
+    for column in [
+
         "open",
         "high",
         "low",
         "close",
         "volume"
+
     ]:
 
-        df[col] = pd.to_numeric(
-            df[col],
+        df[column] = pd.to_numeric(
+            df[column],
             errors="coerce"
         )
 
-    # --------------------------------------------------------
-    # Remove bad rows
-    # --------------------------------------------------------
 
     df = df.dropna(
         subset=[
-            "datetime",
             "open",
             "high",
             "low",
             "close",
             "volume"
         ]
-    ).copy()
-
-    df = df.sort_values(
-        "datetime"
-    ).reset_index(
-        drop=True
     )
 
-    # --------------------------------------------------------
-    # Date and time
-    # --------------------------------------------------------
+
+    # ---------------------------------------------------------
+    # NSE SESSION
+    # ---------------------------------------------------------
 
     df["date"] = (
         df["datetime"]
         .dt.date
     )
 
+
     df["time"] = (
         df["datetime"]
-        .dt.strftime("%H:%M")
+        .dt.strftime(
+            "%H:%M"
+        )
     )
 
-    # --------------------------------------------------------
-    # Regular NSE session
-    # --------------------------------------------------------
 
     df = df[
-        (df["time"] >= "09:15")
+        (
+            df["time"] >= "09:15"
+        )
         &
-        (df["time"] <= "15:29")
+        (
+            df["time"] <= "15:29"
+        )
     ].copy()
+
+
+    # ---------------------------------------------------------
+    # DATE FILTER
+    # ---------------------------------------------------------
+
+    df = df[
+        (
+            df["date"]
+            >= pd.to_datetime(
+                START_DATE
+            ).date()
+        )
+        &
+        (
+            df["date"]
+            <= pd.to_datetime(
+                END_DATE
+            ).date()
+        )
+    ].copy()
+
+
+    if df.empty:
+
+        return None
+
+
+    # ---------------------------------------------------------
+    # SORT / DUPLICATES
+    # ---------------------------------------------------------
+
+    df = df.sort_values(
+        "datetime"
+    )
+
+
+    df = df.drop_duplicates(
+        subset=[
+            "datetime"
+        ],
+        keep="last"
+    )
+
+
+    df = df.reset_index(
+        drop=True
+    )
+
 
     return df
 
 
-# ============================================================
-# CREATE 3-MIN CANDLES
-# ============================================================
+# =============================================================================
+# CREATE EXACT 3-MIN CANDLES
+# =============================================================================
 
-def create_3min(df):
+def create_3m(df):
 
     x = df.copy()
 
+
     minutes = (
+
         x["datetime"].dt.hour * 60
         +
         x["datetime"].dt.minute
+
     )
 
-    market_open = 9 * 60 + 15
+
+    market_open = (
+        9 * 60 + 15
+    )
+
 
     minutes_from_open = (
         minutes - market_open
     )
 
+
     x["bucket"] = (
         minutes_from_open // 3
     )
 
+
     candle_start = (
+
         market_open
         +
         x["bucket"] * 3
+
     )
 
-    hour = candle_start // 60
-    minute = candle_start % 60
+
+    hour = (
+        candle_start // 60
+    )
+
+
+    minute = (
+        candle_start % 60
+    )
+
 
     x["candle_time"] = (
+
         hour.astype(int)
         .astype(str)
         .str.zfill(2)
+
         +
+
         ":"
+
         +
+
         minute.astype(int)
         .astype(str)
         .str.zfill(2)
+
     )
 
+
     candles = (
+
         x.groupby(
             [
                 "date",
@@ -257,585 +464,682 @@ def create_3min(df):
             ],
             sort=True
         )
+
         .agg(
-            open=("open", "first"),
-            high=("high", "max"),
-            low=("low", "min"),
-            close=("close", "last"),
-            volume=("volume", "sum"),
-            source_bars=("close", "count")
+
+            open=(
+                "open",
+                "first"
+            ),
+
+            high=(
+                "high",
+                "max"
+            ),
+
+            low=(
+                "low",
+                "min"
+            ),
+
+            close=(
+                "close",
+                "last"
+            ),
+
+            volume=(
+                "volume",
+                "sum"
+            ),
+
+            source_bars=(
+                "close",
+                "count"
+            )
+
         )
+
         .reset_index()
+
     )
+
 
     return candles
 
 
-# ============================================================
-# GET 3-MIN CANDLE
-# ============================================================
+# =============================================================================
+# BUILD LOOKUPS
+# =============================================================================
 
-def get_3m(
-    candles,
-    date,
-    time
-):
+def build_1m_lookup(df):
 
-    result = candles[
-        (candles["date"] == date)
-        &
-        (candles["candle_time"] == time)
-    ]
-
-    if result.empty:
-        return None
-
-    return result.iloc[0]
+    lookup = {}
 
 
-# ============================================================
-# GET 1-MIN CANDLE
-# ============================================================
+    for row in df.itertuples(
+        index=False
+    ):
 
-def get_1m(
-    df,
-    date,
-    time
-):
-
-    result = df[
-        (df["date"] == date)
-        &
-        (df["time"] == time)
-    ]
-
-    if result.empty:
-        return None
-
-    return result.iloc[0]
+        lookup[
+            (
+                row.date,
+                row.time
+            )
+        ] = row
 
 
-# ============================================================
-# DIAGNOSTIC COUNTERS
-# ============================================================
-
-def empty_counter():
-
-    return {
-        "total_previous_days": 0,
-
-        "has_3m_1524": 0,
-        "has_3m_1527": 0,
-        "has_3m_opening": 0,
-
-        "opening_3m_same": 0,
-
-        "3m_eod_opposite": 0,
-
-        "3m_volume_condition": 0,
-
-        "3m_opening_matches_1527": 0,
-
-        "has_1m_1528": 0,
-        "has_1m_1529": 0,
-        "has_1m_opening": 0,
-
-        "opening_1m_same": 0,
-
-        "1m_eod_opposite": 0,
-
-        "1m_volume_condition": 0,
-
-        "1m_1528_matches_3m_1527": 0,
-
-        "final_signal": 0,
-
-        "long_signals": 0,
-        "short_signals": 0
-    }
+    return lookup
 
 
-# ============================================================
-# DIAGNOSTIC ONE STOCK
-# ============================================================
+def build_3m_lookup(candles):
 
-def diagnose_stock(
+    lookup = {}
+
+
+    for row in candles.itertuples(
+        index=False
+    ):
+
+        # IMPORTANT:
+        #
+        # A valid 3-minute candle must
+        # contain all 3 one-minute bars.
+        #
+
+        if row.source_bars != 3:
+
+            continue
+
+
+        lookup[
+            (
+                row.date,
+                row.candle_time
+            )
+        ] = row
+
+
+    return lookup
+
+
+# =============================================================================
+# SIGNAL DETECTION
+# =============================================================================
+
+def find_signals(
     df,
     candles_3m
 ):
 
-    counter = empty_counter()
-
-    signal_days = []
-
-    dates = sorted(
-        df["date"].unique()
+    lookup_1m = build_1m_lookup(
+        df
     )
 
-    # --------------------------------------------------------
-    # Need a previous day AND a next trading day
-    # --------------------------------------------------------
+    lookup_3m = build_3m_lookup(
+        candles_3m
+    )
+
+
+    dates = sorted(
+        df["date"]
+        .unique()
+    )
+
+
+    signals = []
+
+
+    diagnostics = {
+
+        "days_seen": 0,
+
+        "missing_3m": 0,
+
+        "missing_1m": 0,
+
+        "cond1": 0,
+
+        "cond2": 0,
+
+        "cond3": 0,
+
+        "cond4": 0,
+
+        "cond5": 0,
+
+        "signals": 0,
+
+        "long_signals": 0,
+
+        "short_signals": 0,
+
+    }
+
+
+    # ---------------------------------------------------------
+    # PREVIOUS DAY -> NEXT TRADING DAY
+    # ---------------------------------------------------------
 
     for i in range(
         1,
         len(dates)
     ):
 
-        previous_date = dates[i - 1]
-        trade_date = dates[i]
+        signal_date = (
+            dates[i - 1]
+        )
 
-        counter[
-            "total_previous_days"
+        trade_date = (
+            dates[i]
+        )
+
+
+        diagnostics[
+            "days_seen"
         ] += 1
 
-        # ====================================================
+
+        # =====================================================
         # 3-MIN CANDLES
-        # ====================================================
+        # =====================================================
 
-        c3_0915 = get_3m(
-            candles_3m,
-            previous_date,
-            "09:15"
+        c1524 = lookup_3m.get(
+            (
+                signal_date,
+                "15:24"
+            )
         )
 
-        c3_0918 = get_3m(
-            candles_3m,
-            previous_date,
-            "09:18"
+
+        c1527 = lookup_3m.get(
+            (
+                signal_date,
+                "15:27"
+            )
         )
 
-        c3_1524 = get_3m(
-            candles_3m,
-            previous_date,
-            "15:24"
+
+        c0915 = lookup_3m.get(
+            (
+                signal_date,
+                "09:15"
+            )
         )
 
-        c3_1527 = get_3m(
-            candles_3m,
-            previous_date,
-            "15:27"
+
+        c0918 = lookup_3m.get(
+            (
+                signal_date,
+                "09:18"
+            )
         )
 
-        # ----------------------------------------------------
-        # Existence
-        # ----------------------------------------------------
-
-        if c3_1524 is not None:
-            counter["has_3m_1524"] += 1
-
-        if c3_1527 is not None:
-            counter["has_3m_1527"] += 1
-
-        if (
-            c3_0915 is not None
-            and
-            c3_0918 is not None
-        ):
-            counter["has_3m_opening"] += 1
 
         if any(
             x is None
             for x in [
-                c3_0915,
-                c3_0918,
-                c3_1524,
-                c3_1527
+                c1524,
+                c1527,
+                c0915,
+                c0918
             ]
         ):
+
+            diagnostics[
+                "missing_3m"
+            ] += 1
+
             continue
 
-        # ----------------------------------------------------
-        # Trends
-        # ----------------------------------------------------
 
-        t3_0915 = get_trend(
-            c3_0915["open"],
-            c3_0915["close"]
+        # =====================================================
+        # 3-MIN DIRECTIONS
+        # =====================================================
+
+        t1524 = trend(
+            c1524.open,
+            c1524.close
         )
 
-        t3_0918 = get_trend(
-            c3_0918["open"],
-            c3_0918["close"]
+
+        t1527 = trend(
+            c1527.open,
+            c1527.close
         )
 
-        t3_1524 = get_trend(
-            c3_1524["open"],
-            c3_1524["close"]
+
+        t0915 = trend(
+            c0915.open,
+            c0915.close
         )
 
-        t3_1527 = get_trend(
-            c3_1527["open"],
-            c3_1527["close"]
+
+        t0918 = trend(
+            c0918.open,
+            c0918.close
         )
 
-        # ----------------------------------------------------
-        # No dojis
-        # ----------------------------------------------------
 
         if 0 in [
-            t3_0915,
-            t3_0918,
-            t3_1524,
-            t3_1527
+            t1524,
+            t1527,
+            t0915,
+            t0918
         ]:
+
             continue
 
-        # ====================================================
+
+        # =====================================================
         # CONDITION 1
         #
-        # 3M 09:15 == 09:18
-        # ====================================================
+        # 15:24 / 15:27 OPPOSITE
+        # 15:27 VOLUME > 15:24
+        # =====================================================
 
-        if t3_0915 == t3_0918:
+        cond1 = (
 
-            counter[
-                "opening_3m_same"
-            ] += 1
+            t1524 != t1527
 
-        else:
+            and
+
+            c1527.volume
+            >
+            c1524.volume
+
+        )
+
+
+        if not cond1:
 
             continue
 
-        # ====================================================
+
+        diagnostics[
+            "cond1"
+        ] += 1
+
+
+        # =====================================================
         # CONDITION 2
         #
-        # 3M 15:24 != 15:27
-        # ====================================================
+        # 09:15 AND 09:18
+        # BOTH MATCH 15:27
+        # =====================================================
 
-        if t3_1524 != t3_1527:
+        cond2 = (
 
-            counter[
-                "3m_eod_opposite"
-            ] += 1
+            t0915 == t1527
 
-        else:
-
-            continue
-
-        # ====================================================
-        # CONDITION 3
-        #
-        # 15:27 VOLUME > 15:24
-        # ====================================================
-
-        if (
-            c3_1527["volume"]
-            >
-            c3_1524["volume"]
-        ):
-
-            counter[
-                "3m_volume_condition"
-            ] += 1
-
-        else:
-
-            continue
-
-        # ====================================================
-        # CONDITION 4
-        #
-        # 09:15 & 09:18 = 15:27
-        # ====================================================
-
-        if (
-            t3_0915 == t3_1527
             and
-            t3_0918 == t3_1527
-        ):
 
-            counter[
-                "3m_opening_matches_1527"
-            ] += 1
+            t0918 == t1527
 
-        else:
+        )
+
+
+        if not cond2:
 
             continue
 
-        # ====================================================
-        # 1-MINUTE CANDLES
-        # ====================================================
 
-        c1_0915 = get_1m(
-            df,
-            previous_date,
-            "09:15"
+        diagnostics[
+            "cond2"
+        ] += 1
+
+
+        # =====================================================
+        # 1-MIN CANDLES
+        # =====================================================
+
+        c1528 = lookup_1m.get(
+            (
+                signal_date,
+                "15:28"
+            )
         )
 
-        c1_0916 = get_1m(
-            df,
-            previous_date,
-            "09:16"
+
+        c1529 = lookup_1m.get(
+            (
+                signal_date,
+                "15:29"
+            )
         )
 
-        c1_1528 = get_1m(
-            df,
-            previous_date,
-            "15:28"
+
+        c1_0915 = lookup_1m.get(
+            (
+                signal_date,
+                "09:15"
+            )
         )
 
-        c1_1529 = get_1m(
-            df,
-            previous_date,
-            "15:29"
+
+        c1_0916 = lookup_1m.get(
+            (
+                signal_date,
+                "09:16"
+            )
         )
 
-        if c1_1528 is not None:
-            counter["has_1m_1528"] += 1
-
-        if c1_1529 is not None:
-            counter["has_1m_1529"] += 1
-
-        if (
-            c1_0915 is not None
-            and
-            c1_0916 is not None
-        ):
-            counter["has_1m_opening"] += 1
 
         if any(
             x is None
             for x in [
+                c1528,
+                c1529,
                 c1_0915,
-                c1_0916,
-                c1_1528,
-                c1_1529
+                c1_0916
             ]
         ):
+
+            diagnostics[
+                "missing_1m"
+            ] += 1
+
             continue
 
-        # ----------------------------------------------------
-        # 1-minute trends
-        # ----------------------------------------------------
 
-        t1_0915 = get_trend(
-            c1_0915["open"],
-            c1_0915["close"]
+        # =====================================================
+        # 1-MIN DIRECTIONS
+        # =====================================================
+
+        t1528 = trend(
+            c1528.open,
+            c1528.close
         )
 
-        t1_0916 = get_trend(
-            c1_0916["open"],
-            c1_0916["close"]
+
+        t1529 = trend(
+            c1529.open,
+            c1529.close
         )
 
-        t1_1528 = get_trend(
-            c1_1528["open"],
-            c1_1528["close"]
+
+        t1_0915 = trend(
+            c1_0915.open,
+            c1_0915.close
         )
 
-        t1_1529 = get_trend(
-            c1_1529["open"],
-            c1_1529["close"]
+
+        t1_0916 = trend(
+            c1_0916.open,
+            c1_0916.close
         )
+
 
         if 0 in [
+            t1528,
+            t1529,
             t1_0915,
-            t1_0916,
-            t1_1528,
-            t1_1529
+            t1_0916
         ]:
+
             continue
 
-        # ====================================================
+
+        # =====================================================
+        # CONDITION 3
+        #
+        # 15:28 / 15:29 OPPOSITE
+        # 15:28 VOLUME > 15:29
+        # =====================================================
+
+        cond3 = (
+
+            t1528 != t1529
+
+            and
+
+            c1528.volume
+            >
+            c1529.volume
+
+        )
+
+
+        if not cond3:
+
+            continue
+
+
+        diagnostics[
+            "cond3"
+        ] += 1
+
+
+        # =====================================================
+        # CONDITION 4
+        #
+        # 1-MIN 15:28 = 3-MIN 15:27
+        # =====================================================
+
+        cond4 = (
+            t1528 == t1527
+        )
+
+
+        if not cond4:
+
+            continue
+
+
+        diagnostics[
+            "cond4"
+        ] += 1
+
+
+        # =====================================================
         # CONDITION 5
         #
-        # 1M 09:15 == 09:16
-        # ====================================================
+        # 1-MIN 09:15 AND 09:16
+        # BOTH MATCH 15:28
+        # =====================================================
 
-        if t1_0915 == t1_0916:
+        cond5 = (
 
-            counter[
-                "opening_1m_same"
-            ] += 1
+            t1_0915 == t1528
 
-        else:
-
-            continue
-
-        # ====================================================
-        # CONDITION 6
-        #
-        # 1M 15:28 != 15:29
-        # ====================================================
-
-        if t1_1528 != t1_1529:
-
-            counter[
-                "1m_eod_opposite"
-            ] += 1
-
-        else:
-
-            continue
-
-        # ====================================================
-        # CONDITION 7
-        #
-        # 15:28 VOLUME > 15:29
-        # ====================================================
-
-        if (
-            c1_1528["volume"]
-            >
-            c1_1529["volume"]
-        ):
-
-            counter[
-                "1m_volume_condition"
-            ] += 1
-
-        else:
-
-            continue
-
-        # ====================================================
-        # CONDITION 8
-        #
-        # 1M 15:28 == 3M 15:27
-        # ====================================================
-
-        if t1_1528 == t3_1527:
-
-            counter[
-                "1m_1528_matches_3m_1527"
-            ] += 1
-
-        else:
-
-            continue
-
-        # ====================================================
-        # CONDITION 9
-        #
-        # 1M 09:15 & 09:16 = 1M 15:28
-        # ====================================================
-
-        if (
-            t1_0915 == t1_1528
             and
-            t1_0916 == t1_1528
-        ):
 
-            counter[
-                "final_signal"
+            t1_0916 == t1528
+
+        )
+
+
+        if not cond5:
+
+            continue
+
+
+        diagnostics[
+            "cond5"
+        ] += 1
+
+
+        # =====================================================
+        # FINAL SIGNAL
+        # =====================================================
+
+        side = direction_name(
+            t1527
+        )
+
+
+        diagnostics[
+            "signals"
+        ] += 1
+
+
+        if side == "LONG":
+
+            diagnostics[
+                "long_signals"
             ] += 1
 
-            if t3_1527 == 1:
 
-                counter[
-                    "long_signals"
-                ] += 1
+        else:
 
-            elif t3_1527 == -1:
-
-                counter[
-                    "short_signals"
-                ] += 1
-
-            signal_days.append({
-                "signal_date":
-                    previous_date,
-
-                "trade_date":
-                    trade_date,
-
-                "direction":
-                    (
-                        "LONG"
-                        if t3_1527 == 1
-                        else
-                        "SHORT"
-                    ),
-
-                "signal_trend":
-                    t3_1527
-            })
-
-    return counter, signal_days
+            diagnostics[
+                "short_signals"
+            ] += 1
 
 
-# ============================================================
-# BACKTEST SIGNAL DAYS
-# ============================================================
+        signals.append({
+
+            "signal_date":
+                signal_date,
+
+            "trade_date":
+                trade_date,
+
+            "direction":
+                side,
+
+            "signal_trend":
+                t1527,
+
+        })
+
+
+    return (
+        signals,
+        diagnostics
+    )
+
+
+# =============================================================================
+# EXECUTE SIGNALS
+# =============================================================================
 
 def execute_trades(
     df,
-    signal_days
+    signals
 ):
 
-    results = []
+    lookup = build_1m_lookup(
+        df
+    )
 
-    for signal in signal_days:
+
+    trades = []
+
+
+    for signal in signals:
+
+        side = (
+            signal["signal_trend"]
+        )
+
 
         trade_date = (
             signal["trade_date"]
         )
 
-        direction = (
-            signal["signal_trend"]
+
+        # -----------------------------------------------------
+        # NEXT DAY 09:15 OPEN
+        # -----------------------------------------------------
+
+        entry = lookup.get(
+            (
+                trade_date,
+                "09:15"
+            )
         )
 
-        entry = get_1m(
-            df,
-            trade_date,
-            "09:15"
+
+        # -----------------------------------------------------
+        # NEXT DAY 15:27 OPEN
+        # -----------------------------------------------------
+
+        exit_ = lookup.get(
+            (
+                trade_date,
+                "15:27"
+            )
         )
 
-        exit_ = get_1m(
-            df,
-            trade_date,
-            "15:27"
-        )
 
         if entry is None:
             continue
 
+
         if exit_ is None:
             continue
 
-        entry_price = float(
-            entry["open"]
+
+        entry_price = safe_float(
+            entry.open
         )
 
-        exit_price = float(
-            exit_["open"]
+
+        exit_price = safe_float(
+            exit_.open
         )
 
-        if entry_price <= 0:
+
+        if (
+            not np.isfinite(
+                entry_price
+            )
+            or
+            not np.isfinite(
+                exit_price
+            )
+            or
+            entry_price <= 0
+        ):
+
             continue
 
-        if direction == 1:
+
+        # -----------------------------------------------------
+        # RETURN
+        # -----------------------------------------------------
+
+        if side == 1:
 
             gross = (
+
                 (
-                    exit_price -
+                    exit_price
+                    -
                     entry_price
                 )
                 /
                 entry_price
                 *
                 100
+
             )
 
         else:
 
             gross = (
+
                 (
-                    entry_price -
+                    entry_price
+                    -
                     exit_price
                 )
                 /
                 entry_price
                 *
                 100
+
             )
 
+
         net = (
-            gross -
+            gross
+            -
             ROUND_TRIP_COST
         )
 
-        results.append({
+
+        trades.append({
 
             "signal_date":
                 signal["signal_date"],
@@ -844,10 +1148,8 @@ def execute_trades(
                 trade_date,
 
             "direction":
-                (
-                    "LONG"
-                    if direction == 1
-                    else "SHORT"
+                direction_name(
+                    side
                 ),
 
             "entry":
@@ -856,646 +1158,909 @@ def execute_trades(
             "exit":
                 exit_price,
 
-            "gross_return":
+            "gross_return_pct":
                 gross,
 
-            "net_return":
-                net
+            "net_return_pct":
+                net,
+
         })
 
-    return results
+
+    return trades
 
 
-# ============================================================
+# =============================================================================
+# PROCESS ONE STOCK
+# =============================================================================
+
+def process_stock(
+    path
+):
+
+    symbol = os.path.basename(
+        path
+    )
+
+    symbol = os.path.splitext(
+        symbol
+    )[0]
+
+
+    try:
+
+        df = load_parquet(
+            path
+        )
+
+
+        if df is None:
+
+            return [], {
+
+                "symbol":
+                    symbol,
+
+                "status":
+                    "NO_DATA"
+
+            }
+
+
+        candles_3m = create_3m(
+            df
+        )
+
+
+        signals, diagnostics = (
+            find_signals(
+                df,
+                candles_3m
+            )
+        )
+
+
+        trades = execute_trades(
+            df,
+            signals
+        )
+
+
+        for trade in trades:
+
+            trade[
+                "symbol"
+            ] = symbol
+
+
+        diagnostics[
+            "symbol"
+        ] = symbol
+
+
+        diagnostics[
+            "status"
+        ] = "OK"
+
+
+        return (
+            trades,
+            diagnostics
+        )
+
+
+    except Exception as e:
+
+        return [], {
+
+            "symbol":
+                symbol,
+
+            "status":
+                "ERROR",
+
+            "error":
+                str(e)
+
+        }
+
+
+# =============================================================================
 # STATISTICS
-# ============================================================
+# =============================================================================
 
-def statistics(
+def calculate_stats(
     trades
 ):
 
-    if trades.empty:
+    if not trades:
 
-        return None
+        return {
 
-    r = (
-        trades["net_return"]
-        .astype(float)
+            "trades": 0,
+
+            "wins": 0,
+
+            "losses": 0,
+
+            "win_rate": 0.0,
+
+            "average_return": 0.0,
+
+            "total_return": 0.0,
+
+            "profit_factor": 0.0,
+
+            "best_trade": 0.0,
+
+            "worst_trade": 0.0,
+
+        }
+
+
+    returns = pd.Series(
+
+        [
+            float(
+                x["net_return_pct"]
+            )
+
+            for x in trades
+
+        ]
+
     )
 
-    wins = r > 0
-    losses = r < 0
+
+    wins = (
+        returns > 0
+    )
+
+
+    losses = (
+        returns < 0
+    )
+
 
     gross_profit = (
-        r[wins].sum()
+        returns[wins]
+        .sum()
     )
 
+
     gross_loss = abs(
-        r[losses].sum()
+        returns[losses]
+        .sum()
     )
+
 
     if gross_loss > 0:
 
-        pf = (
-            gross_profit /
+        profit_factor = (
+            gross_profit
+            /
             gross_loss
         )
 
     else:
 
-        pf = np.inf
+        profit_factor = np.inf
+
 
     return {
 
         "trades":
-            len(r),
+            len(returns),
 
         "wins":
-            int(wins.sum()),
+            int(
+                wins.sum()
+            ),
 
         "losses":
-            int(losses.sum()),
+            int(
+                losses.sum()
+            ),
 
         "win_rate":
-            wins.mean() * 100,
+            float(
+                wins.mean()
+                *
+                100
+            ),
 
-        "average":
-            r.mean(),
+        "average_return":
+            float(
+                returns.mean()
+            ),
 
-        "total":
-            r.sum(),
+        "total_return":
+            float(
+                returns.sum()
+            ),
 
         "profit_factor":
-            pf,
+            float(
+                profit_factor
+            ),
 
-        "best":
-            r.max(),
+        "best_trade":
+            float(
+                returns.max()
+            ),
 
-        "worst":
-            r.min()
+        "worst_trade":
+            float(
+                returns.min()
+            ),
+
     }
 
 
-# ============================================================
+# =============================================================================
 # MAIN
-# ============================================================
+# =============================================================================
 
 def main():
 
-    print()
-    print("=" * 100)
-    print(
-        "DIAGNOSTIC BACKTEST"
-    )
-    print(
-        "3-MIN + 1-MIN PREVIOUS-DAY STRATEGY"
-    )
-    print("=" * 100)
+    start_time = time.time()
+
 
     print()
+    print("=" * 90)
     print(
-        "ENTRY : NEXT DAY 09:15 OPEN"
+        "NSE SCANNER HISTORICAL BACKTEST"
     )
-
-    print(
-        "EXIT  : NEXT DAY 15:27 OPEN"
-    )
+    print("=" * 90)
 
     print(
-        "COST  :",
-        ROUND_TRIP_COST,
-        "%"
+        f"Start date : {START_DATE}"
     )
 
-    # ========================================================
-    # FILES
-    # ========================================================
-
-    files = sorted(
-        set(
-            glob.glob(
-                os.path.join(
-                    DATA_FOLDER,
-                    "*.csv"
-                )
-            )
-            +
-            glob.glob(
-                os.path.join(
-                    DATA_FOLDER,
-                    "*.CSV"
-                )
-            )
-        )
+    print(
+        f"End date   : {END_DATE}"
     )
 
-    if not files:
+    print(
+        f"Trade side : {TRADE_SIDE}"
+    )
 
-        raise FileNotFoundError(
-            f"No CSV files found in "
-            f"{DATA_FOLDER}"
+    print(
+        f"Cost       : {ROUND_TRIP_COST}%"
+    )
+
+    print("=" * 90)
+    print()
+
+
+    # =====================================================================
+    # FIND PARQUET FILES
+    # =====================================================================
+
+    paths = []
+
+
+    paths.extend(
+
+        glob.glob(
+            "historical_2018_2025/*.parquet"
         )
 
-    print()
-    print(
-        "Files found:",
-        len(files)
     )
 
-    # ========================================================
-    # GLOBAL COUNTERS
-    # ========================================================
 
-    global_counter = empty_counter()
+    paths.extend(
 
-    all_signal_days = []
+        glob.glob(
+            "historical_2026/*.parquet"
+        )
+
+    )
+
+
+    # Remove duplicates.
+
+    paths = sorted(
+        set(paths)
+    )
+
+
+    # Exclude index files.
+
+    paths = [
+
+        p
+        for p in paths
+
+        if "INDEX" not in
+        os.path.basename(p).upper()
+
+    ]
+
+
+    if not paths:
+
+        raise RuntimeError(
+            "No Parquet stock files found."
+        )
+
+
+    print(
+        f"Stock files found: "
+        f"{len(paths)}"
+    )
+
+    print()
+
 
     all_trades = []
 
-    # ========================================================
-    # PROCESS STOCKS
-    # ========================================================
+    diagnostics = []
 
-    for i, file_path in enumerate(
-        files,
+
+    # =====================================================================
+    # PROCESS STOCKS
+    # =====================================================================
+
+    for number, path in enumerate(
+        paths,
         1
     ):
 
-        print(
-            f"\rProcessing "
-            f"{i}/{len(files)}",
-            end=""
+        symbol = os.path.basename(
+            path
         )
 
-        try:
 
-            df = load_data(
-                file_path
-            )
-
-            candles_3m = create_3min(
-                df
-            )
-
-            counter, signals = (
-                diagnose_stock(
-                    df,
-                    candles_3m
-                )
-            )
-
-            # ------------------------------------------------
-            # Add counters
-            # ------------------------------------------------
-
-            for key in global_counter:
-
-                global_counter[key] += (
-                    counter[key]
-                )
-
-            # ------------------------------------------------
-            # Add stock name
-            # ------------------------------------------------
-
-            for signal in signals:
-
-                signal["symbol"] = (
-                    os.path.basename(
-                        file_path
-                    )
-                )
-
-            all_signal_days.extend(
-                signals
-            )
-
-            # ------------------------------------------------
-            # Execute
-            # ------------------------------------------------
-
-            trade_results = execute_trades(
-                df,
-                signals
-            )
-
-            for trade in trade_results:
-
-                trade["symbol"] = (
-                    os.path.basename(
-                        file_path
-                    )
-                )
-
-            all_trades.extend(
-                trade_results
-            )
-
-        except Exception as e:
-
-            print()
-            print(
-                "ERROR:",
-                os.path.basename(
-                    file_path
-                )
-            )
-
-            print(
-                str(e)
-            )
-
-    print()
-
-    # ========================================================
-    # DIAGNOSTIC REPORT
-    # ========================================================
-
-    print()
-    print("=" * 100)
-    print(
-        "CONDITION-BY-CONDITION DIAGNOSTIC"
-    )
-    print("=" * 100)
-
-    total = (
-        global_counter[
-            "total_previous_days"
-        ]
-    )
-
-    print()
-    print(
-        f"All previous trading days       : "
-        f"{total:,}"
-    )
-
-    print()
-    print(
-        "--- 3-MINUTE DATA AVAILABILITY ---"
-    )
-
-    print(
-        f"3M 15:24 available              : "
-        f"{global_counter['has_3m_1524']:,}"
-    )
-
-    print(
-        f"3M 15:27 available              : "
-        f"{global_counter['has_3m_1527']:,}"
-    )
-
-    print(
-        f"3M 09:15 + 09:18 available      : "
-        f"{global_counter['has_3m_opening']:,}"
-    )
-
-    print()
-    print(
-        "--- 3-MINUTE CONDITIONS ---"
-    )
-
-    print(
-        f"09:15 = 09:18                  : "
-        f"{global_counter['opening_3m_same']:,}"
-    )
-
-    print(
-        f"15:24 != 15:27                 : "
-        f"{global_counter['3m_eod_opposite']:,}"
-    )
-
-    print(
-        f"Volume 15:27 > 15:24           : "
-        f"{global_counter['3m_volume_condition']:,}"
-    )
-
-    print(
-        f"09:15 = 09:18 = 15:27          : "
-        f"{global_counter['3m_opening_matches_1527']:,}"
-    )
-
-    print()
-    print(
-        "--- 1-MINUTE DATA AVAILABILITY ---"
-    )
-
-    print(
-        f"1M 15:28 available              : "
-        f"{global_counter['has_1m_1528']:,}"
-    )
-
-    print(
-        f"1M 15:29 available              : "
-        f"{global_counter['has_1m_1529']:,}"
-    )
-
-    print(
-        f"1M 09:15 + 09:16 available      : "
-        f"{global_counter['has_1m_opening']:,}"
-    )
-
-    print()
-    print(
-        "--- 1-MINUTE CONDITIONS ---"
-    )
-
-    print(
-        f"09:15 = 09:16                  : "
-        f"{global_counter['opening_1m_same']:,}"
-    )
-
-    print(
-        f"15:28 != 15:29                 : "
-        f"{global_counter['1m_eod_opposite']:,}"
-    )
-
-    print(
-        f"Volume 15:28 > 15:29           : "
-        f"{global_counter['1m_volume_condition']:,}"
-    )
-
-    print(
-        f"1M 15:28 = 3M 15:27            : "
-        f"{global_counter['1m_1528_matches_3m_1527']:,}"
-    )
-
-    print()
-    print(
-        "--- FINAL ---"
-    )
-
-    print(
-        f"FINAL SIGNALS                   : "
-        f"{global_counter['final_signal']:,}"
-    )
-
-    print(
-        f"LONG SIGNALS                    : "
-        f"{global_counter['long_signals']:,}"
-    )
-
-    print(
-        f"SHORT SIGNALS                   : "
-        f"{global_counter['short_signals']:,}"
-    )
-
-    # ========================================================
-    # FINAL TRADES
-    # ========================================================
-
-    if not all_trades:
-
-        print()
-        print("=" * 100)
         print(
-            "NO EXECUTABLE TRADES"
+
+            f"[{number:>4}/{len(paths)}] "
+            f"{symbol:<25}",
+
+            end="",
+
+            flush=True
+
         )
-        print("=" * 100)
 
-        # Still save signal diagnostics
-        if all_signal_days:
 
-            pd.DataFrame(
-                all_signal_days
-            ).to_csv(
-                "DIAGNOSTIC_SIGNALS.csv",
-                index=False
-            )
+        trades, diag = process_stock(
+            path
+        )
 
-        return
 
-    trades = pd.DataFrame(
+        diagnostics.append(
+            diag
+        )
+
+
+        # -------------------------------------------------------------
+        # SIDE FILTER
+        # -------------------------------------------------------------
+
+        if TRADE_SIDE == "LONG":
+
+            trades = [
+
+                t
+                for t in trades
+
+                if t["direction"]
+                == "LONG"
+
+            ]
+
+
+        elif TRADE_SIDE == "SHORT":
+
+            trades = [
+
+                t
+                for t in trades
+
+                if t["direction"]
+                == "SHORT"
+
+            ]
+
+
+        all_trades.extend(
+            trades
+        )
+
+
+        print(
+
+            f"signals="
+            f"{diag.get('signals', 0):>4} "
+            f"trades="
+            f"{len(trades):>4} "
+            f"{diag.get('status')}"
+
+        )
+
+
+    # =====================================================================
+    # DATAFRAMES
+    # =====================================================================
+
+    trades_df = pd.DataFrame(
         all_trades
     )
 
-    trades = trades.sort_values(
+
+    diagnostics_df = pd.DataFrame(
+        diagnostics
+    )
+
+
+    # =====================================================================
+    # SAVE DIAGNOSTICS
+    # =====================================================================
+
+    diagnostics_df.to_csv(
+
+        os.path.join(
+            RESULTS_DIR,
+            "diagnostics_by_stock.csv"
+        ),
+
+        index=False
+
+    )
+
+
+    # =====================================================================
+    # NO TRADES
+    # =====================================================================
+
+    if trades_df.empty:
+
+        print()
+        print("=" * 90)
+        print(
+            "NO EXECUTABLE TRADES"
+        )
+        print("=" * 90)
+
+
+        print()
+        print(
+            "The diagnostic files have still "
+            "been generated."
+        )
+
+
+        save_diagnostic_summary(
+            diagnostics_df
+        )
+
+
+        return
+
+
+    # =====================================================================
+    # SORT
+    # =====================================================================
+
+    trades_df = trades_df.sort_values(
+
         [
             "trade_date",
             "symbol"
+
         ]
+
     ).reset_index(
         drop=True
     )
 
-    # ========================================================
-    # PERFORMANCE
-    # ========================================================
 
-    s = statistics(
-        trades
+    # =====================================================================
+    # SAVE TRADES
+    # =====================================================================
+
+    trades_df.to_csv(
+
+        os.path.join(
+            RESULTS_DIR,
+            "all_trades.csv"
+        ),
+
+        index=False
+
     )
+
+
+    # =====================================================================
+    # OVERALL STATISTICS
+    # =====================================================================
+
+    overall_stats = calculate_stats(
+        trades_df.to_dict(
+            "records"
+        )
+    )
+
+
+    # =====================================================================
+    # PRINT OVERALL
+    # =====================================================================
 
     print()
-    print("=" * 100)
+    print("=" * 90)
     print(
-        "FINAL BACKTEST PERFORMANCE"
+        "FINAL BACKTEST RESULT"
     )
-    print("=" * 100)
+    print("=" * 90)
 
-    print(
-        f"Trades          : "
-        f"{s['trades']:,}"
-    )
 
-    print(
-        f"Wins            : "
-        f"{s['wins']:,}"
+    print_stats(
+        overall_stats
     )
 
-    print(
-        f"Losses          : "
-        f"{s['losses']:,}"
-    )
 
-    print(
-        f"Win rate        : "
-        f"{s['win_rate']:.2f}%"
-    )
-
-    print(
-        f"Average return  : "
-        f"{s['average']:.4f}%"
-    )
-
-    print(
-        f"Total return    : "
-        f"{s['total']:.4f}%"
-    )
-
-    print(
-        f"Profit factor   : "
-        f"{s['profit_factor']:.3f}"
-    )
-
-    print(
-        f"Best trade      : "
-        f"{s['best']:.4f}%"
-    )
-
-    print(
-        f"Worst trade     : "
-        f"{s['worst']:.4f}%"
-    )
-
-    # ========================================================
+    # =====================================================================
     # LONG / SHORT
-    # ========================================================
+    # =====================================================================
+
+    side_rows = []
+
 
     for side in [
         "LONG",
         "SHORT"
     ]:
 
-        subset = trades[
-            trades["direction"] == side
+        subset = trades_df[
+            trades_df["direction"]
+            ==
+            side
         ]
 
-        if subset.empty:
-            continue
 
-        ss = statistics(
-            subset
+        stats = calculate_stats(
+            subset.to_dict(
+                "records"
+            )
         )
+
+
+        side_rows.append({
+
+            "direction":
+                side,
+
+            **stats
+
+        })
+
 
         print()
         print(
-            f"{side}:"
+            f"{side} ONLY"
         )
 
-        print(
-            f"  Trades        : "
-            f"{ss['trades']:,}"
+        print("-" * 50)
+
+        print_stats(
+            stats
         )
 
-        print(
-            f"  Win rate      : "
-            f"{ss['win_rate']:.2f}%"
-        )
 
-        print(
-            f"  Average       : "
-            f"{ss['average']:.4f}%"
-        )
-
-        print(
-            f"  Profit factor : "
-            f"{ss['profit_factor']:.3f}"
-        )
-
-    # ========================================================
-    # YEARLY
-    # ========================================================
-
-    trades["year"] = (
-        pd.to_datetime(
-            trades["trade_date"]
-        ).dt.year
+    side_df = pd.DataFrame(
+        side_rows
     )
+
+
+    side_df.to_csv(
+
+        os.path.join(
+            RESULTS_DIR,
+            "long_short_statistics.csv"
+        ),
+
+        index=False
+
+    )
+
+
+    # =====================================================================
+    # YEARLY
+    # =====================================================================
+
+    trades_df["year"] = (
+
+        pd.to_datetime(
+            trades_df["trade_date"]
+        )
+        .dt.year
+
+    )
+
 
     yearly_rows = []
 
+
     for year, group in (
-        trades.groupby("year")
+        trades_df.groupby(
+            "year"
+        )
     ):
 
-        ss = statistics(
-            group
+        stats = calculate_stats(
+            group.to_dict(
+                "records"
+            )
         )
+
 
         yearly_rows.append({
 
             "year":
                 year,
 
-            "trades":
-                ss["trades"],
+            **stats
 
-            "win_rate":
-                ss["win_rate"],
-
-            "average_return":
-                ss["average"],
-
-            "profit_factor":
-                ss["profit_factor"],
-
-            "total_return":
-                ss["total"]
         })
 
-    yearly = pd.DataFrame(
+
+    yearly_df = pd.DataFrame(
         yearly_rows
     )
 
-    print()
-    print("=" * 100)
-    print(
-        "YEARLY PERFORMANCE"
-    )
-    print("=" * 100)
 
-    print(
-        yearly.to_string(
-            index=False
-        )
-    )
+    yearly_df.to_csv(
 
-    # ========================================================
-    # SAVE EVERYTHING
-    # ========================================================
+        os.path.join(
+            RESULTS_DIR,
+            "yearly_statistics.csv"
+        ),
 
-    trades.to_csv(
-        "DIAGNOSTIC_FINAL_TRADES.csv",
         index=False
+
     )
 
-    if all_signal_days:
 
-        pd.DataFrame(
-            all_signal_days
-        ).to_csv(
-            "DIAGNOSTIC_SIGNALS.csv",
-            index=False
+    # =====================================================================
+    # YEAR + SIDE
+    # =====================================================================
+
+    yearly_side_rows = []
+
+
+    for (
+        year,
+        side
+    ), group in trades_df.groupby(
+
+        [
+            "year",
+            "direction"
+        ]
+
+    ):
+
+        stats = calculate_stats(
+            group.to_dict(
+                "records"
+            )
         )
 
-    yearly.to_csv(
-        "DIAGNOSTIC_YEARLY.csv",
+
+        yearly_side_rows.append({
+
+            "year":
+                year,
+
+            "direction":
+                side,
+
+            **stats
+
+        })
+
+
+    yearly_side_df = pd.DataFrame(
+        yearly_side_rows
+    )
+
+
+    yearly_side_df.to_csv(
+
+        os.path.join(
+            RESULTS_DIR,
+            "yearly_long_short.csv"
+        ),
+
         index=False
+
     )
 
-    # ========================================================
-    # COMPLETE
-    # ========================================================
+
+    # =====================================================================
+    # DIAGNOSTIC SUMMARY
+    # =====================================================================
+
+    save_diagnostic_summary(
+        diagnostics_df
+    )
+
+
+    # =====================================================================
+    # FINISHED
+    # =====================================================================
+
+    elapsed = (
+        time.time()
+        -
+        start_time
+    )
+
 
     print()
-    print("=" * 100)
+    print("=" * 90)
     print(
-        "DIAGNOSTIC BACKTEST COMPLETE"
+        "BACKTEST COMPLETE"
     )
-    print("=" * 100)
+    print("=" * 90)
+
+
+    print(
+        f"Runtime: "
+        f"{elapsed / 60:.2f} minutes"
+    )
+
 
     print()
     print(
-        "Saved:"
+        "Results:"
+    )
+
+
+    print(
+        "  results/all_trades.csv"
     )
 
     print(
-        "DIAGNOSTIC_FINAL_TRADES.csv"
+        "  results/diagnostics_by_stock.csv"
     )
 
     print(
-        "DIAGNOSTIC_SIGNALS.csv"
+        "  results/diagnostic_summary.csv"
     )
 
     print(
-        "DIAGNOSTIC_YEARLY.csv"
+        "  results/long_short_statistics.csv"
+    )
+
+    print(
+        "  results/yearly_statistics.csv"
+    )
+
+    print(
+        "  results/yearly_long_short.csv"
     )
 
 
-# ============================================================
+# =============================================================================
+# PRINT STATS
+# =============================================================================
+
+def print_stats(stats):
+
+    print(
+        f"Trades          : "
+        f"{stats['trades']:,}"
+    )
+
+    print(
+        f"Wins            : "
+        f"{stats['wins']:,}"
+    )
+
+    print(
+        f"Losses          : "
+        f"{stats['losses']:,}"
+    )
+
+    print(
+        f"Win rate        : "
+        f"{stats['win_rate']:.2f}%"
+    )
+
+    print(
+        f"Average return  : "
+        f"{stats['average_return']:.4f}%"
+    )
+
+    print(
+        f"Total return    : "
+        f"{stats['total_return']:.4f}%"
+    )
+
+    print(
+        f"Profit factor   : "
+        f"{stats['profit_factor']:.3f}"
+    )
+
+    print(
+        f"Best trade      : "
+        f"{stats['best_trade']:.4f}%"
+    )
+
+    print(
+        f"Worst trade     : "
+        f"{stats['worst_trade']:.4f}%"
+    )
+
+
+# =============================================================================
+# DIAGNOSTIC SUMMARY
+# =============================================================================
+
+def save_diagnostic_summary(
+    diagnostics_df
+):
+
+    if diagnostics_df.empty:
+
+        return
+
+
+    numeric_columns = [
+
+        "days_seen",
+        "missing_3m",
+        "missing_1m",
+        "cond1",
+        "cond2",
+        "cond3",
+        "cond4",
+        "cond5",
+        "signals",
+        "long_signals",
+        "short_signals"
+
+    ]
+
+
+    summary = {}
+
+
+    for column in numeric_columns:
+
+        if column in diagnostics_df:
+
+            summary[
+                column
+            ] = diagnostics_df[
+                column
+            ].fillna(0).sum()
+
+
+    summary_df = pd.DataFrame(
+        [
+            summary
+        ]
+    )
+
+
+    summary_df.to_csv(
+
+        os.path.join(
+            RESULTS_DIR,
+            "diagnostic_summary.csv"
+        ),
+
+        index=False
+
+    )
+
+
+# =============================================================================
 # RUN
-# ============================================================
+# =============================================================================
 
 if __name__ == "__main__":
 
