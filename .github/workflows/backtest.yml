@@ -1,33 +1,113 @@
-name: Strategy Backtest
+name: NSE Scanner Backtest
 
 on:
   workflow_dispatch:
+    inputs:
+      start_date:
+        description: "Backtest start date YYYY-MM-DD"
+        required: false
+        default: "2018-01-01"
+
+      end_date:
+        description: "Backtest end date YYYY-MM-DD"
+        required: false
+        default: "2026-12-31"
+
+      side:
+        description: "Trade direction"
+        required: false
+        default: "BOTH"
+        type: choice
+        options:
+          - BOTH
+          - LONG
+          - SHORT
 
 jobs:
+
   backtest:
+
     runs-on: ubuntu-latest
+
+    timeout-minutes: 120
 
     steps:
 
-      - name: Checkout repository
+      # ---------------------------------------------------------
+      # CHECKOUT YOUR REPOSITORY
+      # ---------------------------------------------------------
+
+      - name: Checkout backtester
         uses: actions/checkout@v4
+
+
+      # ---------------------------------------------------------
+      # PYTHON
+      # ---------------------------------------------------------
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+          cache: "pip"
+
+
+      # ---------------------------------------------------------
+      # INSTALL
+      # ---------------------------------------------------------
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install pandas numpy requests
 
-      - name: Run backtest
+          pip install \
+            pandas \
+            numpy \
+            pyarrow
+
+
+      # ---------------------------------------------------------
+      # DOWNLOAD HISTORICAL DATA
+      # ---------------------------------------------------------
+
+      - name: Clone historical NSE data 2018-2025
         run: |
-          python backtest_strategy.py
+          git clone \
+            --depth 1 \
+            https://github.com/ganeshbiyer/Nse_Historical_Data.git \
+            historical_2018_2025
+
+
+      - name: Clone historical NSE data 2026
+        run: |
+          git clone \
+            --depth 1 \
+            https://github.com/ganeshbiyer/Nse_Historical_Data_2026.git \
+            historical_2026
+
+
+      # ---------------------------------------------------------
+      # RUN BACKTEST
+      # ---------------------------------------------------------
+
+      - name: Run scanner backtest
+        env:
+          START_DATE: ${{ inputs.start_date }}
+          END_DATE: ${{ inputs.end_date }}
+          TRADE_SIDE: ${{ inputs.side }}
+        run: |
+
+          python backtest.py
+
+
+      # ---------------------------------------------------------
+      # UPLOAD RESULTS
+      # ---------------------------------------------------------
 
       - name: Upload backtest results
         uses: actions/upload-artifact@v4
         with:
-          name: strategy-backtest-results
-          path: backtest_results.csv
+          name: NSE-backtest-results
+          path: |
+            results/
+          retention-days: 30
