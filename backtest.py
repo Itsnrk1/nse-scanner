@@ -3,6 +3,7 @@ import glob
 import math
 import time
 from pathlib import Path
+from concurrent.futures import ProcessPoolExecutor, as_completed
 
 import pandas as pd
 
@@ -11,15 +12,8 @@ import pandas as pd
 # SETTINGS
 # ============================================================
 
-START_DATE = os.getenv(
-    "START_DATE",
-    "2020-01-01"
-)
-
-END_DATE = os.getenv(
-    "END_DATE",
-    "2025-12-31"
-)
+START_DATE = os.getenv("START_DATE", "2020-01-01")
+END_DATE = os.getenv("END_DATE", "2025-12-31")
 
 TRADE_SIDE = os.getenv(
     "TRADE_SIDE",
@@ -33,8 +27,27 @@ ROUND_TRIP_COST_PCT = float(
     )
 )
 
+TARGET_PCT = float(
+    os.getenv(
+        "TARGET_PCT",
+        "1.0"
+    )
+)
+
+# Maximum number of simultaneous stock processes.
+# GitHub-hosted runners generally have limited CPU.
+MAX_WORKERS = int(
+    os.getenv(
+        "MAX_WORKERS",
+        str(min(4, os.cpu_count() or 2))
+    )
+)
+
+
 RESULTS_DIR = Path("results")
-RESULTS_DIR.mkdir(exist_ok=True)
+RESULTS_DIR.mkdir(
+    exist_ok=True
+)
 
 
 # ============================================================
@@ -125,9 +138,9 @@ def normalize_data(df):
         ]
 
 
-    column_map = {
-        str(column).strip().lower(): column
-        for column in df.columns
+    columns = {
+        str(c).strip().lower(): c
+        for c in df.columns
     }
 
 
@@ -144,6 +157,16 @@ def normalize_data(df):
         "open": [
             "open",
             "o"
+        ],
+
+        "high": [
+            "high",
+            "h"
+        ],
+
+        "low": [
+            "low",
+            "l"
         ],
 
         "close": [
@@ -167,9 +190,9 @@ def normalize_data(df):
 
         for name in names:
 
-            if name in column_map:
+            if name in columns:
 
-                selected[target] = column_map[name]
+                selected[target] = columns[name]
 
                 break
 
@@ -195,18 +218,18 @@ def normalize_data(df):
 
             df = df.reset_index()
 
-            column_map = {
-                str(column).strip().lower(): column
-                for column in df.columns
+            columns = {
+                str(c).strip().lower(): c
+                for c in df.columns
             }
 
 
             for name in aliases["datetime"]:
 
-                if name in column_map:
+                if name in columns:
 
                     selected["datetime"] = (
-                        column_map[name]
+                        columns[name]
                     )
 
                     break
@@ -215,6 +238,8 @@ def normalize_data(df):
     required = [
         "datetime",
         "open",
+        "high",
+        "low",
         "close",
         "volume"
     ]
@@ -230,10 +255,14 @@ def normalize_data(df):
     if missing:
 
         raise ValueError(
-            f"Missing columns: {missing}. "
-            f"Actual columns: {list(df.columns)}"
+            f"Missing columns: {missing}; "
+            f"actual columns: {list(df.columns)}"
         )
 
+
+    # --------------------------------------------------------
+    # Only keep columns actually required.
+    # --------------------------------------------------------
 
     output = pd.DataFrame({
 
@@ -243,6 +272,18 @@ def normalize_data(df):
         "open":
             pd.to_numeric(
                 df[selected["open"]],
+                errors="coerce"
+            ),
+
+        "high":
+            pd.to_numeric(
+                df[selected["high"]],
+                errors="coerce"
+            ),
+
+        "low":
+            pd.to_numeric(
+                df[selected["low"]],
                 errors="coerce"
             ),
 
@@ -271,13 +312,18 @@ def normalize_data(df):
         subset=[
             "datetime",
             "open",
+            "high",
+            "low",
             "close",
             "volume"
         ]
     )
 
 
+    # --------------------------------------------------------
     # Convert timezone-aware data to IST.
+    # --------------------------------------------------------
+
     if getattr(
         output["datetime"].dt,
         "tz",
@@ -303,7 +349,10 @@ def normalize_data(df):
     )
 
 
+    # --------------------------------------------------------
     # NSE regular session.
+    # --------------------------------------------------------
+
     output = output[
         (output["hm"] >= 915)
         &
@@ -327,6 +376,10 @@ def normalize_data(df):
     ]
 
 
+    # --------------------------------------------------------
+    # Sort and remove duplicate minute candles.
+    # --------------------------------------------------------
+
     output = (
         output
         .sort_values("datetime")
@@ -342,50 +395,46 @@ def normalize_data(df):
 
 
 # ============================================================
-# BUILD EXACT 3-MINUTE CANDLE
+# GET EXACT 3-MINUTE CANDLE
 # ============================================================
 
-def make_3m_candle(
-    day,
-    start_minute
-):
+def make_3m(day, start):
 
-    required_minutes = [
-        start_minute,
-        start_minute + 1,
-        start_minute + 2
+    rows = day.loc[
+        day["hm"].between(
+            start,
+            start + 2
+        )
     ]
 
 
-    rows = (
-        day[
-            day["hm"].isin(
-                required_minutes
-            )
-        ]
-        .sort_values("hm")
-    )
-
-
-    # Must have all 3 one-minute candles.
     if len(rows) != 3:
+
         return None
 
 
     if set(
         rows["hm"].astype(int)
-    ) != set(required_minutes):
+    ) != {
+        start,
+        start + 1,
+        start + 2
+    }:
 
         return None
+
+
+    first = rows.iloc[0]
+    last = rows.iloc[-1]
 
 
     return {
 
         "open":
-            float(rows.iloc[0]["open"]),
+            float(first["open"]),
 
         "close":
-            float(rows.iloc[-1]["close"]),
+            float(last["close"]),
 
         "volume":
             float(rows["volume"].sum())
@@ -394,14 +443,13 @@ def make_3m_candle(
 
 
 # ============================================================
-# EVALUATE SIGNAL DAY
+# EVALUATE SIGNAL
 # ============================================================
 
-def evaluate_signal_day(day):
+def evaluate_signal(day):
 
     required = {
 
-        # Morning 3-minute candles
         915,
         916,
         917,
@@ -410,7 +458,6 @@ def evaluate_signal_day(day):
         919,
         920,
 
-        # EOD 3-minute candles
         1524,
         1525,
         1526,
@@ -438,34 +485,34 @@ def evaluate_signal_day(day):
     # 3-minute candles
     # --------------------------------------------------------
 
-    candle_1524 = make_3m_candle(
+    c1524 = make_3m(
         day,
         1524
     )
 
-    candle_1527 = make_3m_candle(
+    c1527 = make_3m(
         day,
         1527
     )
 
-    candle_0915 = make_3m_candle(
+    c0915 = make_3m(
         day,
         915
     )
 
-    candle_0918 = make_3m_candle(
+    c0918 = make_3m(
         day,
         918
     )
 
 
     if any(
-        candle is None
-        for candle in (
-            candle_1524,
-            candle_1527,
-            candle_0915,
-            candle_0918
+        x is None
+        for x in (
+            c1524,
+            c1527,
+            c0915,
+            c0918
         )
     ):
 
@@ -477,26 +524,23 @@ def evaluate_signal_day(day):
     # --------------------------------------------------------
 
     trend_1524 = direction(
-        candle_1524["open"],
-        candle_1524["close"]
+        c1524["open"],
+        c1524["close"]
     )
-
 
     trend_1527 = direction(
-        candle_1527["open"],
-        candle_1527["close"]
+        c1527["open"],
+        c1527["close"]
     )
 
-
-    trend_0915_3m = direction(
-        candle_0915["open"],
-        candle_0915["close"]
+    trend_0915 = direction(
+        c0915["open"],
+        c0915["close"]
     )
 
-
-    trend_0918_3m = direction(
-        candle_0918["open"],
-        candle_0918["close"]
+    trend_0918 = direction(
+        c0918["open"],
+        c0918["close"]
     )
 
 
@@ -504,7 +548,7 @@ def evaluate_signal_day(day):
     # CONDITION 1
     #
     # 15:24 and 15:27 opposite
-    # 15:24 volume > 15:27
+    # 15:24 has MORE volume
     # --------------------------------------------------------
 
     condition_1 = (
@@ -521,9 +565,9 @@ def evaluate_signal_day(day):
 
         and
 
-        candle_1524["volume"]
+        c1524["volume"]
         >
-        candle_1527["volume"]
+        c1527["volume"]
 
     )
 
@@ -531,7 +575,8 @@ def evaluate_signal_day(day):
     # --------------------------------------------------------
     # CONDITION 2
     #
-    # 09:15 and 09:18 both match 15:24
+    # 09:15 and 09:18 same trend
+    # as 15:24
     # --------------------------------------------------------
 
     condition_2 = (
@@ -540,13 +585,13 @@ def evaluate_signal_day(day):
 
         and
 
-        trend_0915_3m
+        trend_0915
         ==
         trend_1524
 
         and
 
-        trend_0918_3m
+        trend_0918
         ==
         trend_1524
 
@@ -554,17 +599,31 @@ def evaluate_signal_day(day):
 
 
     # --------------------------------------------------------
-    # 1-minute candles
+    # 1-minute EOD candles
     # --------------------------------------------------------
 
-    minute_rows = {
-        int(row["hm"]): row
-        for _, row in day.iterrows()
-    }
+    minute = day.set_index(
+        "hm",
+        drop=False
+    )
 
 
-    row_1528 = minute_rows[1528]
-    row_1529 = minute_rows[1529]
+    if (
+        1528 not in minute.index
+        or
+        1529 not in minute.index
+    ):
+
+        return None
+
+
+    row_1528 = minute.loc[
+        1528
+    ]
+
+    row_1529 = minute.loc[
+        1529
+    ]
 
 
     trend_1528 = direction(
@@ -582,11 +641,9 @@ def evaluate_signal_day(day):
     # --------------------------------------------------------
     # CONDITION 3
     #
-    # 15:28 volume > 15:29 volume
-    #
-    # AND
-    #
-    # 15:28 matches 3-minute 15:24
+    # 15:28 and 15:29 opposite
+    # 15:28 volume > 15:29
+    # 15:28 same trend as 3m 15:24
     # --------------------------------------------------------
 
     condition_3 = (
@@ -595,7 +652,11 @@ def evaluate_signal_day(day):
 
         and
 
-        trend_1524 != 0
+        trend_1529 != 0
+
+        and
+
+        trend_1528 != trend_1529
 
         and
 
@@ -611,10 +672,6 @@ def evaluate_signal_day(day):
 
     )
 
-
-    # --------------------------------------------------------
-    # FINAL SIGNAL
-    # --------------------------------------------------------
 
     passed = (
 
@@ -636,16 +693,10 @@ def evaluate_signal_day(day):
         "passed":
             passed,
 
-        "signal_direction":
+        "direction":
             direction_name(
                 trend_1524
             ),
-
-        "trend_1524":
-            trend_1524,
-
-        "trend_1527":
-            trend_1527,
 
         "condition_1":
             condition_1,
@@ -657,6 +708,77 @@ def evaluate_signal_day(day):
             condition_3
 
     }
+
+
+# ============================================================
+# TARGET CHECK
+# ============================================================
+
+def target_hit(
+    trade_day,
+    entry_price,
+    side,
+    start_hm,
+    end_hm
+):
+
+    rows = trade_day.loc[
+        trade_day["hm"].between(
+            start_hm,
+            end_hm
+        )
+    ]
+
+
+    if rows.empty:
+
+        return False
+
+
+    if side == "LONG":
+
+        target_price = (
+            entry_price
+            *
+            (
+                1
+                +
+                TARGET_PCT / 100
+            )
+        )
+
+
+        # LONG target is reached by HIGH.
+        return bool(
+            (
+                rows["high"]
+                >=
+                target_price
+            ).any()
+        )
+
+
+    else:
+
+        target_price = (
+            entry_price
+            *
+            (
+                1
+                -
+                TARGET_PCT / 100
+            )
+        )
+
+
+        # SHORT target is reached by LOW.
+        return bool(
+            (
+                rows["low"]
+                <=
+                target_price
+            ).any()
+        )
 
 
 # ============================================================
@@ -672,13 +794,13 @@ def process_stock(filepath):
 
     try:
 
-        raw_data = pd.read_parquet(
+        raw = pd.read_parquet(
             filepath
         )
 
 
         data = normalize_data(
-            raw_data
+            raw
         )
 
 
@@ -697,10 +819,12 @@ def process_stock(filepath):
 
         days = {
 
-            date: group
+            date:
+                group.reset_index(
+                    drop=True
+                )
 
             for date, group
-
             in data.groupby(
                 "date",
                 sort=True
@@ -717,7 +841,7 @@ def process_stock(filepath):
         trades = []
 
 
-        diagnostics = {
+        diagnostic = {
 
             "symbol":
                 symbol,
@@ -740,7 +864,7 @@ def process_stock(filepath):
             "condition_3":
                 0,
 
-            "signals":
+            "final_signals":
                 0,
 
             "long_signals":
@@ -749,14 +873,20 @@ def process_stock(filepath):
             "short_signals":
                 0,
 
-            "trades":
+            "executed_trades":
+                0,
+
+            "target_hits_0918":
+                0,
+
+            "target_hits_1527":
                 0
 
         }
 
 
         # ====================================================
-        # LOOP THROUGH SIGNAL DAYS
+        # SIGNAL DAYS
         # ====================================================
 
         for i in range(
@@ -768,40 +898,36 @@ def process_stock(filepath):
             trade_date = dates[i + 1]
 
 
-            diagnostics[
+            diagnostic[
                 "signal_days"
             ] += 1
 
 
-            signal = evaluate_signal_day(
+            signal = evaluate_signal(
                 days[signal_date]
             )
 
 
             if signal is None:
 
-                diagnostics[
+                diagnostic[
                     "incomplete_days"
                 ] += 1
 
                 continue
 
 
-            # ------------------------------------------------
-            # Diagnostic counts
-            # ------------------------------------------------
-
-            for number in range(
+            for n in range(
                 1,
                 4
             ):
 
                 if signal[
-                    f"condition_{number}"
+                    f"condition_{n}"
                 ]:
 
-                    diagnostics[
-                        f"condition_{number}"
+                    diagnostic[
+                        f"condition_{n}"
                     ] += 1
 
 
@@ -810,32 +936,28 @@ def process_stock(filepath):
                 continue
 
 
-            diagnostics[
-                "signals"
+            diagnostic[
+                "final_signals"
             ] += 1
 
 
             side = signal[
-                "signal_direction"
+                "direction"
             ]
 
 
             if side == "LONG":
 
-                diagnostics[
+                diagnostic[
                     "long_signals"
                 ] += 1
 
-            elif side == "SHORT":
+            else:
 
-                diagnostics[
+                diagnostic[
                     "short_signals"
                 ] += 1
 
-
-            # ------------------------------------------------
-            # Side filter
-            # ------------------------------------------------
 
             if (
 
@@ -859,20 +981,17 @@ def process_stock(filepath):
             ]
 
 
-            # Entry 09:15
-            entry_rows = next_day[
+            entry_rows = next_day.loc[
                 next_day["hm"] == 915
             ]
 
 
-            # Exit 1: 09:18
-            exit_0918_rows = next_day[
+            exit_0918_rows = next_day.loc[
                 next_day["hm"] == 918
             ]
 
 
-            # Exit 2: 15:27
-            exit_1527_rows = next_day[
+            exit_1527_rows = next_day.loc[
                 next_day["hm"] == 1527
             ]
 
@@ -925,15 +1044,136 @@ def process_stock(filepath):
 
 
             # =================================================
-            # CALCULATE RETURNS
+            # TARGET PRICES
             # =================================================
 
             if side == "LONG":
 
-                return_0918_gross = (
+                target_price = (
+
+                    entry_price
+                    *
+                    (
+                        1
+                        +
+                        TARGET_PCT / 100
+                    )
+
+                )
+
+            else:
+
+                target_price = (
+
+                    entry_price
+                    *
+                    (
+                        1
+                        -
+                        TARGET_PCT / 100
+                    )
+
+                )
+
+
+            # =================================================
+            # 09:18 HALF
+            # =================================================
+
+            hit_0918 = target_hit(
+
+                next_day,
+
+                entry_price,
+
+                side,
+
+                915,
+
+                917
+
+            )
+
+
+            if hit_0918:
+
+                exit1_price = (
+                    target_price
+                )
+
+                exit1_type = (
+                    f"{TARGET_PCT:.2f}% TARGET"
+                )
+
+                diagnostic[
+                    "target_hits_0918"
+                ] += 1
+
+            else:
+
+                exit1_price = (
+                    exit_0918_price
+                )
+
+                exit1_type = (
+                    "09:18 OPEN"
+                )
+
+
+            # =================================================
+            # 15:27 HALF
+            # =================================================
+
+            hit_1527 = target_hit(
+
+                next_day,
+
+                entry_price,
+
+                side,
+
+                915,
+
+                1526
+
+            )
+
+
+            if hit_1527:
+
+                exit2_price = (
+                    target_price
+                )
+
+                exit2_type = (
+                    f"{TARGET_PCT:.2f}% TARGET"
+                )
+
+                diagnostic[
+                    "target_hits_1527"
+                ] += 1
+
+            else:
+
+                exit2_price = (
+                    exit_1527_price
+                )
+
+                exit2_type = (
+                    "15:27 OPEN"
+                )
+
+
+            # =================================================
+            # RETURNS
+            # =================================================
+
+            if side == "LONG":
+
+                gross1 = (
 
                     (
-                        exit_0918_price
+                        exit1_price
                         -
                         entry_price
                     )
@@ -945,10 +1185,10 @@ def process_stock(filepath):
                 )
 
 
-                return_1527_gross = (
+                gross2 = (
 
                     (
-                        exit_1527_price
+                        exit2_price
                         -
                         entry_price
                     )
@@ -961,12 +1201,12 @@ def process_stock(filepath):
 
             else:
 
-                return_0918_gross = (
+                gross1 = (
 
                     (
                         entry_price
                         -
-                        exit_0918_price
+                        exit1_price
                     )
                     /
                     entry_price
@@ -976,12 +1216,12 @@ def process_stock(filepath):
                 )
 
 
-                return_1527_gross = (
+                gross2 = (
 
                     (
                         entry_price
                         -
-                        exit_1527_price
+                        exit2_price
                     )
                     /
                     entry_price
@@ -991,16 +1231,9 @@ def process_stock(filepath):
                 )
 
 
-            # =================================================
-            # HALF-POSITION COST
-            # =================================================
+            # Each half represents 50% of the position.
             #
-            # We split the position 50/50.
-            #
-            # Each half receives half of the total
-            # round-trip cost.
-            #
-            # =================================================
+            # Total cost is allocated proportionally.
 
             half_cost = (
                 ROUND_TRIP_COST_PCT
@@ -1009,43 +1242,30 @@ def process_stock(filepath):
             )
 
 
-            return_0918_net = (
-                return_0918_gross
+            net1 = (
+                gross1
                 -
                 half_cost
             )
 
 
-            return_1527_net = (
-                return_1527_gross
+            net2 = (
+                gross2
                 -
                 half_cost
             )
 
 
-            # Combined result of both halves.
-            combined_return = (
+            combined = (
 
-                (
-                    return_0918_net
-                    *
-                    0.5
-                )
+                net1 * 0.5
 
                 +
 
-                (
-                    return_1527_net
-                    *
-                    0.5
-                )
+                net2 * 0.5
 
             )
 
-
-            # =================================================
-            # STORE TRADE
-            # =================================================
 
             trades.append({
 
@@ -1064,36 +1284,45 @@ def process_stock(filepath):
                 "entry_0915_open":
                     entry_price,
 
-                "exit_0918_open":
-                    exit_0918_price,
+                "target_price":
+                    target_price,
 
-                "exit_1527_open":
-                    exit_1527_price,
+                "exit1_time":
+                    exit1_type,
 
-                "return_0918_gross_pct":
-                    return_0918_gross,
+                "exit1_price":
+                    exit1_price,
 
-                "return_0918_net_pct":
-                    return_0918_net,
+                "exit1_gross_pct":
+                    gross1,
 
-                "return_1527_gross_pct":
-                    return_1527_gross,
+                "exit1_net_pct":
+                    net1,
 
-                "return_1527_net_pct":
-                    return_1527_net,
+                "exit2_time":
+                    exit2_type,
+
+                "exit2_price":
+                    exit2_price,
+
+                "exit2_gross_pct":
+                    gross2,
+
+                "exit2_net_pct":
+                    net2,
 
                 "combined_net_return_pct":
-                    combined_return
+                    combined
 
             })
 
 
-            diagnostics[
-                "trades"
+            diagnostic[
+                "executed_trades"
             ] += 1
 
 
-        return trades, diagnostics
+        return trades, diagnostic
 
 
     except Exception as error:
@@ -1116,7 +1345,7 @@ def process_stock(filepath):
 # STATISTICS
 # ============================================================
 
-def calculate_statistics(
+def statistics(
     returns
 ):
 
@@ -1182,19 +1411,17 @@ def calculate_statistics(
     )
 
 
-    if gross_loss > 0:
+    profit_factor = (
 
-        profit_factor = (
-            gross_profit
-            /
-            gross_loss
-        )
+        gross_profit
+        /
+        gross_loss
 
-    else:
+        if gross_loss > 0
 
-        profit_factor = float(
-            "inf"
-        )
+        else float("inf")
+
+    )
 
 
     return {
@@ -1250,55 +1477,67 @@ def main():
 
     print()
     print("=" * 90)
-    print("NSE SCANNER — NEW STRATEGY BACKTEST")
+    print("NSE SCANNER FAST BACKTEST")
     print("=" * 90)
 
     print(
-        f"Start date       : {START_DATE}"
+        f"Date range          : "
+        f"{START_DATE} → {END_DATE}"
     )
 
     print(
-        f"End date         : {END_DATE}"
+        f"Trade side          : "
+        f"{TRADE_SIDE}"
     )
 
     print(
-        f"Trade side       : {TRADE_SIDE}"
+        f"Target              : "
+        f"{TARGET_PCT}%"
     )
 
     print(
-        f"Round-trip cost  : "
+        f"Round-trip cost     : "
         f"{ROUND_TRIP_COST_PCT}%"
     )
 
+    print(
+        f"Parallel workers    : "
+        f"{MAX_WORKERS}"
+    )
+
     print()
     print(
-        "EXIT 1            : 09:18 OPEN"
+        "Entry               : 09:15 OPEN"
     )
 
     print(
-        "EXIT 2            : 15:27 OPEN"
+        "Exit 1              : 09:18 OPEN "
+        "or target"
     )
 
     print(
-        "POSITION SPLIT    : 50% / 50%"
+        "Exit 2              : 15:27 OPEN "
+        "or target"
+    )
+
+    print(
+        "Position split      : 50% / 50%"
     )
 
     print("=" * 90)
     print()
 
 
-    parquet_files = (
-        find_parquet_files()
-    )
+    files = find_parquet_files()
 
 
     print(
         f"Parquet files found: "
-        f"{len(parquet_files)}"
+        f"{len(files)}"
     )
 
 
-    if not parquet_files:
+    if not files:
 
         raise RuntimeError(
             "No Parquet files found."
@@ -1311,65 +1550,76 @@ def main():
 
 
     # ========================================================
-    # PROCESS STOCKS
+    # PARALLEL PROCESSING
     # ========================================================
 
-    for number, filepath in enumerate(
-        parquet_files,
-        start=1
-    ):
+    with ProcessPoolExecutor(
+        max_workers=MAX_WORKERS
+    ) as executor:
 
-        symbol = Path(
-            filepath
-        ).stem
+        futures = {
 
-
-        print(
-
-            f"[{number:>4}/"
-            f"{len(parquet_files):>4}] "
-            f"{symbol:<20}",
-
-            end="",
-
-            flush=True
-
-        )
-
-
-        trades, diagnostic = (
-            process_stock(
+            executor.submit(
+                process_stock,
                 filepath
+            ):
+            filepath
+
+            for filepath in files
+
+        }
+
+
+        completed = 0
+
+
+        for future in as_completed(
+            futures
+        ):
+
+            filepath = futures[
+                future
+            ]
+
+
+            completed += 1
+
+
+            trades, diagnostic = (
+                future.result()
             )
-        )
 
 
-        all_trades.extend(
-            trades
-        )
+            all_trades.extend(
+                trades
+            )
 
 
-        all_diagnostics.append(
-            diagnostic
-        )
+            all_diagnostics.append(
+                diagnostic
+            )
 
 
-        print(
+            print(
 
-            f"status="
-            f"{diagnostic.get('status'):<10} "
+                f"[{completed:>4}/"
+                f"{len(files):>4}] "
 
-            f"signals="
-            f"{diagnostic.get('signals', 0):>5} "
+                f"{diagnostic.get('symbol',''):<18} "
 
-            f"trades="
-            f"{len(trades):>5}"
+                f"{diagnostic.get('status',''):<8} "
 
-        )
+                f"signals="
+                f"{diagnostic.get('final_signals',0):>4} "
+
+                f"trades="
+                f"{len(trades):>4}"
+
+            )
 
 
     # ========================================================
-    # DATAFRAME
+    # DIAGNOSTICS
     # ========================================================
 
     diagnostics_df = pd.DataFrame(
@@ -1388,6 +1638,10 @@ def main():
     )
 
 
+    # ========================================================
+    # TRADES
+    # ========================================================
+
     trades_df = pd.DataFrame(
         all_trades
     )
@@ -1405,22 +1659,41 @@ def main():
                 "direction",
 
                 "entry_0915_open",
+                "target_price",
 
-                "exit_0918_open",
+                "exit1_time",
+                "exit1_price",
+                "exit1_gross_pct",
+                "exit1_net_pct",
 
-                "exit_1527_open",
-
-                "return_0918_gross_pct",
-
-                "return_0918_net_pct",
-
-                "return_1527_gross_pct",
-
-                "return_1527_net_pct",
+                "exit2_time",
+                "exit2_price",
+                "exit2_gross_pct",
+                "exit2_net_pct",
 
                 "combined_net_return_pct"
 
             ]
+
+        )
+
+
+    else:
+
+        trades_df = (
+
+            trades_df
+
+            .sort_values(
+                [
+                    "trade_date",
+                    "symbol"
+                ]
+            )
+
+            .reset_index(
+                drop=True
+            )
 
         )
 
@@ -1437,69 +1710,77 @@ def main():
 
 
     # ========================================================
-    # THREE PERFORMANCE MEASURES
+    # PERFORMANCE
     # ========================================================
 
-    exit_0918_returns = (
-        trades_df[
-            "return_0918_net_pct"
-        ]
-        .tolist()
-        if not trades_df.empty
-        else []
-    )
-
-
-    exit_1527_returns = (
-        trades_df[
-            "return_1527_net_pct"
-        ]
-        .tolist()
-        if not trades_df.empty
-        else []
-    )
-
-
     combined_returns = (
+
         trades_df[
             "combined_net_return_pct"
-        ]
-        .tolist()
+        ].tolist()
+
         if not trades_df.empty
+
         else []
+
     )
 
 
-    statistics = {
+    exit1_returns = (
 
-        "09:18 EXIT": calculate_statistics(
-            exit_0918_returns
-        ),
+        trades_df[
+            "exit1_net_pct"
+        ].tolist()
 
-        "15:27 EXIT": calculate_statistics(
-            exit_1527_returns
-        ),
+        if not trades_df.empty
 
-        "50/50 COMBINED": calculate_statistics(
-            combined_returns
-        )
+        else []
+
+    )
+
+
+    exit2_returns = (
+
+        trades_df[
+            "exit2_net_pct"
+        ].tolist()
+
+        if not trades_df.empty
+
+        else []
+
+    )
+
+
+    results = {
+
+        "50/50 COMBINED":
+            statistics(
+                combined_returns
+            ),
+
+        "09:18 EXIT":
+            statistics(
+                exit1_returns
+            ),
+
+        "15:27 EXIT":
+            statistics(
+                exit2_returns
+            )
 
     }
 
 
-    # ========================================================
-    # SAVE EXIT STATISTICS
-    # ========================================================
-
-    exit_rows = []
+    result_rows = []
 
 
-    for exit_name, result in statistics.items():
+    for name_, result in results.items():
 
-        exit_rows.append({
+        result_rows.append({
 
             "exit":
-                exit_name,
+                name_,
 
             **result
 
@@ -1507,7 +1788,7 @@ def main():
 
 
     pd.DataFrame(
-        exit_rows
+        result_rows
     ).to_csv(
 
         RESULTS_DIR
@@ -1520,7 +1801,7 @@ def main():
 
 
     # ========================================================
-    # LONG / SHORT STATISTICS
+    # LONG / SHORT
     # ========================================================
 
     side_rows = []
@@ -1538,12 +1819,11 @@ def main():
         ]
 
 
-        combined = (
+        returns = (
 
             subset[
                 "combined_net_return_pct"
-            ]
-            .tolist()
+            ].tolist()
 
             if not subset.empty
 
@@ -1552,52 +1832,8 @@ def main():
         )
 
 
-        early = (
-
-            subset[
-                "return_0918_net_pct"
-            ]
-            .tolist()
-
-            if not subset.empty
-
-            else []
-
-        )
-
-
-        full_day = (
-
-            subset[
-                "return_1527_net_pct"
-            ]
-            .tolist()
-
-            if not subset.empty
-
-            else []
-
-        )
-
-
-        combined_stats = (
-            calculate_statistics(
-                combined
-            )
-        )
-
-
-        early_stats = (
-            calculate_statistics(
-                early
-            )
-        )
-
-
-        full_stats = (
-            calculate_statistics(
-                full_day
-            )
+        result = statistics(
+            returns
         )
 
 
@@ -1606,48 +1842,7 @@ def main():
             "direction":
                 side,
 
-            "trades":
-                combined_stats["trades"],
-
-            "combined_win_rate_pct":
-                combined_stats[
-                    "win_rate_pct"
-                ],
-
-            "combined_average_return_pct":
-                combined_stats[
-                    "average_return_pct"
-                ],
-
-            "combined_total_return_pct":
-                combined_stats[
-                    "total_return_pct"
-                ],
-
-            "combined_profit_factor":
-                combined_stats[
-                    "profit_factor"
-                ],
-
-            "09:18_win_rate_pct":
-                early_stats[
-                    "win_rate_pct"
-                ],
-
-            "09:18_average_return_pct":
-                early_stats[
-                    "average_return_pct"
-                ],
-
-            "15:27_win_rate_pct":
-                full_stats[
-                    "win_rate_pct"
-                ],
-
-            "15:27_average_return_pct":
-                full_stats[
-                    "average_return_pct"
-                ]
+            **result
 
         })
 
@@ -1666,70 +1861,113 @@ def main():
 
 
     # ========================================================
-    # PRINT FINAL RESULTS
+    # YEARLY RESULTS
+    # ========================================================
+
+    if not trades_df.empty:
+
+        trades_df["year"] = (
+
+            pd.to_datetime(
+                trades_df["trade_date"]
+            )
+            .dt.year
+
+        )
+
+
+        yearly_rows = []
+
+
+        for year, group in (
+            trades_df.groupby("year")
+        ):
+
+            returns = group[
+                "combined_net_return_pct"
+            ].tolist()
+
+
+            yearly_rows.append({
+
+                "year":
+                    int(year),
+
+                **statistics(
+                    returns
+                )
+
+            })
+
+
+        pd.DataFrame(
+            yearly_rows
+        ).to_csv(
+
+            RESULTS_DIR
+            /
+            "yearly_statistics.csv",
+
+            index=False
+
+        )
+
+
+    # ========================================================
+    # FINAL OUTPUT
     # ========================================================
 
     print()
     print("=" * 90)
-    print("FINAL BACKTEST RESULT")
+    print("FINAL RESULT")
     print("=" * 90)
 
 
-    for exit_name, result in statistics.items():
+    for name_, result in results.items():
 
         print()
-        print(exit_name)
+        print(name_)
         print("-" * 60)
 
         print(
-            f"Trades              : "
+            f"Trades          : "
             f"{result['trades']}"
         )
 
         print(
-            f"Wins                : "
+            f"Wins            : "
             f"{result['wins']}"
         )
 
         print(
-            f"Losses              : "
+            f"Losses          : "
             f"{result['losses']}"
         )
 
         print(
-            f"Win rate            : "
+            f"Win rate        : "
             f"{result['win_rate_pct']:.2f}%"
         )
 
         print(
-            f"Average return      : "
+            f"Average return  : "
             f"{result['average_return_pct']:.4f}%"
         )
 
         print(
-            f"Total return        : "
+            f"Total return    : "
             f"{result['total_return_pct']:.4f}%"
         )
 
         print(
-            f"Profit factor       : "
+            f"Profit factor   : "
             f"{result['profit_factor']}"
-        )
-
-        print(
-            f"Best trade          : "
-            f"{result['best_trade_pct']:.4f}%"
-        )
-
-        print(
-            f"Worst trade         : "
-            f"{result['worst_trade_pct']:.4f}%"
         )
 
 
     print()
     print("=" * 90)
-    print("DIAGNOSTICS")
+    print("SIGNAL DIAGNOSTICS")
     print("=" * 90)
 
 
@@ -1762,7 +2000,17 @@ def main():
 
         print(
             f"Final signals       : "
-            f"{diagnostics_df['signals'].sum()}"
+            f"{diagnostics_df['final_signals'].sum()}"
+        )
+
+        print(
+            f"Target hits 09:18   : "
+            f"{diagnostics_df['target_hits_0918'].sum()}"
+        )
+
+        print(
+            f"Target hits 15:27   : "
+            f"{diagnostics_df['target_hits_1527'].sum()}"
         )
 
 
@@ -1772,15 +2020,14 @@ def main():
         f"{(time.time() - start_time) / 60:.2f} minutes"
     )
 
-
     print()
     print(
-        "Results saved in results/"
+        "Results saved to results/"
     )
 
 
 # ============================================================
-# RUN
+# START
 # ============================================================
 
 if __name__ == "__main__":
