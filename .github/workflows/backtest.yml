@@ -3,6 +3,7 @@ name: NSE Scanner Backtest
 on:
   workflow_dispatch:
     inputs:
+
       start_date:
         description: "Backtest start date (YYYY-MM-DD)"
         required: false
@@ -11,17 +12,18 @@ on:
       end_date:
         description: "Backtest end date (YYYY-MM-DD)"
         required: false
-        default: "2026-12-31"
+        default: "2026-08-31"
 
       side:
         description: "Trade direction"
         required: false
-        default: "BOTH"
+        default: "SHORT"
         type: choice
         options:
           - BOTH
           - LONG
           - SHORT
+
 
 jobs:
 
@@ -34,7 +36,7 @@ jobs:
     steps:
 
       # ============================================================
-      # 1. CHECKOUT YOUR BACKTESTER
+      # 1. CHECKOUT YOUR REPOSITORY
       # ============================================================
 
       - name: Checkout repository
@@ -42,7 +44,7 @@ jobs:
 
 
       # ============================================================
-      # 2. SET UP PYTHON
+      # 2. PYTHON
       # ============================================================
 
       - name: Set up Python
@@ -52,7 +54,7 @@ jobs:
 
 
       # ============================================================
-      # 3. INSTALL PYTHON PACKAGES
+      # 3. INSTALL DEPENDENCIES
       # ============================================================
 
       - name: Install dependencies
@@ -71,11 +73,14 @@ jobs:
       # 4. VERIFY PYTHON
       # ============================================================
 
-      - name: Verify environment
+      - name: Verify Python environment
         shell: bash
         run: |
 
+          echo "Python:"
           python --version
+
+          echo ""
 
           python -c "import pandas; print('pandas:', pandas.__version__)"
 
@@ -92,21 +97,17 @@ jobs:
         shell: bash
         run: |
 
-          echo "Downloading historical NSE data..."
+          echo "=============================================="
+          echo "DOWNLOADING 2018-2025 DATA"
+          echo "=============================================="
 
           git clone \
             --depth 1 \
             https://github.com/ganeshbiyer/Nse_Historical_Data.git \
             historical_2018_2025
 
+          echo ""
           echo "2018-2025 repository downloaded."
-
-          echo "Repository contents:"
-
-          find historical_2018_2025 \
-            -maxdepth 2 \
-            -type f \
-            | head -100
 
 
       # ============================================================
@@ -117,90 +118,182 @@ jobs:
         shell: bash
         run: |
 
-          echo "Downloading 2026 historical NSE data..."
+          echo "=============================================="
+          echo "DOWNLOADING 2026 DATA"
+          echo "=============================================="
 
           git clone \
             --depth 1 \
             https://github.com/ganeshbiyer/Nse_Historical_Data_2026.git \
             historical_2026
 
+          echo ""
           echo "2026 repository downloaded."
 
-          echo "Repository contents:"
-
-          find historical_2026 \
-            -maxdepth 2 \
-            -type f \
-            | head -100
-
 
       # ============================================================
-      # 7. FIND PARQUET FILES
+      # 7. COUNT DATA FILES
+      #
+      # IMPORTANT:
+      #
+      # We do NOT pipe find into head.
+      # That was causing the broken-pipe failure.
       # ============================================================
 
-      - name: Locate historical data files
+      - name: Verify historical data
         shell: bash
         run: |
 
-          echo "Searching for Parquet files..."
+          echo "=============================================="
+          echo "VERIFYING HISTORICAL DATA"
+          echo "=============================================="
 
-          echo ""
-          echo "2018-2025:"
-          find historical_2018_2025 \
+          OLD_COUNT=$(find historical_2018_2025 \
             -type f \
             \( -name "*.parquet" -o -name "*.pq" \) \
-            | head -30
-
-          echo ""
-          echo "2026:"
-          find historical_2026 \
-            -type f \
-            \( -name "*.parquet" -o -name "*.pq" \) \
-            | head -30
-
-          echo ""
-
-          COUNT_OLD=$(find historical_2018_2025 \
-            -type f \
-            \( -name "*.parquet" -o -name "*.pq" \) \
+            -print \
             | wc -l)
 
-          COUNT_NEW=$(find historical_2026 \
+          NEW_COUNT=$(find historical_2026 \
             -type f \
             \( -name "*.parquet" -o -name "*.pq" \) \
+            -print \
             | wc -l)
 
-          echo "2018-2025 Parquet files: $COUNT_OLD"
-          echo "2026 Parquet files:       $COUNT_NEW"
+          TOTAL_COUNT=$((OLD_COUNT + NEW_COUNT))
 
-          TOTAL=$((COUNT_OLD + COUNT_NEW))
+          echo ""
+          echo "2018-2025 files : $OLD_COUNT"
+          echo "2026 files      : $NEW_COUNT"
+          echo "Total files     : $TOTAL_COUNT"
+          echo ""
 
-          echo "Total Parquet files:      $TOTAL"
+          if [ "$TOTAL_COUNT" -eq 0 ]; then
 
-          if [ "$TOTAL" -eq 0 ]; then
+            echo "ERROR: No Parquet files were found."
 
             echo ""
-            echo "ERROR: No Parquet files found."
-            echo ""
-
-            echo "Full directory structure:"
+            echo "2018-2025 directory:"
             find historical_2018_2025 \
-              -maxdepth 4 \
+              -maxdepth 3 \
               -type f \
-              | head -200
+              -print
 
+            echo ""
+            echo "2026 directory:"
             find historical_2026 \
-              -maxdepth 4 \
+              -maxdepth 3 \
               -type f \
-              | head -200
+              -print
 
             exit 1
 
           fi
 
+          echo "Historical data successfully detected."
+
 
       # ============================================================
-      # 8. CHECK BACKTEST FILE
+      # 8. SHOW SAMPLE FILES
+      #
+      # sed does NOT cause the broken-pipe problem that head caused.
+      # ============================================================
+
+      - name: Show sample data files
+        shell: bash
+        run: |
+
+          echo "=============================================="
+          echo "SAMPLE 2018-2025 FILES"
+          echo "=============================================="
+
+          find historical_2018_2025 \
+            -type f \
+            -name "*.parquet" \
+            -print \
+            | sed -n '1,20p'
+
+          echo ""
+
+          echo "=============================================="
+          echo "SAMPLE 2026 FILES"
+          echo "=============================================="
+
+          find historical_2026 \
+            -type f \
+            -name "*.parquet" \
+            -print \
+            | sed -n '1,20p'
+
+
+      # ============================================================
+      # 9. INSPECT ONE PARQUET FILE
+      #
+      # This confirms the actual structure before the backtest.
+      # ============================================================
+
+      - name: Inspect Parquet structure
+        shell: bash
+        run: |
+
+          SAMPLE_FILE=$(find historical_2018_2025 \
+            -type f \
+            -name "*.parquet" \
+            -print \
+            | sed -n '1p')
+
+          if [ -z "$SAMPLE_FILE" ]; then
+
+            echo "ERROR: Could not locate sample Parquet file."
+
+            exit 1
+
+          fi
+
+          echo "Sample file:"
+          echo "$SAMPLE_FILE"
+
+          echo ""
+
+          python - <<PY
+
+          import pandas as pd
+
+          path = "$SAMPLE_FILE"
+
+          print("Reading Parquet file...")
+          print()
+
+          df = pd.read_parquet(path)
+
+          print("Shape:")
+          print(df.shape)
+
+          print()
+
+          print("Columns:")
+          print(list(df.columns))
+
+          print()
+
+          print("Data types:")
+          print(df.dtypes)
+
+          print()
+
+          print("First 5 rows:")
+          print(df.head())
+
+          print()
+
+          print("Last 5 rows:")
+          print(df.tail())
+
+          PY
+
+
+      # ============================================================
+      # 10. VERIFY BACKTEST FILE
       # ============================================================
 
       - name: Verify backtest.py
@@ -209,14 +302,15 @@ jobs:
 
           if [ ! -f "backtest.py" ]; then
 
-            echo "ERROR: backtest.py was not found."
+            echo "ERROR: backtest.py not found."
 
             echo ""
             echo "Repository files:"
+
             find . \
               -maxdepth 2 \
               -type f \
-              | sort
+              -print
 
             exit 1
 
@@ -226,15 +320,19 @@ jobs:
 
 
       # ============================================================
-      # 9. RUN BACKTEST
+      # 11. RUN BACKTEST
       # ============================================================
 
       - name: Run NSE scanner backtest
         shell: bash
         env:
+
           START_DATE: ${{ inputs.start_date }}
+
           END_DATE: ${{ inputs.end_date }}
+
           TRADE_SIDE: ${{ inputs.side }}
+
         run: |
 
           echo ""
@@ -253,7 +351,7 @@ jobs:
 
 
       # ============================================================
-      # 10. SHOW RESULT FILES
+      # 12. SHOW RESULTS
       # ============================================================
 
       - name: Show result files
@@ -263,16 +361,14 @@ jobs:
 
           echo ""
           echo "=============================================="
-          echo "RESULT FILES"
+          echo "BACKTEST RESULT FILES"
           echo "=============================================="
-          echo ""
 
           if [ -d "results" ]; then
 
             find results \
-              -maxdepth 2 \
               -type f \
-              -printf "%p (%s bytes)\n"
+              -print
 
           else
 
@@ -282,7 +378,7 @@ jobs:
 
 
       # ============================================================
-      # 11. UPLOAD RESULTS
+      # 13. UPLOAD RESULTS
       # ============================================================
 
       - name: Upload backtest results
