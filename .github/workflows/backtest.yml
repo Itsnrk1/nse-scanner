@@ -7,22 +7,29 @@ on:
       start_date:
         description: "Backtest start date (YYYY-MM-DD)"
         required: false
-        default: "2018-01-01"
+        default: "2020-01-01"
 
       end_date:
         description: "Backtest end date (YYYY-MM-DD)"
         required: false
-        default: "2026-08-31"
+        default: "2025-12-31"
 
       side:
         description: "Trade direction"
         required: false
         default: "SHORT"
+
         type: choice
+
         options:
           - BOTH
           - LONG
           - SHORT
+
+      round_trip_cost_pct:
+        description: "Round-trip cost (%)"
+        required: false
+        default: "0.10"
 
 
 jobs:
@@ -33,32 +40,38 @@ jobs:
 
     timeout-minutes: 180
 
+
     steps:
 
-      # ============================================================
-      # 1. CHECKOUT YOUR REPOSITORY
-      # ============================================================
+
+      # ========================================================
+      # CHECKOUT
+      # ========================================================
 
       - name: Checkout repository
+
         uses: actions/checkout@v4
 
 
-      # ============================================================
-      # 2. PYTHON
-      # ============================================================
+      # ========================================================
+      # PYTHON
+      # ========================================================
 
       - name: Set up Python
+
         uses: actions/setup-python@v6
+
         with:
+
           python-version: "3.11"
 
 
-      # ============================================================
-      # 3. INSTALL DEPENDENCIES
-      # ============================================================
+      # ========================================================
+      # INSTALL
+      # ========================================================
 
       - name: Install dependencies
-        shell: bash
+
         run: |
 
           python -m pip install --upgrade pip
@@ -69,248 +82,104 @@ jobs:
             pyarrow
 
 
-      # ============================================================
-      # 4. VERIFY PYTHON
-      # ============================================================
+      # ========================================================
+      # DOWNLOAD 2018-2025
+      # ========================================================
 
-      - name: Verify Python environment
-        shell: bash
+      - name: Download NSE data 2018-2025
+
         run: |
-
-          echo "Python:"
-          python --version
-
-          echo ""
-
-          python -c "import pandas; print('pandas:', pandas.__version__)"
-
-          python -c "import numpy; print('numpy:', numpy.__version__)"
-
-          python -c "import pyarrow; print('pyarrow:', pyarrow.__version__)"
-
-
-      # ============================================================
-      # 5. DOWNLOAD 2018-2025 DATA
-      # ============================================================
-
-      - name: Download NSE historical data 2018-2025
-        shell: bash
-        run: |
-
-          echo "=============================================="
-          echo "DOWNLOADING 2018-2025 DATA"
-          echo "=============================================="
 
           git clone \
             --depth 1 \
             https://github.com/ganeshbiyer/Nse_Historical_Data.git \
             historical_2018_2025
 
-          echo ""
-          echo "2018-2025 repository downloaded."
 
+      # ========================================================
+      # DOWNLOAD 2026
+      # ========================================================
 
-      # ============================================================
-      # 6. DOWNLOAD 2026 DATA
-      # ============================================================
+      - name: Download NSE data 2026
 
-      - name: Download NSE historical data 2026
-        shell: bash
         run: |
-
-          echo "=============================================="
-          echo "DOWNLOADING 2026 DATA"
-          echo "=============================================="
 
           git clone \
             --depth 1 \
             https://github.com/ganeshbiyer/Nse_Historical_Data_2026.git \
             historical_2026
 
-          echo ""
-          echo "2026 repository downloaded."
 
-
-      # ============================================================
-      # 7. COUNT DATA FILES
-      #
-      # IMPORTANT:
-      #
-      # We do NOT pipe find into head.
-      # That was causing the broken-pipe failure.
-      # ============================================================
+      # ========================================================
+      # VERIFY DATA
+      # ========================================================
 
       - name: Verify historical data
+
         shell: bash
+
         run: |
 
-          echo "=============================================="
-          echo "VERIFYING HISTORICAL DATA"
-          echo "=============================================="
+          OLD_COUNT=$(
 
-          OLD_COUNT=$(find historical_2018_2025 \
-            -type f \
-            \( -name "*.parquet" -o -name "*.pq" \) \
-            -print \
-            | wc -l)
-
-          NEW_COUNT=$(find historical_2026 \
-            -type f \
-            \( -name "*.parquet" -o -name "*.pq" \) \
-            -print \
-            | wc -l)
-
-          TOTAL_COUNT=$((OLD_COUNT + NEW_COUNT))
-
-          echo ""
-          echo "2018-2025 files : $OLD_COUNT"
-          echo "2026 files      : $NEW_COUNT"
-          echo "Total files     : $TOTAL_COUNT"
-          echo ""
-
-          if [ "$TOTAL_COUNT" -eq 0 ]; then
-
-            echo "ERROR: No Parquet files were found."
-
-            echo ""
-            echo "2018-2025 directory:"
             find historical_2018_2025 \
-              -maxdepth 3 \
               -type f \
-              -print
+              \( \
+                -name "*.parquet" \
+                -o \
+                -name "*.pq" \
+              \) \
+              -print \
+              | wc -l
 
-            echo ""
-            echo "2026 directory:"
+          )
+
+
+          NEW_COUNT=$(
+
             find historical_2026 \
-              -maxdepth 3 \
               -type f \
-              -print
+              \( \
+                -name "*.parquet" \
+                -o \
+                -name "*.pq" \
+              \) \
+              -print \
+              | wc -l
+
+          )
+
+
+          TOTAL=$((OLD_COUNT + NEW_COUNT))
+
+
+          echo "2018-2025 files: $OLD_COUNT"
+
+          echo "2026 files:      $NEW_COUNT"
+
+          echo "Total files:     $TOTAL"
+
+
+          if [ "$TOTAL" -eq 0 ]; then
+
+            echo "ERROR: No Parquet files found."
 
             exit 1
 
           fi
 
-          echo "Historical data successfully detected."
 
-
-      # ============================================================
-      # 8. SHOW SAMPLE FILES
-      #
-      # sed does NOT cause the broken-pipe problem that head caused.
-      # ============================================================
-
-      - name: Show sample data files
-        shell: bash
-        run: |
-
-          echo "=============================================="
-          echo "SAMPLE 2018-2025 FILES"
-          echo "=============================================="
-
-          find historical_2018_2025 \
-            -type f \
-            -name "*.parquet" \
-            -print \
-            | sed -n '1,20p'
-
-          echo ""
-
-          echo "=============================================="
-          echo "SAMPLE 2026 FILES"
-          echo "=============================================="
-
-          find historical_2026 \
-            -type f \
-            -name "*.parquet" \
-            -print \
-            | sed -n '1,20p'
-
-
-      # ============================================================
-      # 9. INSPECT ONE PARQUET FILE
-      #
-      # This confirms the actual structure before the backtest.
-      # ============================================================
-
-      - name: Inspect Parquet structure
-        shell: bash
-        run: |
-
-          SAMPLE_FILE=$(find historical_2018_2025 \
-            -type f \
-            -name "*.parquet" \
-            -print \
-            | sed -n '1p')
-
-          if [ -z "$SAMPLE_FILE" ]; then
-
-            echo "ERROR: Could not locate sample Parquet file."
-
-            exit 1
-
-          fi
-
-          echo "Sample file:"
-          echo "$SAMPLE_FILE"
-
-          echo ""
-
-          python - <<PY
-
-          import pandas as pd
-
-          path = "$SAMPLE_FILE"
-
-          print("Reading Parquet file...")
-          print()
-
-          df = pd.read_parquet(path)
-
-          print("Shape:")
-          print(df.shape)
-
-          print()
-
-          print("Columns:")
-          print(list(df.columns))
-
-          print()
-
-          print("Data types:")
-          print(df.dtypes)
-
-          print()
-
-          print("First 5 rows:")
-          print(df.head())
-
-          print()
-
-          print("Last 5 rows:")
-          print(df.tail())
-
-          PY
-
-
-      # ============================================================
-      # 10. VERIFY BACKTEST FILE
-      # ============================================================
+      # ========================================================
+      # VERIFY BACKTESTER
+      # ========================================================
 
       - name: Verify backtest.py
-        shell: bash
+
         run: |
 
           if [ ! -f "backtest.py" ]; then
 
             echo "ERROR: backtest.py not found."
-
-            echo ""
-            echo "Repository files:"
-
-            find . \
-              -maxdepth 2 \
-              -type f \
-              -print
 
             exit 1
 
@@ -319,12 +188,12 @@ jobs:
           echo "backtest.py found."
 
 
-      # ============================================================
-      # 11. RUN BACKTEST
-      # ============================================================
+      # ========================================================
+      # RUN BACKTEST
+      # ========================================================
 
-      - name: Run NSE scanner backtest
-        shell: bash
+      - name: Run backtest
+
         env:
 
           START_DATE: ${{ inputs.start_date }}
@@ -333,59 +202,29 @@ jobs:
 
           TRADE_SIDE: ${{ inputs.side }}
 
+          ROUND_TRIP_COST_PCT: ${{ inputs.round_trip_cost_pct }}
+
         run: |
-
-          echo ""
-          echo "=============================================="
-          echo "NSE SCANNER BACKTEST"
-          echo "=============================================="
-          echo ""
-
-          echo "Start date : $START_DATE"
-          echo "End date   : $END_DATE"
-          echo "Side       : $TRADE_SIDE"
-
-          echo ""
 
           python -u backtest.py
 
 
-      # ============================================================
-      # 12. SHOW RESULTS
-      # ============================================================
-
-      - name: Show result files
-        if: always()
-        shell: bash
-        run: |
-
-          echo ""
-          echo "=============================================="
-          echo "BACKTEST RESULT FILES"
-          echo "=============================================="
-
-          if [ -d "results" ]; then
-
-            find results \
-              -type f \
-              -print
-
-          else
-
-            echo "No results directory found."
-
-          fi
-
-
-      # ============================================================
-      # 13. UPLOAD RESULTS
-      # ============================================================
+      # ========================================================
+      # UPLOAD RESULTS
+      # ========================================================
 
       - name: Upload backtest results
+
         if: always()
+
         uses: actions/upload-artifact@v4
+
         with:
+
           name: NSE-backtest-results
+
           path: results/
+
           if-no-files-found: warn
+
           retention-days: 30
