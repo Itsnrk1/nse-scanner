@@ -12,14 +12,22 @@ import pandas as pd
 # SETTINGS
 # ============================================================
 
-START_DATE = os.getenv("START_DATE", "2020-01-01")
-END_DATE = os.getenv("END_DATE", "2025-12-31")
+START_DATE = os.getenv(
+    "START_DATE",
+    "2018-01-01"
+)
+
+END_DATE = os.getenv(
+    "END_DATE",
+    "2026-08-31"
+)
 
 TRADE_SIDE = os.getenv(
     "TRADE_SIDE",
     "SHORT"
 ).upper()
 
+# Total estimated cost for one complete trade.
 ROUND_TRIP_COST_PCT = float(
     os.getenv(
         "ROUND_TRIP_COST_PCT",
@@ -27,6 +35,7 @@ ROUND_TRIP_COST_PCT = float(
     )
 )
 
+# Target percentage.
 TARGET_PCT = float(
     os.getenv(
         "TARGET_PCT",
@@ -34,8 +43,7 @@ TARGET_PCT = float(
     )
 )
 
-# Maximum number of simultaneous stock processes.
-# GitHub-hosted runners generally have limited CPU.
+# Number of stocks processed simultaneously.
 MAX_WORKERS = int(
     os.getenv(
         "MAX_WORKERS",
@@ -44,7 +52,12 @@ MAX_WORKERS = int(
 )
 
 
+# ============================================================
+# RESULTS DIRECTORY
+# ============================================================
+
 RESULTS_DIR = Path("results")
+
 RESULTS_DIR.mkdir(
     exist_ok=True
 )
@@ -77,51 +90,84 @@ def direction_name(value):
 
 
 # ============================================================
-# FIND PARQUET FILES
+# FIND HISTORICAL PARQUET FILES
 # ============================================================
 
 def find_parquet_files():
 
     files = []
 
-    for directory in (
+    directories = [
+
         "historical_2018_2025",
+
         "historical_2026"
-    ):
+
+    ]
+
+    for directory in directories:
 
         if not os.path.isdir(directory):
+
             continue
 
+
         files.extend(
+
             glob.glob(
+
                 os.path.join(
+
                     directory,
+
                     "**",
+
                     "*.parquet"
+
                 ),
+
                 recursive=True
+
             )
+
         )
+
 
         files.extend(
+
             glob.glob(
+
                 os.path.join(
+
                     directory,
+
                     "**",
+
                     "*.pq"
+
                 ),
+
                 recursive=True
+
             )
+
         )
 
-    return sorted(set(files))
+
+    return sorted(
+        set(files)
+    )
 
 
 # ============================================================
-# NORMALIZE DATA
+# NORMALIZE PARQUET DATA
 # ============================================================
 
 def normalize_data(df):
+
+    # --------------------------------------------------------
+    # Flatten MultiIndex columns if present.
+    # --------------------------------------------------------
 
     if isinstance(
         df.columns,
@@ -129,55 +175,86 @@ def normalize_data(df):
     ):
 
         df.columns = [
+
             "_".join(
+
                 str(x)
+
                 for x in column
-                if str(x) not in ("", "None")
+
+                if str(x)
+                not in ("", "None")
+
             )
+
             for column in df.columns
+
         ]
 
 
+    # --------------------------------------------------------
+    # Column lookup.
+    # --------------------------------------------------------
+
     columns = {
-        str(c).strip().lower(): c
-        for c in df.columns
+
+        str(column)
+        .strip()
+        .lower():
+
+        column
+
+        for column in df.columns
+
     }
 
 
     aliases = {
 
         "datetime": [
+
             "datetime",
             "timestamp",
             "date_time",
             "time",
             "date"
+
         ],
 
         "open": [
+
             "open",
             "o"
+
         ],
 
         "high": [
+
             "high",
             "h"
+
         ],
 
         "low": [
+
             "low",
             "l"
+
         ],
 
         "close": [
+
             "close",
             "c"
+
         ],
 
         "volume": [
+
             "volume",
             "vol",
             "v"
+
         ]
 
     }
@@ -192,13 +269,15 @@ def normalize_data(df):
 
             if name in columns:
 
-                selected[target] = columns[name]
+                selected[target] = (
+                    columns[name]
+                )
 
                 break
 
 
     # --------------------------------------------------------
-    # Datetime may be index
+    # Datetime may be stored as index.
     # --------------------------------------------------------
 
     if "datetime" not in selected:
@@ -208,9 +287,11 @@ def normalize_data(df):
         if df.index.name is not None:
 
             index_name = (
+
                 str(df.index.name)
                 .strip()
                 .lower()
+
             )
 
 
@@ -218,9 +299,17 @@ def normalize_data(df):
 
             df = df.reset_index()
 
+
             columns = {
-                str(c).strip().lower(): c
-                for c in df.columns
+
+                str(column)
+                .strip()
+                .lower():
+
+                column
+
+                for column in df.columns
+
             }
 
 
@@ -235,134 +324,215 @@ def normalize_data(df):
                     break
 
 
+    # --------------------------------------------------------
+    # Verify required columns.
+    # --------------------------------------------------------
+
     required = [
+
         "datetime",
         "open",
         "high",
         "low",
         "close",
         "volume"
+
     ]
 
 
     missing = [
-        x
-        for x in required
-        if x not in selected
+
+        item
+
+        for item in required
+
+        if item not in selected
+
     ]
 
 
     if missing:
 
         raise ValueError(
-            f"Missing columns: {missing}; "
-            f"actual columns: {list(df.columns)}"
+
+            f"Missing required columns: "
+            f"{missing}. "
+
+            f"Available columns: "
+            f"{list(df.columns)}"
+
         )
 
 
     # --------------------------------------------------------
-    # Only keep columns actually required.
+    # Keep only required data.
     # --------------------------------------------------------
 
     output = pd.DataFrame({
 
         "datetime":
+
             df[selected["datetime"]],
 
         "open":
+
             pd.to_numeric(
+
                 df[selected["open"]],
+
                 errors="coerce"
+
             ),
 
         "high":
+
             pd.to_numeric(
+
                 df[selected["high"]],
+
                 errors="coerce"
+
             ),
 
         "low":
+
             pd.to_numeric(
+
                 df[selected["low"]],
+
                 errors="coerce"
+
             ),
 
         "close":
+
             pd.to_numeric(
+
                 df[selected["close"]],
+
                 errors="coerce"
+
             ),
 
         "volume":
+
             pd.to_numeric(
+
                 df[selected["volume"]],
+
                 errors="coerce"
+
             )
 
     })
 
 
+    # --------------------------------------------------------
+    # Convert datetime.
+    # --------------------------------------------------------
+
     output["datetime"] = pd.to_datetime(
+
         output["datetime"],
+
         errors="coerce"
+
     )
 
 
     output = output.dropna(
+
         subset=[
+
             "datetime",
             "open",
             "high",
             "low",
             "close",
             "volume"
+
         ]
+
     )
 
 
     # --------------------------------------------------------
-    # Convert timezone-aware data to IST.
+    # Convert timezone to IST if necessary.
     # --------------------------------------------------------
 
     if getattr(
+
         output["datetime"].dt,
+
         "tz",
+
         None
+
     ) is not None:
 
         output["datetime"] = (
+
             output["datetime"]
-            .dt.tz_convert("Asia/Kolkata")
-            .dt.tz_localize(None)
+
+            .dt.tz_convert(
+                "Asia/Kolkata"
+            )
+
+            .dt.tz_localize(
+                None
+            )
+
         )
 
 
+    # --------------------------------------------------------
+    # Date and HHMM.
+    # --------------------------------------------------------
+
     output["date"] = (
-        output["datetime"].dt.date
+
+        output["datetime"]
+        .dt.date
+
     )
 
 
     output["hm"] = (
-        output["datetime"].dt.hour * 100
+
+        output["datetime"].dt.hour
+        *
+        100
+
         +
+
         output["datetime"].dt.minute
+
     )
 
 
     # --------------------------------------------------------
-    # NSE regular session.
+    # NSE session.
     # --------------------------------------------------------
 
     output = output[
+
         (output["hm"] >= 915)
+
         &
+
         (output["hm"] <= 1529)
+
     ]
 
+
+    # --------------------------------------------------------
+    # Requested date range.
+    # --------------------------------------------------------
 
     start_date = pd.Timestamp(
         START_DATE
     ).date()
+
 
     end_date = pd.Timestamp(
         END_DATE
@@ -370,24 +540,43 @@ def normalize_data(df):
 
 
     output = output[
+
         (output["date"] >= start_date)
+
         &
+
         (output["date"] <= end_date)
+
     ]
 
 
     # --------------------------------------------------------
-    # Sort and remove duplicate minute candles.
+    # Sort and remove duplicate minute records.
     # --------------------------------------------------------
 
     output = (
+
         output
-        .sort_values("datetime")
-        .drop_duplicates(
-            ["date", "hm"],
-            keep="last"
+
+        .sort_values(
+            "datetime"
         )
-        .reset_index(drop=True)
+
+        .drop_duplicates(
+
+            subset=[
+                "date",
+                "hm"
+            ],
+
+            keep="last"
+
+        )
+
+        .reset_index(
+            drop=True
+        )
+
     )
 
 
@@ -395,16 +584,31 @@ def normalize_data(df):
 
 
 # ============================================================
-# GET EXACT 3-MINUTE CANDLE
+# CREATE EXACT 3-MINUTE CANDLE
 # ============================================================
 
-def make_3m(day, start):
+def make_3m_candle(
+    day,
+    start_minute
+):
+
+    required_minutes = [
+
+        start_minute,
+
+        start_minute + 1,
+
+        start_minute + 2
+
+    ]
+
 
     rows = day.loc[
-        day["hm"].between(
-            start,
-            start + 2
+
+        day["hm"].isin(
+            required_minutes
         )
+
     ]
 
 
@@ -414,54 +618,71 @@ def make_3m(day, start):
 
 
     if set(
+
         rows["hm"].astype(int)
-    ) != {
-        start,
-        start + 1,
-        start + 2
-    }:
+
+    ) != set(
+
+        required_minutes
+
+    ):
 
         return None
 
 
-    first = rows.iloc[0]
-    last = rows.iloc[-1]
+    rows = rows.sort_values(
+        "hm"
+    )
 
 
     return {
 
         "open":
-            float(first["open"]),
+            float(
+                rows.iloc[0]["open"]
+            ),
 
         "close":
-            float(last["close"]),
+            float(
+                rows.iloc[-1]["close"]
+            ),
 
         "volume":
-            float(rows["volume"].sum())
+            float(
+                rows["volume"].sum()
+            )
 
     }
 
 
 # ============================================================
-# EVALUATE SIGNAL
+# EVALUATE PREVIOUS DAY SIGNAL
 # ============================================================
 
 def evaluate_signal(day):
 
-    required = {
+    # --------------------------------------------------------
+    # Required 1-minute candles.
+    # --------------------------------------------------------
 
+    required_minutes = {
+
+        # 09:15 3-minute candle
         915,
         916,
         917,
 
+        # 09:18 3-minute candle
         918,
         919,
         920,
 
+        # 15:24 3-minute candle
         1524,
         1525,
         1526,
 
+        # 15:27 3-minute candle
         1527,
         1528,
         1529
@@ -470,86 +691,129 @@ def evaluate_signal(day):
 
 
     available = set(
+
         day["hm"].astype(int)
+
     )
 
 
-    if not required.issubset(
+    if not required_minutes.issubset(
         available
     ):
 
         return None
 
 
-    # --------------------------------------------------------
-    # 3-minute candles
-    # --------------------------------------------------------
+    # ========================================================
+    # 3-MINUTE CANDLES
+    # ========================================================
 
-    c1524 = make_3m(
+    candle_1524 = make_3m_candle(
+
         day,
+
         1524
+
     )
 
-    c1527 = make_3m(
+
+    candle_1527 = make_3m_candle(
+
         day,
+
         1527
+
     )
 
-    c0915 = make_3m(
+
+    candle_0915 = make_3m_candle(
+
         day,
+
         915
+
     )
 
-    c0918 = make_3m(
+
+    candle_0918 = make_3m_candle(
+
         day,
+
         918
+
     )
 
 
     if any(
-        x is None
-        for x in (
-            c1524,
-            c1527,
-            c0915,
-            c0918
+
+        candle is None
+
+        for candle in (
+
+            candle_1524,
+
+            candle_1527,
+
+            candle_0915,
+
+            candle_0918
+
         )
+
     ):
 
         return None
 
 
-    # --------------------------------------------------------
-    # Trends
-    # --------------------------------------------------------
+    # ========================================================
+    # 3-MINUTE TRENDS
+    # ========================================================
 
     trend_1524 = direction(
-        c1524["open"],
-        c1524["close"]
+
+        candle_1524["open"],
+
+        candle_1524["close"]
+
     )
+
 
     trend_1527 = direction(
-        c1527["open"],
-        c1527["close"]
+
+        candle_1527["open"],
+
+        candle_1527["close"]
+
     )
+
 
     trend_0915 = direction(
-        c0915["open"],
-        c0915["close"]
+
+        candle_0915["open"],
+
+        candle_0915["close"]
+
     )
+
 
     trend_0918 = direction(
-        c0918["open"],
-        c0918["close"]
+
+        candle_0918["open"],
+
+        candle_0918["close"]
+
     )
 
 
-    # --------------------------------------------------------
+    # ========================================================
     # CONDITION 1
     #
-    # 15:24 and 15:27 opposite
-    # 15:24 has MORE volume
-    # --------------------------------------------------------
+    # NEW RULE:
+    #
+    # 15:24 and 15:27 MUST BE SAME TREND
+    #
+    # 15:24 volume MUST BE GREATER
+    # ========================================================
 
     condition_1 = (
 
@@ -561,23 +825,24 @@ def evaluate_signal(day):
 
         and
 
-        trend_1524 != trend_1527
+        trend_1524 == trend_1527
 
         and
 
-        c1524["volume"]
+        candle_1524["volume"]
         >
-        c1527["volume"]
+        candle_1527["volume"]
 
     )
 
 
-    # --------------------------------------------------------
+    # ========================================================
     # CONDITION 2
     #
-    # 09:15 and 09:18 same trend
-    # as 15:24
-    # --------------------------------------------------------
+    # 3-MINUTE 09:15 AND 09:18
+    #
+    # BOTH MUST MATCH 15:24
+    # ========================================================
 
     condition_2 = (
 
@@ -598,53 +863,84 @@ def evaluate_signal(day):
     )
 
 
-    # --------------------------------------------------------
-    # 1-minute EOD candles
-    # --------------------------------------------------------
+    # ========================================================
+    # 1-MINUTE DATA
+    # ========================================================
 
-    minute = day.set_index(
-        "hm",
-        drop=False
+    minute_data = (
+
+        day
+
+        .set_index(
+            "hm",
+            drop=False
+        )
+
     )
 
 
     if (
-        1528 not in minute.index
+
+        1528 not in minute_data.index
+
         or
-        1529 not in minute.index
+
+        1529 not in minute_data.index
+
     ):
 
         return None
 
 
-    row_1528 = minute.loc[
+    row_1528 = minute_data.loc[
         1528
     ]
 
-    row_1529 = minute.loc[
+
+    row_1529 = minute_data.loc[
         1529
     ]
 
 
+    # ========================================================
+    # 1-MINUTE TRENDS
+    # ========================================================
+
     trend_1528 = direction(
-        float(row_1528["open"]),
-        float(row_1528["close"])
+
+        float(
+            row_1528["open"]
+        ),
+
+        float(
+            row_1528["close"]
+        )
+
     )
 
 
     trend_1529 = direction(
-        float(row_1529["open"]),
-        float(row_1529["close"])
+
+        float(
+            row_1529["open"]
+        ),
+
+        float(
+            row_1529["close"]
+        )
+
     )
 
 
-    # --------------------------------------------------------
+    # ========================================================
     # CONDITION 3
     #
-    # 15:28 and 15:29 opposite
+    # 15:28 and 15:29 MUST BE OPPOSITE
+    #
     # 15:28 volume > 15:29
-    # 15:28 same trend as 3m 15:24
-    # --------------------------------------------------------
+    #
+    # 15:28 trend = 3m 15:24 trend
+    # ========================================================
 
     condition_3 = (
 
@@ -660,9 +956,13 @@ def evaluate_signal(day):
 
         and
 
-        float(row_1528["volume"])
+        float(
+            row_1528["volume"]
+        )
         >
-        float(row_1529["volume"])
+        float(
+            row_1529["volume"]
+        )
 
         and
 
@@ -672,6 +972,10 @@ def evaluate_signal(day):
 
     )
 
+
+    # ========================================================
+    # FINAL SIGNAL
+    # ========================================================
 
     passed = (
 
@@ -711,22 +1015,33 @@ def evaluate_signal(day):
 
 
 # ============================================================
-# TARGET CHECK
+# CHECK 1% TARGET
 # ============================================================
 
 def target_hit(
+
     trade_day,
+
     entry_price,
+
     side,
+
     start_hm,
+
     end_hm
+
 ):
 
     rows = trade_day.loc[
+
         trade_day["hm"].between(
+
             start_hm,
+
             end_hm
+
         )
+
     ]
 
 
@@ -738,46 +1053,60 @@ def target_hit(
     if side == "LONG":
 
         target_price = (
+
             entry_price
+
             *
+
             (
                 1
                 +
                 TARGET_PCT / 100
             )
+
         )
 
 
-        # LONG target is reached by HIGH.
+        # LONG target uses HIGH.
+
         return bool(
+
             (
                 rows["high"]
                 >=
                 target_price
             ).any()
+
         )
 
 
     else:
 
         target_price = (
+
             entry_price
+
             *
+
             (
                 1
                 -
                 TARGET_PCT / 100
             )
+
         )
 
 
-        # SHORT target is reached by LOW.
+        # SHORT target uses LOW.
+
         return bool(
+
             (
                 rows["low"]
                 <=
                 target_price
             ).any()
+
         )
 
 
@@ -793,6 +1122,10 @@ def process_stock(filepath):
 
 
     try:
+
+        # ----------------------------------------------------
+        # Read data
+        # ----------------------------------------------------
 
         raw = pd.read_parquet(
             filepath
@@ -812,10 +1145,44 @@ def process_stock(filepath):
                     symbol,
 
                 "status":
-                    "NO_DATA"
+                    "NO_DATA",
+
+                "signal_days":
+                    0,
+
+                "incomplete_days":
+                    0,
+
+                "condition_1":
+                    0,
+
+                "condition_2":
+                    0,
+
+                "condition_3":
+                    0,
+
+                "final_signals":
+                    0,
+
+                "long_signals":
+                    0,
+
+                "short_signals":
+                    0,
+
+                "executed_trades":
+                    0,
+
+                "target_hits":
+                    0
 
             }
 
+
+        # ----------------------------------------------------
+        # Group by trading day.
+        # ----------------------------------------------------
 
         days = {
 
@@ -825,9 +1192,13 @@ def process_stock(filepath):
                 )
 
             for date, group
+
             in data.groupby(
+
                 "date",
+
                 sort=True
+
             )
 
         }
@@ -841,7 +1212,7 @@ def process_stock(filepath):
         trades = []
 
 
-        diagnostic = {
+        diagnostics = {
 
             "symbol":
                 symbol,
@@ -876,17 +1247,14 @@ def process_stock(filepath):
             "executed_trades":
                 0,
 
-            "target_hits_0918":
-                0,
-
-            "target_hits_1527":
+            "target_hits":
                 0
 
         }
 
 
         # ====================================================
-        # SIGNAL DAYS
+        # SIGNAL-DAY LOOP
         # ====================================================
 
         for i in range(
@@ -898,36 +1266,42 @@ def process_stock(filepath):
             trade_date = dates[i + 1]
 
 
-            diagnostic[
+            diagnostics[
                 "signal_days"
             ] += 1
 
 
             signal = evaluate_signal(
+
                 days[signal_date]
+
             )
 
 
             if signal is None:
 
-                diagnostic[
+                diagnostics[
                     "incomplete_days"
                 ] += 1
 
                 continue
 
 
-            for n in range(
+            # ------------------------------------------------
+            # Diagnostics
+            # ------------------------------------------------
+
+            for number in range(
                 1,
                 4
             ):
 
                 if signal[
-                    f"condition_{n}"
+                    f"condition_{number}"
                 ]:
 
-                    diagnostic[
-                        f"condition_{n}"
+                    diagnostics[
+                        f"condition_{number}"
                     ] += 1
 
 
@@ -936,7 +1310,7 @@ def process_stock(filepath):
                 continue
 
 
-            diagnostic[
+            diagnostics[
                 "final_signals"
             ] += 1
 
@@ -948,16 +1322,20 @@ def process_stock(filepath):
 
             if side == "LONG":
 
-                diagnostic[
+                diagnostics[
                     "long_signals"
                 ] += 1
 
-            else:
+            elif side == "SHORT":
 
-                diagnostic[
+                diagnostics[
                     "short_signals"
                 ] += 1
 
+
+            # ------------------------------------------------
+            # Trade-side filter.
+            # ------------------------------------------------
 
             if (
 
@@ -981,18 +1359,25 @@ def process_stock(filepath):
             ]
 
 
+            # -------------------------------------------------
+            # Entry
+            # -------------------------------------------------
+
             entry_rows = next_day.loc[
+
                 next_day["hm"] == 915
+
             ]
 
 
-            exit_0918_rows = next_day.loc[
-                next_day["hm"] == 918
-            ]
+            # -------------------------------------------------
+            # Scheduled exit
+            # -------------------------------------------------
 
+            exit_rows = next_day.loc[
 
-            exit_1527_rows = next_day.loc[
                 next_day["hm"] == 1527
+
             ]
 
 
@@ -1002,11 +1387,7 @@ def process_stock(filepath):
 
                 or
 
-                exit_0918_rows.empty
-
-                or
-
-                exit_1527_rows.empty
+                exit_rows.empty
 
             ):
 
@@ -1014,17 +1395,20 @@ def process_stock(filepath):
 
 
             entry_price = float(
-                entry_rows.iloc[0]["open"]
+
+                entry_rows.iloc[0][
+                    "open"
+                ]
+
             )
 
 
-            exit_0918_price = float(
-                exit_0918_rows.iloc[0]["open"]
-            )
+            scheduled_exit_price = float(
 
+                exit_rows.iloc[0][
+                    "open"
+                ]
 
-            exit_1527_price = float(
-                exit_1527_rows.iloc[0]["open"]
             )
 
 
@@ -1032,6 +1416,12 @@ def process_stock(filepath):
 
                 not math.isfinite(
                     entry_price
+                )
+
+                or
+
+                not math.isfinite(
+                    scheduled_exit_price
                 )
 
                 or
@@ -1044,7 +1434,7 @@ def process_stock(filepath):
 
 
             # =================================================
-            # TARGET PRICES
+            # TARGET PRICE
             # =================================================
 
             if side == "LONG":
@@ -1052,7 +1442,9 @@ def process_stock(filepath):
                 target_price = (
 
                     entry_price
+
                     *
+
                     (
                         1
                         +
@@ -1066,7 +1458,9 @@ def process_stock(filepath):
                 target_price = (
 
                     entry_price
+
                     *
+
                     (
                         1
                         -
@@ -1077,54 +1471,14 @@ def process_stock(filepath):
 
 
             # =================================================
-            # 09:18 HALF
+            # TARGET CHECK
+            #
+            # We check from 09:15 through 15:26.
+            #
+            # 15:27 is the scheduled exit.
             # =================================================
 
-            hit_0918 = target_hit(
-
-                next_day,
-
-                entry_price,
-
-                side,
-
-                915,
-
-                917
-
-            )
-
-
-            if hit_0918:
-
-                exit1_price = (
-                    target_price
-                )
-
-                exit1_type = (
-                    f"{TARGET_PCT:.2f}% TARGET"
-                )
-
-                diagnostic[
-                    "target_hits_0918"
-                ] += 1
-
-            else:
-
-                exit1_price = (
-                    exit_0918_price
-                )
-
-                exit1_type = (
-                    "09:18 OPEN"
-                )
-
-
-            # =================================================
-            # 15:27 HALF
-            # =================================================
-
-            hit_1527 = target_hit(
+            target_reached = target_hit(
 
                 next_day,
 
@@ -1139,133 +1493,88 @@ def process_stock(filepath):
             )
 
 
-            if hit_1527:
+            if target_reached:
 
-                exit2_price = (
-                    target_price
-                )
+                exit_price = target_price
 
-                exit2_type = (
+                exit_type = (
+
                     f"{TARGET_PCT:.2f}% TARGET"
+
                 )
 
-                diagnostic[
-                    "target_hits_1527"
+                diagnostics[
+                    "target_hits"
                 ] += 1
 
             else:
 
-                exit2_price = (
-                    exit_1527_price
+                exit_price = (
+                    scheduled_exit_price
                 )
 
-                exit2_type = (
+                exit_type = (
                     "15:27 OPEN"
                 )
 
 
             # =================================================
-            # RETURNS
+            # RETURN
             # =================================================
 
             if side == "LONG":
 
-                gross1 = (
+                gross_return = (
 
                     (
-                        exit1_price
+                        exit_price
                         -
                         entry_price
                     )
+
                     /
+
                     entry_price
+
                     *
-                    100
 
-                )
-
-
-                gross2 = (
-
-                    (
-                        exit2_price
-                        -
-                        entry_price
-                    )
-                    /
-                    entry_price
-                    *
                     100
 
                 )
 
             else:
 
-                gross1 = (
+                gross_return = (
 
                     (
                         entry_price
                         -
-                        exit1_price
+                        exit_price
                     )
+
                     /
+
                     entry_price
+
                     *
+
                     100
 
                 )
 
 
-                gross2 = (
+            net_return = (
 
-                    (
-                        entry_price
-                        -
-                        exit2_price
-                    )
-                    /
-                    entry_price
-                    *
-                    100
-
-                )
-
-
-            # Each half represents 50% of the position.
-            #
-            # Total cost is allocated proportionally.
-
-            half_cost = (
+                gross_return
+                -
                 ROUND_TRIP_COST_PCT
-                /
-                2
-            )
-
-
-            net1 = (
-                gross1
-                -
-                half_cost
-            )
-
-
-            net2 = (
-                gross2
-                -
-                half_cost
-            )
-
-
-            combined = (
-
-                net1 * 0.5
-
-                +
-
-                net2 * 0.5
 
             )
 
+
+            # =================================================
+            # STORE TRADE
+            # =================================================
 
             trades.append({
 
@@ -1287,42 +1596,30 @@ def process_stock(filepath):
                 "target_price":
                     target_price,
 
-                "exit1_time":
-                    exit1_type,
+                "exit_type":
+                    exit_type,
 
-                "exit1_price":
-                    exit1_price,
+                "exit_price":
+                    exit_price,
 
-                "exit1_gross_pct":
-                    gross1,
+                "gross_return_pct":
+                    gross_return,
 
-                "exit1_net_pct":
-                    net1,
+                "net_return_pct":
+                    net_return,
 
-                "exit2_time":
-                    exit2_type,
-
-                "exit2_price":
-                    exit2_price,
-
-                "exit2_gross_pct":
-                    gross2,
-
-                "exit2_net_pct":
-                    net2,
-
-                "combined_net_return_pct":
-                    combined
+                "target_hit":
+                    target_reached
 
             })
 
 
-            diagnostic[
+            diagnostics[
                 "executed_trades"
             ] += 1
 
 
-        return trades, diagnostic
+        return trades, diagnostics
 
 
     except Exception as error:
@@ -1335,6 +1632,36 @@ def process_stock(filepath):
             "status":
                 "ERROR",
 
+            "signal_days":
+                0,
+
+            "incomplete_days":
+                0,
+
+            "condition_1":
+                0,
+
+            "condition_2":
+                0,
+
+            "condition_3":
+                0,
+
+            "final_signals":
+                0,
+
+            "long_signals":
+                0,
+
+            "short_signals":
+                0,
+
+            "executed_trades":
+                0,
+
+            "target_hits":
+                0,
+
             "error":
                 repr(error)
 
@@ -1345,7 +1672,7 @@ def process_stock(filepath):
 # STATISTICS
 # ============================================================
 
-def statistics(
+def calculate_statistics(
     returns
 ):
 
@@ -1384,8 +1711,11 @@ def statistics(
 
 
     series = pd.Series(
+
         returns,
+
         dtype=float
+
     )
 
 
@@ -1400,44 +1730,60 @@ def statistics(
 
 
     gross_profit = float(
+
         series[wins].sum()
+
     )
 
 
     gross_loss = float(
+
         abs(
             series[losses].sum()
         )
-    )
-
-
-    profit_factor = (
-
-        gross_profit
-        /
-        gross_loss
-
-        if gross_loss > 0
-
-        else float("inf")
 
     )
+
+
+    if gross_loss > 0:
+
+        profit_factor = (
+
+            gross_profit
+            /
+            gross_loss
+
+        )
+
+    else:
+
+        profit_factor = float(
+            "inf"
+        )
 
 
     return {
 
         "trades":
-            int(len(series)),
+            int(
+                len(series)
+            ),
 
         "wins":
-            int(wins.sum()),
+            int(
+                wins.sum()
+            ),
 
         "losses":
-            int(losses.sum()),
+            int(
+                losses.sum()
+            ),
 
         "win_rate_pct":
             float(
-                wins.mean() * 100
+                wins.mean()
+                *
+                100
             ),
 
         "average_return_pct":
@@ -1477,56 +1823,51 @@ def main():
 
     print()
     print("=" * 90)
-    print("NSE SCANNER FAST BACKTEST")
+    print("NSE SCANNER BACKTEST")
+    print("15:24 / 15:27 SAME TREND VERSION")
     print("=" * 90)
 
     print(
-        f"Date range          : "
-        f"{START_DATE} → {END_DATE}"
+        f"Start date       : {START_DATE}"
     )
 
     print(
-        f"Trade side          : "
-        f"{TRADE_SIDE}"
+        f"End date         : {END_DATE}"
     )
 
     print(
-        f"Target              : "
-        f"{TARGET_PCT}%"
+        f"Trade side       : {TRADE_SIDE}"
     )
 
     print(
-        f"Round-trip cost     : "
+        f"Target           : {TARGET_PCT}%"
+    )
+
+    print(
+        f"Round-trip cost  : "
         f"{ROUND_TRIP_COST_PCT}%"
     )
 
     print(
-        f"Parallel workers    : "
-        f"{MAX_WORKERS}"
+        f"Workers          : {MAX_WORKERS}"
     )
 
     print()
     print(
-        "Entry               : 09:15 OPEN"
+        "Entry            : NEXT DAY 09:15 OPEN"
     )
 
     print(
-        "Exit 1              : 09:18 OPEN "
-        "or target"
-    )
-
-    print(
-        "Exit 2              : 15:27 OPEN "
-        "or target"
-    )
-
-    print(
-        "Position split      : 50% / 50%"
+        "Exit             : 1% TARGET OR 15:27 OPEN"
     )
 
     print("=" * 90)
     print()
 
+
+    # ========================================================
+    # FIND FILES
+    # ========================================================
 
     files = find_parquet_files()
 
@@ -1540,7 +1881,7 @@ def main():
     if not files:
 
         raise RuntimeError(
-            "No Parquet files found."
+            "No historical Parquet files found."
         )
 
 
@@ -1550,20 +1891,26 @@ def main():
 
 
     # ========================================================
-    # PARALLEL PROCESSING
+    # PARALLEL STOCK PROCESSING
     # ========================================================
 
     with ProcessPoolExecutor(
+
         max_workers=MAX_WORKERS
+
     ) as executor:
+
 
         futures = {
 
             executor.submit(
+
                 process_stock,
+
                 filepath
+
             ):
-            filepath
+                filepath
 
             for filepath in files
 
@@ -1577,17 +1924,38 @@ def main():
             futures
         ):
 
+            completed += 1
+
+
             filepath = futures[
                 future
             ]
 
 
-            completed += 1
+            try:
 
+                trades, diagnostic = (
+                    future.result()
+                )
 
-            trades, diagnostic = (
-                future.result()
-            )
+            except Exception as error:
+
+                trades = []
+
+                diagnostic = {
+
+                    "symbol":
+                        Path(
+                            filepath
+                        ).stem,
+
+                    "status":
+                        "ERROR",
+
+                    "error":
+                        repr(error)
+
+                }
 
 
             all_trades.extend(
@@ -1605,15 +1973,15 @@ def main():
                 f"[{completed:>4}/"
                 f"{len(files):>4}] "
 
-                f"{diagnostic.get('symbol',''):<18} "
+                f"{diagnostic.get('symbol', ''):<18} "
 
-                f"{diagnostic.get('status',''):<8} "
+                f"{diagnostic.get('status', ''):<10} "
 
                 f"signals="
-                f"{diagnostic.get('final_signals',0):>4} "
+                f"{diagnostic.get('final_signals', 0):>5} "
 
                 f"trades="
-                f"{len(trades):>4}"
+                f"{len(trades):>5}"
 
             )
 
@@ -1639,7 +2007,7 @@ def main():
 
 
     # ========================================================
-    # TRADES
+    # TRADE DATA
     # ========================================================
 
     trades_df = pd.DataFrame(
@@ -1654,24 +2022,26 @@ def main():
             columns=[
 
                 "symbol",
+
                 "signal_date",
+
                 "trade_date",
+
                 "direction",
 
                 "entry_0915_open",
+
                 "target_price",
 
-                "exit1_time",
-                "exit1_price",
-                "exit1_gross_pct",
-                "exit1_net_pct",
+                "exit_type",
 
-                "exit2_time",
-                "exit2_price",
-                "exit2_gross_pct",
-                "exit2_net_pct",
+                "exit_price",
 
-                "combined_net_return_pct"
+                "gross_return_pct",
+
+                "net_return_pct",
+
+                "target_hit"
 
             ]
 
@@ -1685,10 +2055,13 @@ def main():
             trades_df
 
             .sort_values(
+
                 [
                     "trade_date",
                     "symbol"
+
                 ]
+
             )
 
             .reset_index(
@@ -1710,13 +2083,13 @@ def main():
 
 
     # ========================================================
-    # PERFORMANCE
+    # OVERALL STATISTICS
     # ========================================================
 
-    combined_returns = (
+    returns = (
 
         trades_df[
-            "combined_net_return_pct"
+            "net_return_pct"
         ].tolist()
 
         if not trades_df.empty
@@ -1726,74 +2099,86 @@ def main():
     )
 
 
-    exit1_returns = (
-
-        trades_df[
-            "exit1_net_pct"
-        ].tolist()
-
-        if not trades_df.empty
-
-        else []
-
+    overall = calculate_statistics(
+        returns
     )
-
-
-    exit2_returns = (
-
-        trades_df[
-            "exit2_net_pct"
-        ].tolist()
-
-        if not trades_df.empty
-
-        else []
-
-    )
-
-
-    results = {
-
-        "50/50 COMBINED":
-            statistics(
-                combined_returns
-            ),
-
-        "09:18 EXIT":
-            statistics(
-                exit1_returns
-            ),
-
-        "15:27 EXIT":
-            statistics(
-                exit2_returns
-            )
-
-    }
-
-
-    result_rows = []
-
-
-    for name_, result in results.items():
-
-        result_rows.append({
-
-            "exit":
-                name_,
-
-            **result
-
-        })
 
 
     pd.DataFrame(
-        result_rows
+
+        [overall]
+
     ).to_csv(
 
         RESULTS_DIR
         /
-        "exit_statistics.csv",
+        "overall_statistics.csv",
+
+        index=False
+
+    )
+
+
+    # ========================================================
+    # TARGET STATISTICS
+    # ========================================================
+
+    target_hits = int(
+
+        trades_df[
+            "target_hit"
+        ].sum()
+
+        if not trades_df.empty
+
+        else 0
+
+    )
+
+
+    total_trades = len(
+        trades_df
+    )
+
+
+    target_hit_pct = (
+
+        target_hits
+        /
+        total_trades
+        *
+        100
+
+        if total_trades > 0
+
+        else 0
+
+    )
+
+
+    target_statistics = {
+
+        "total_trades":
+            total_trades,
+
+        "target_hits":
+            target_hits,
+
+        "target_hit_pct":
+            target_hit_pct
+
+    }
+
+
+    pd.DataFrame(
+
+        [target_statistics]
+
+    ).to_csv(
+
+        RESULTS_DIR
+        /
+        "target_statistics.csv",
 
         index=False
 
@@ -1808,21 +2193,27 @@ def main():
 
 
     for side in (
+
         "LONG",
         "SHORT"
+
     ):
 
         subset = trades_df[
-            trades_df["direction"]
+
+            trades_df[
+                "direction"
+            ]
             ==
             side
+
         ]
 
 
-        returns = (
+        side_returns = (
 
             subset[
-                "combined_net_return_pct"
+                "net_return_pct"
             ].tolist()
 
             if not subset.empty
@@ -1832,8 +2223,36 @@ def main():
         )
 
 
-        result = statistics(
-            returns
+        stats = calculate_statistics(
+            side_returns
+        )
+
+
+        side_target_hits = int(
+
+            subset[
+                "target_hit"
+            ].sum()
+
+            if not subset.empty
+
+            else 0
+
+        )
+
+
+        side_target_pct = (
+
+            side_target_hits
+            /
+            len(subset)
+            *
+            100
+
+            if len(subset) > 0
+
+            else 0
+
         )
 
 
@@ -1842,7 +2261,13 @@ def main():
             "direction":
                 side,
 
-            **result
+            **stats,
+
+            "target_hits":
+                side_target_hits,
+
+            "target_hit_pct":
+                side_target_pct
 
         })
 
@@ -1861,7 +2286,7 @@ def main():
 
 
     # ========================================================
-    # YEARLY RESULTS
+    # YEARLY STATISTICS
     # ========================================================
 
     if not trades_df.empty:
@@ -1869,8 +2294,13 @@ def main():
         trades_df["year"] = (
 
             pd.to_datetime(
-                trades_df["trade_date"]
+
+                trades_df[
+                    "trade_date"
+                ]
+
             )
+
             .dt.year
 
         )
@@ -1880,11 +2310,17 @@ def main():
 
 
         for year, group in (
-            trades_df.groupby("year")
+
+            trades_df.groupby(
+                "year"
+            )
+
         ):
 
-            returns = group[
-                "combined_net_return_pct"
+            year_returns = group[
+
+                "net_return_pct"
+
             ].tolist()
 
 
@@ -1893,15 +2329,24 @@ def main():
                 "year":
                     int(year),
 
-                **statistics(
-                    returns
-                )
+                **calculate_statistics(
+                    year_returns
+                ),
+
+                "target_hits":
+                    int(
+                        group[
+                            "target_hit"
+                        ].sum()
+                    )
 
             })
 
 
         pd.DataFrame(
+
             yearly_rows
+
         ).to_csv(
 
             RESULTS_DIR
@@ -1914,7 +2359,7 @@ def main():
 
 
     # ========================================================
-    # FINAL OUTPUT
+    # FINAL RESULT
     # ========================================================
 
     print()
@@ -1923,46 +2368,76 @@ def main():
     print("=" * 90)
 
 
-    for name_, result in results.items():
+    print(
+        f"Trades          : "
+        f"{overall['trades']}"
+    )
 
-        print()
-        print(name_)
-        print("-" * 60)
 
-        print(
-            f"Trades          : "
-            f"{result['trades']}"
-        )
+    print(
+        f"Wins            : "
+        f"{overall['wins']}"
+    )
 
-        print(
-            f"Wins            : "
-            f"{result['wins']}"
-        )
 
-        print(
-            f"Losses          : "
-            f"{result['losses']}"
-        )
+    print(
+        f"Losses          : "
+        f"{overall['losses']}"
+    )
 
-        print(
-            f"Win rate        : "
-            f"{result['win_rate_pct']:.2f}%"
-        )
 
-        print(
-            f"Average return  : "
-            f"{result['average_return_pct']:.4f}%"
-        )
+    print(
+        f"Win rate        : "
+        f"{overall['win_rate_pct']:.2f}%"
+    )
 
-        print(
-            f"Total return    : "
-            f"{result['total_return_pct']:.4f}%"
-        )
 
-        print(
-            f"Profit factor   : "
-            f"{result['profit_factor']}"
-        )
+    print(
+        f"Average return  : "
+        f"{overall['average_return_pct']:.4f}%"
+    )
+
+
+    print(
+        f"Total return    : "
+        f"{overall['total_return_pct']:.4f}%"
+    )
+
+
+    print(
+        f"Profit factor   : "
+        f"{overall['profit_factor']}"
+    )
+
+
+    print(
+        f"Best trade      : "
+        f"{overall['best_trade_pct']:.4f}%"
+    )
+
+
+    print(
+        f"Worst trade     : "
+        f"{overall['worst_trade_pct']:.4f}%"
+    )
+
+
+    print()
+    print("=" * 90)
+    print("TARGET")
+    print("=" * 90)
+
+
+    print(
+        f"Target hits     : "
+        f"{target_hits}"
+    )
+
+
+    print(
+        f"Target hit rate : "
+        f"{target_hit_pct:.2f}%"
+    )
 
 
     print()
@@ -1974,60 +2449,70 @@ def main():
     if not diagnostics_df.empty:
 
         print(
+
             f"Signal days checked : "
-            f"{diagnostics_df['signal_days'].sum()}"
+            f"{diagnostics_df['signal_days'].fillna(0).sum():,.0f}"
+
         )
 
+
         print(
+
             f"Incomplete days     : "
-            f"{diagnostics_df['incomplete_days'].sum()}"
+            f"{diagnostics_df['incomplete_days'].fillna(0).sum():,.0f}"
+
         )
 
+
         print(
+
             f"Condition 1 passed  : "
-            f"{diagnostics_df['condition_1'].sum()}"
+            f"{diagnostics_df['condition_1'].fillna(0).sum():,.0f}"
+
         )
 
+
         print(
+
             f"Condition 2 passed  : "
-            f"{diagnostics_df['condition_2'].sum()}"
+            f"{diagnostics_df['condition_2'].fillna(0).sum():,.0f}"
+
         )
 
+
         print(
+
             f"Condition 3 passed  : "
-            f"{diagnostics_df['condition_3'].sum()}"
+            f"{diagnostics_df['condition_3'].fillna(0).sum():,.0f}"
+
         )
 
+
         print(
+
             f"Final signals       : "
-            f"{diagnostics_df['final_signals'].sum()}"
-        )
+            f"{diagnostics_df['final_signals'].fillna(0).sum():,.0f}"
 
-        print(
-            f"Target hits 09:18   : "
-            f"{diagnostics_df['target_hits_0918'].sum()}"
-        )
-
-        print(
-            f"Target hits 15:27   : "
-            f"{diagnostics_df['target_hits_1527'].sum()}"
         )
 
 
     print()
     print(
+
         f"Runtime: "
         f"{(time.time() - start_time) / 60:.2f} minutes"
+
     )
+
 
     print()
     print(
-        "Results saved to results/"
+        "Results saved in results/"
     )
 
 
 # ============================================================
-# START
+# RUN
 # ============================================================
 
 if __name__ == "__main__":
