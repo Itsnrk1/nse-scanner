@@ -1,1308 +1,465 @@
 import os
 import glob
-import math
 import time
-from pathlib import Path
+import warnings
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
+import numpy as np
 import pandas as pd
 
-
-# ============================================================
-# SETTINGS
-# ============================================================
-
-START_DATE = os.getenv(
-    "START_DATE",
-    "2018-01-01"
-)
-
-END_DATE = os.getenv(
-    "END_DATE",
-    "2026-08-31"
-)
-
-TRADE_SIDE = os.getenv(
-    "TRADE_SIDE",
-    "SHORT"
-).upper()
+warnings.filterwarnings("ignore")
 
 
 # ============================================================
-# NEW RISK MANAGEMENT
+# CONFIGURATION
 # ============================================================
 
-TARGET_PCT = float(
-    os.getenv(
-        "TARGET_PCT",
-        "2.0"
-    )
-)
+DATA_DIRS = [
+    "Nse_Historical_Data",
+    "Nse_Historical_Data_2026",
+]
 
-STOP_LOSS_PCT = float(
-    os.getenv(
-        "STOP_LOSS_PCT",
-        "1.0"
-    )
-)
+# Trade direction:
+# "BOTH"  = take long and short signals
+# "LONG"  = long only
+# "SHORT" = short only
+TRADE_SIDE = "BOTH"
 
+ENTRY_TIME = "09:15"
 
-# Estimated total cost for entry + exit.
-ROUND_TRIP_COST_PCT = float(
-    os.getenv(
-        "ROUND_TRIP_COST_PCT",
-        "0.10"
-    )
-)
+# No target / no stop-loss.
+# Every trade is exited at 15:27 open.
+EXIT_TIME = "15:27"
 
+MARKET_OPEN = "09:15"
+MARKET_CLOSE = "15:29"
 
-# Number of stocks processed simultaneously.
-MAX_WORKERS = int(
-    os.getenv(
-        "MAX_WORKERS",
-        str(min(4, os.cpu_count() or 2))
-    )
-)
+MAX_WORKERS = max(1, (os.cpu_count() or 2) - 1)
+
+RESULTS_DIR = "results"
 
 
 # ============================================================
-# RESULTS
+# CANDLE TREND
 # ============================================================
 
-RESULTS_DIR = Path("results")
-
-RESULTS_DIR.mkdir(
-    exist_ok=True
-)
-
-
-# ============================================================
-# DIRECTION
-# ============================================================
-
-def direction(
-    open_price,
-    close_price
-):
+def candle_trend(open_price, close_price):
+    """
+    Returns:
+        1  = bullish / green
+       -1  = bearish / red
+        0  = doji
+    """
 
     if close_price > open_price:
-
         return 1
 
-
     if close_price < open_price:
-
         return -1
-
 
     return 0
 
 
-def direction_name(value):
-
-    if value == 1:
-
-        return "LONG"
-
-
-    if value == -1:
-
-        return "SHORT"
-
-
-    return ""
-
-
 # ============================================================
-# FIND PARQUET FILES
+# LOAD PARQUET
 # ============================================================
 
-def find_parquet_files():
+def load_parquet(path):
 
-    files = []
+    df = pd.read_parquet(path)
 
-
-    directories = [
-
-        "historical_2018_2025",
-
-        "historical_2026"
-
+    # Normalize column names
+    df.columns = [
+        str(c).strip().lower().replace(" ", "_")
+        for c in df.columns
     ]
 
-
-    for directory in directories:
-
-        if not os.path.isdir(
-            directory
-        ):
-
-            continue
-
-
-        files.extend(
-
-            glob.glob(
-
-                os.path.join(
-
-                    directory,
-
-                    "**",
-
-                    "*.parquet"
-
-                ),
-
-                recursive=True
-
-            )
-
-        )
-
-
-        files.extend(
-
-            glob.glob(
-
-                os.path.join(
-
-                    directory,
-
-                    "**",
-
-                    "*.pq"
-
-                ),
-
-                recursive=True
-
-            )
-
-        )
-
-
-    return sorted(
-        set(files)
-    )
-
-
-# ============================================================
-# NORMALIZE DATA
-# ============================================================
-
-def normalize_data(df):
-
     # --------------------------------------------------------
-    # Flatten MultiIndex columns.
+    # Find datetime column
     # --------------------------------------------------------
 
-    if isinstance(
-        df.columns,
-        pd.MultiIndex
-    ):
+    timestamp_candidates = [
+        "datetime",
+        "timestamp",
+        "date",
+        "time",
+        "index",
+    ]
 
-        df.columns = [
+    timestamp_col = None
 
-            "_".join(
+    for col in timestamp_candidates:
+        if col in df.columns:
+            timestamp_col = col
+            break
 
-                str(x)
+    if timestamp_col is None:
 
-                for x in column
-
-                if str(x)
-                not in (
-                    "",
-                    "None"
-                )
-
-            )
-
-            for column in df.columns
-
-        ]
-
-
-    columns = {
-
-        str(column)
-        .strip()
-        .lower():
-
-        column
-
-        for column in df.columns
-
-    }
-
-
-    aliases = {
-
-        "datetime": [
-
-            "datetime",
-            "timestamp",
-            "date_time",
-            "time",
-            "date"
-
-        ],
-
-        "open": [
-
-            "open",
-            "o"
-
-        ],
-
-        "high": [
-
-            "high",
-            "h"
-
-        ],
-
-        "low": [
-
-            "low",
-            "l"
-
-        ],
-
-        "close": [
-
-            "close",
-            "c"
-
-        ],
-
-        "volume": [
-
-            "volume",
-            "vol",
-            "v"
-
-        ]
-
-    }
-
-
-    selected = {}
-
-
-    for target, names in aliases.items():
-
-        for name in names:
-
-            if name in columns:
-
-                selected[target] = (
-                    columns[name]
-                )
-
-                break
-
-
-    # --------------------------------------------------------
-    # Datetime could be the index.
-    # --------------------------------------------------------
-
-    if "datetime" not in selected:
-
-        index_name = ""
-
-
-        if df.index.name is not None:
-
-            index_name = (
-
-                str(df.index.name)
-                .strip()
-                .lower()
-
-            )
-
-
-        if index_name in aliases[
-            "datetime"
-        ]:
+        if isinstance(df.index, pd.DatetimeIndex):
 
             df = df.reset_index()
 
+            timestamp_col = df.columns[0]
 
-            columns = {
+        else:
 
-                str(column)
-                .strip()
-                .lower():
+            raise ValueError(
+                f"No datetime column found in {path}. "
+                f"Columns: {list(df.columns)}"
+            )
 
-                column
-
-                for column in df.columns
-
-            }
-
-
-            for name in aliases[
-                "datetime"
-            ]:
-
-                if name in columns:
-
-                    selected[
-                        "datetime"
-                    ] = columns[name]
-
-                    break
-
+    df["datetime"] = pd.to_datetime(
+        df[timestamp_col],
+        errors="coerce"
+    )
 
     # --------------------------------------------------------
-    # Required columns.
+    # Find OHLCV columns
     # --------------------------------------------------------
 
-    required = [
+    def find_column(candidates):
 
-        "datetime",
+        for c in candidates:
+
+            if c in df.columns:
+                return c
+
+        return None
+
+    open_col = find_column([
         "open",
+        "o"
+    ])
+
+    high_col = find_column([
         "high",
+        "h"
+    ])
+
+    low_col = find_column([
         "low",
+        "l"
+    ])
+
+    close_col = find_column([
         "close",
-        "volume"
+        "c"
+    ])
 
-    ]
+    volume_col = find_column([
+        "volume",
+        "vol",
+        "qty",
+        "quantity"
+    ])
 
+    required = {
+        "open": open_col,
+        "high": high_col,
+        "low": low_col,
+        "close": close_col,
+        "volume": volume_col,
+    }
 
     missing = [
-
-        item
-
-        for item in required
-
-        if item not in selected
-
+        name
+        for name, col in required.items()
+        if col is None
     ]
-
 
     if missing:
 
         raise ValueError(
-
-            f"Missing columns: "
-            f"{missing}; "
-
-            f"Available columns: "
-            f"{list(df.columns)}"
-
+            f"Missing columns {missing} in {path}. "
+            f"Columns: {list(df.columns)}"
         )
 
-
-    # --------------------------------------------------------
-    # Keep only needed columns.
-    # --------------------------------------------------------
-
-    output = pd.DataFrame({
-
-        "datetime":
-
-            df[selected["datetime"]],
-
-        "open":
-
-            pd.to_numeric(
-
-                df[selected["open"]],
-
-                errors="coerce"
-
-            ),
-
-        "high":
-
-            pd.to_numeric(
-
-                df[selected["high"]],
-
-                errors="coerce"
-
-            ),
-
-        "low":
-
-            pd.to_numeric(
-
-                df[selected["low"]],
-
-                errors="coerce"
-
-            ),
-
-        "close":
-
-            pd.to_numeric(
-
-                df[selected["close"]],
-
-                errors="coerce"
-
-            ),
-
-        "volume":
-
-            pd.to_numeric(
-
-                df[selected["volume"]],
-
-                errors="coerce"
-
-            )
-
+    df = df.rename(columns={
+        open_col: "open",
+        high_col: "high",
+        low_col: "low",
+        close_col: "close",
+        volume_col: "volume",
     })
 
-
-    output["datetime"] = pd.to_datetime(
-
-        output["datetime"],
-
-        errors="coerce"
-
-    )
-
-
-    output = output.dropna(
-
-        subset=[
-
+    df = df[
+        [
             "datetime",
             "open",
             "high",
             "low",
             "close",
-            "volume"
-
+            "volume",
         ]
+    ].copy()
 
+    # Remove invalid data
+    df = df.dropna(
+        subset=[
+            "datetime",
+            "open",
+            "high",
+            "low",
+            "close",
+            "volume",
+        ]
     )
 
+    # Sort
+    df = df.sort_values("datetime")
 
-    # --------------------------------------------------------
-    # Convert timezone to IST.
-    # --------------------------------------------------------
-
-    if getattr(
-
-        output["datetime"].dt,
-
-        "tz",
-
-        None
-
-    ) is not None:
-
-        output["datetime"] = (
-
-            output["datetime"]
-
-            .dt.tz_convert(
-                "Asia/Kolkata"
-            )
-
-            .dt.tz_localize(
-                None
-            )
-
-        )
-
-
-    # --------------------------------------------------------
-    # Date / HHMM.
-    # --------------------------------------------------------
-
-    output["date"] = (
-
-        output["datetime"]
-        .dt.date
-
+    # Remove duplicate timestamps
+    df = df.drop_duplicates(
+        subset="datetime",
+        keep="first"
     )
 
+    # --------------------------------------------------------
+    # Date / Time columns
+    # --------------------------------------------------------
 
-    output["hm"] = (
+    df["date"] = df["datetime"].dt.date
 
-        output["datetime"]
-        .dt.hour
-        *
-        100
-
-        +
-
-        output["datetime"]
-        .dt.minute
-
+    df["time"] = df["datetime"].dt.strftime(
+        "%H:%M"
     )
 
-
-    # --------------------------------------------------------
-    # NSE regular session.
-    # --------------------------------------------------------
-
-    output = output[
-
-        (output["hm"] >= 915)
-
+    # Only regular NSE session
+    df = df[
+        (df["time"] >= MARKET_OPEN)
         &
-
-        (output["hm"] <= 1529)
-
+        (df["time"] <= MARKET_CLOSE)
     ]
 
-
-    # --------------------------------------------------------
-    # Date range.
-    # --------------------------------------------------------
-
-    start_date = pd.Timestamp(
-        START_DATE
-    ).date()
+    return df
 
 
-    end_date = pd.Timestamp(
-        END_DATE
-    ).date()
+# ============================================================
+# PREPARE DAILY DATA
+# ============================================================
 
+def prepare_days(df):
 
-    output = output[
+    days = {}
 
-        (output["date"] >= start_date)
+    for day, day_df in df.groupby(
+        "date",
+        sort=True
+    ):
 
-        &
-
-        (output["date"] <= end_date)
-
-    ]
-
-
-    # --------------------------------------------------------
-    # Sort / deduplicate.
-    # --------------------------------------------------------
-
-    output = (
-
-        output
-
-        .sort_values(
+        day_df = day_df.sort_values(
             "datetime"
-        )
+        ).copy()
 
-        .drop_duplicates(
+        if len(day_df) == 0:
+            continue
 
-            subset=[
+        days[day] = day_df
 
-                "date",
-                "hm"
+    return days
 
-            ],
 
-            keep="last"
+# ============================================================
+# GET 1-MINUTE 15:28 / 15:29 PATTERN
+# ============================================================
 
-        )
+def get_1m_pattern(day_df):
+    """
+    Required:
 
-        .reset_index(
-            drop=True
-        )
+        15:28 and 15:29 opposite trends
 
+        15:28 volume > 15:29 volume
+
+    Returns trend of 15:28.
+
+        1  = bullish
+       -1  = bearish
+        0  = invalid
+    """
+
+    candle_1528 = day_df[
+        day_df["time"] == "15:28"
+    ]
+
+    candle_1529 = day_df[
+        day_df["time"] == "15:29"
+    ]
+
+    if candle_1528.empty:
+        return 0
+
+    if candle_1529.empty:
+        return 0
+
+    c1528 = candle_1528.iloc[0]
+    c1529 = candle_1529.iloc[0]
+
+    trend_1528 = candle_trend(
+        c1528["open"],
+        c1528["close"]
     )
 
+    trend_1529 = candle_trend(
+        c1529["open"],
+        c1529["close"]
+    )
 
-    return output
+    # Dojis are invalid
+    if trend_1528 == 0:
+        return 0
+
+    if trend_1529 == 0:
+        return 0
+
+    # Must be opposite
+    if trend_1528 == trend_1529:
+        return 0
+
+    # 15:28 must have greater volume
+    if c1528["volume"] <= c1529["volume"]:
+        return 0
+
+    return trend_1528
 
 
 # ============================================================
-# CREATE 3-MINUTE CANDLE
+# GET LAST 3-MINUTE CANDLE TREND
 # ============================================================
 
-def make_3m_candle(
-    day,
-    start_minute
+def get_last_3m_trend(day_df):
+    """
+    Last 3-minute candle:
+
+        15:27
+        15:28
+        15:29
+
+    Trend is:
+
+        15:27 OPEN
+             ->
+        15:29 CLOSE
+    """
+
+    required_times = {
+        "15:27",
+        "15:28",
+        "15:29",
+    }
+
+    available_times = set(
+        day_df["time"].values
+    )
+
+    if not required_times.issubset(
+        available_times
+    ):
+        return 0
+
+    candle_1527 = day_df[
+        day_df["time"] == "15:27"
+    ].iloc[0]
+
+    candle_1529 = day_df[
+        day_df["time"] == "15:29"
+    ].iloc[0]
+
+    trend = candle_trend(
+        candle_1527["open"],
+        candle_1529["close"]
+    )
+
+    return trend
+
+
+# ============================================================
+# SIMULATE TRADE
+# ============================================================
+
+def simulate_trade(
+    trade_day_df,
+    direction,
 ):
+    """
+    Entry:
+        09:15 OPEN
 
-    required = [
+    Exit:
+        15:27 OPEN
 
-        start_minute,
+    No target.
+    No stop-loss.
+    """
 
-        start_minute + 1,
-
-        start_minute + 2
-
+    entry_rows = trade_day_df[
+        trade_day_df["time"] == ENTRY_TIME
     ]
 
-
-    rows = day.loc[
-
-        day["hm"].isin(
-            required
-        )
-
+    exit_rows = trade_day_df[
+        trade_day_df["time"] == EXIT_TIME
     ]
 
-
-    if len(rows) != 3:
-
+    if entry_rows.empty:
         return None
 
-
-    if set(
-
-        rows["hm"].astype(int)
-
-    ) != set(required):
-
+    if exit_rows.empty:
         return None
 
+    entry_candle = entry_rows.iloc[0]
 
-    rows = rows.sort_values(
-        "hm"
+    exit_candle = exit_rows.iloc[0]
+
+    entry_price = float(
+        entry_candle["open"]
     )
 
-
-    return {
-
-        "open":
-            float(
-                rows.iloc[0]["open"]
-            ),
-
-        "close":
-            float(
-                rows.iloc[-1]["close"]
-            ),
-
-        "volume":
-            float(
-                rows["volume"].sum()
-            )
-
-    }
-
-
-# ============================================================
-# EVALUATE PREVIOUS-DAY SIGNAL
-# ============================================================
-
-def evaluate_signal(day):
-
-    required_minutes = {
-
-        # 09:15 3-minute candle
-        915,
-        916,
-        917,
-
-        # 09:18 3-minute candle
-        918,
-        919,
-        920,
-
-        # 15:24 3-minute candle
-        1524,
-        1525,
-        1526,
-
-        # 15:27 3-minute candle
-        1527,
-        1528,
-        1529
-
-    }
-
-
-    available = set(
-
-        day["hm"].astype(int)
-
+    exit_price = float(
+        exit_candle["open"]
     )
 
-
-    if not required_minutes.issubset(
-        available
-    ):
-
+    if entry_price <= 0:
         return None
-
-
-    # ========================================================
-    # 3-MINUTE CANDLES
-    # ========================================================
-
-    c1524 = make_3m_candle(
-
-        day,
-
-        1524
-
-    )
-
-
-    c1527 = make_3m_candle(
-
-        day,
-
-        1527
-
-    )
-
-
-    c0915 = make_3m_candle(
-
-        day,
-
-        915
-
-    )
-
-
-    c0918 = make_3m_candle(
-
-        day,
-
-        918
-
-    )
-
-
-    if any(
-
-        x is None
-
-        for x in (
-
-            c1524,
-            c1527,
-            c0915,
-            c0918
-
-        )
-
-    ):
-
-        return None
-
-
-    # ========================================================
-    # TRENDS
-    # ========================================================
-
-    trend_1524 = direction(
-
-        c1524["open"],
-
-        c1524["close"]
-
-    )
-
-
-    trend_1527 = direction(
-
-        c1527["open"],
-
-        c1527["close"]
-
-    )
-
-
-    trend_0915 = direction(
-
-        c0915["open"],
-
-        c0915["close"]
-
-    )
-
-
-    trend_0918 = direction(
-
-        c0918["open"],
-
-        c0918["close"]
-
-    )
-
-
-    # ========================================================
-    # CONDITION 1
-    #
-    # 15:24 AND 15:27 MUST BE SAME TREND
-    #
-    # 15:24 VOLUME > 15:27 VOLUME
-    # ========================================================
-
-    condition_1 = (
-
-        trend_1524 != 0
-
-        and
-
-        trend_1527 != 0
-
-        and
-
-        trend_1524 == trend_1527
-
-        and
-
-        c1524["volume"]
-        >
-        c1527["volume"]
-
-    )
-
-
-    # ========================================================
-    # CONDITION 2
-    #
-    # 09:15 AND 09:18 MUST MATCH 15:24
-    # ========================================================
-
-    condition_2 = (
-
-        trend_1524 != 0
-
-        and
-
-        trend_0915
-        ==
-        trend_1524
-
-        and
-
-        trend_0918
-        ==
-        trend_1524
-
-    )
-
-
-    # ========================================================
-    # 1-MINUTE 15:28 / 15:29
-    # ========================================================
-
-    minute_data = (
-
-        day
-
-        .set_index(
-            "hm",
-            drop=False
-        )
-
-    )
-
-
-    if (
-
-        1528 not in minute_data.index
-
-        or
-
-        1529 not in minute_data.index
-
-    ):
-
-        return None
-
-
-    row_1528 = minute_data.loc[
-        1528
-    ]
-
-
-    row_1529 = minute_data.loc[
-        1529
-    ]
-
-
-    trend_1528 = direction(
-
-        float(
-            row_1528["open"]
-        ),
-
-        float(
-            row_1528["close"]
-        )
-
-    )
-
-
-    trend_1529 = direction(
-
-        float(
-            row_1529["open"]
-        ),
-
-        float(
-            row_1529["close"]
-        )
-
-    )
-
-
-    # ========================================================
-    # CONDITION 3
-    #
-    # 15:28 AND 15:29 OPPOSITE
-    #
-    # 15:28 VOLUME > 15:29
-    #
-    # 15:28 TREND = 3-MIN 15:24 TREND
-    # ========================================================
-
-    condition_3 = (
-
-        trend_1528 != 0
-
-        and
-
-        trend_1529 != 0
-
-        and
-
-        trend_1528 != trend_1529
-
-        and
-
-        float(
-            row_1528["volume"]
-        )
-        >
-        float(
-            row_1529["volume"]
-        )
-
-        and
-
-        trend_1528
-        ==
-        trend_1524
-
-    )
-
-
-    # ========================================================
-    # FINAL SIGNAL
-    # ========================================================
-
-    passed = (
-
-        condition_1
-
-        and
-
-        condition_2
-
-        and
-
-        condition_3
-
-    )
-
-
-    return {
-
-        "passed":
-            passed,
-
-        "direction":
-            direction_name(
-                trend_1524
-            ),
-
-        "condition_1":
-            condition_1,
-
-        "condition_2":
-            condition_2,
-
-        "condition_3":
-            condition_3
-
-    }
-
-
-# ============================================================
-# CHECK TARGET / STOP-LOSS
-# ============================================================
-
-def check_exit(
-
-    trade_day,
-
-    entry_price,
-
-    side
-
-):
 
     # --------------------------------------------------------
-    # We start checking AFTER the 09:15 entry.
-    #
-    # 15:27 is the scheduled exit.
-    #
-    # Therefore target / SL are checked through 15:26.
+    # LONG
     # --------------------------------------------------------
 
-    rows = trade_day.loc[
+    if direction == 1:
 
-        trade_day["hm"].between(
-            915,
-            1526
-        )
+        gross_return = (
+            (exit_price - entry_price)
+            / entry_price
+        ) * 100
 
-    ].sort_values(
-        "hm"
-    )
+        side = "LONG"
 
+    # --------------------------------------------------------
+    # SHORT
+    # --------------------------------------------------------
 
-    if rows.empty:
+    elif direction == -1:
 
-        return {
+        gross_return = (
+            (entry_price - exit_price)
+            / entry_price
+        ) * 100
 
-            "exit_type":
-                "15:27 OPEN",
-
-            "exit_price":
-                None,
-
-            "target_hit":
-                False,
-
-            "stop_loss_hit":
-                False,
-
-            "exit_hm":
-                None
-
-        }
-
-
-    # ========================================================
-    # TARGET / STOP PRICE
-    # ========================================================
-
-    if side == "LONG":
-
-        target_price = (
-
-            entry_price
-
-            *
-
-            (
-                1
-                +
-                TARGET_PCT / 100
-            )
-
-        )
-
-
-        stop_price = (
-
-            entry_price
-
-            *
-
-            (
-                1
-                -
-                STOP_LOSS_PCT / 100
-            )
-
-        )
-
+        side = "SHORT"
 
     else:
+        return None
 
-        target_price = (
-
-            entry_price
-
-            *
-
-            (
-                1
-                -
-                TARGET_PCT / 100
-            )
-
-        )
-
-
-        stop_price = (
-
-            entry_price
-
-            *
-
-            (
-                1
-                +
-                STOP_LOSS_PCT / 100
-            )
-
-        )
-
-
-    # ========================================================
-    # CHECK EVERY 1-MINUTE CANDLE
-    # ========================================================
-
-    for _, row in rows.iterrows():
-
-        high = float(
-            row["high"]
-        )
-
-        low = float(
-            row["low"]
-        )
-
-
-        if side == "LONG":
-
-            target_touched = (
-
-                high
-                >=
-                target_price
-
-            )
-
-
-            stop_touched = (
-
-                low
-                <=
-                stop_price
-
-            )
-
-        else:
-
-            target_touched = (
-
-                low
-                <=
-                target_price
-
-            )
-
-
-            stop_touched = (
-
-                high
-                >=
-                stop_price
-
-            )
-
-
-        # ====================================================
-        # BOTH HIT IN SAME CANDLE
-        #
-        # Conservative assumption:
-        # STOP-LOSS happens first.
-        # ====================================================
-
-        if (
-            target_touched
-            and
-            stop_touched
-        ):
-
-            return {
-
-                "exit_type":
-                    "STOP LOSS",
-
-                "exit_price":
-                    stop_price,
-
-                "target_hit":
-                    False,
-
-                "stop_loss_hit":
-                    True,
-
-                "exit_hm":
-                    int(row["hm"])
-
-            }
-
-
-        if target_touched:
-
-            return {
-
-                "exit_type":
-                    f"{TARGET_PCT:.2f}% TARGET",
-
-                "exit_price":
-                    target_price,
-
-                "target_hit":
-                    True,
-
-                "stop_loss_hit":
-                    False,
-
-                "exit_hm":
-                    int(row["hm"])
-
-            }
-
-
-        if stop_touched:
-
-            return {
-
-                "exit_type":
-                    f"{STOP_LOSS_PCT:.2f}% STOP LOSS",
-
-                "exit_price":
-                    stop_price,
-
-                "target_hit":
-                    False,
-
-                "stop_loss_hit":
-                    True,
-
-                "exit_hm":
-                    int(row["hm"])
-
-            }
-
-
-    # ========================================================
-    # NEITHER TARGET NOR SL
-    # ========================================================
+    win = gross_return > 0
 
     return {
-
-        "exit_type":
-            "15:27 OPEN",
-
-        "exit_price":
-            None,
-
-        "target_hit":
-            False,
-
-        "stop_loss_hit":
-            False,
-
-        "exit_hm":
-            None
-
+        "entry_time": ENTRY_TIME,
+        "exit_time": EXIT_TIME,
+        "entry_price": entry_price,
+        "exit_price": exit_price,
+        "direction": side,
+        "return_pct": gross_return,
+        "win": win,
     }
 
 
@@ -1310,602 +467,293 @@ def check_exit(
 # PROCESS ONE STOCK
 # ============================================================
 
-def process_stock(filepath):
+def process_stock(path):
 
-    symbol = Path(
-        filepath
-    ).stem
+    symbol = os.path.basename(path)
 
+    if symbol.lower().endswith(".parquet"):
+        symbol = symbol[:-8]
 
     try:
 
-        raw = pd.read_parquet(
-            filepath
-        )
+        df = load_parquet(path)
 
-
-        data = normalize_data(
-            raw
-        )
-
-
-        if data.empty:
-
-            return [], {
-
-                "symbol":
-                    symbol,
-
-                "status":
-                    "NO_DATA",
-
-                "signal_days":
-                    0,
-
-                "incomplete_days":
-                    0,
-
-                "condition_1":
-                    0,
-
-                "condition_2":
-                    0,
-
-                "condition_3":
-                    0,
-
-                "final_signals":
-                    0,
-
-                "long_signals":
-                    0,
-
-                "short_signals":
-                    0,
-
-                "executed_trades":
-                    0,
-
-                "target_hits":
-                    0,
-
-                "stop_loss_hits":
-                    0
-
+        if df.empty:
+            return {
+                "symbol": symbol,
+                "trades": [],
+                "error": "No data",
             }
 
+        days = prepare_days(df)
 
-        # ----------------------------------------------------
-        # Group data by date.
-        # ----------------------------------------------------
-
-        days = {
-
-            date:
-                group.reset_index(
-                    drop=True
-                )
-
-            for date, group
-
-            in data.groupby(
-                "date",
-                sort=True
-            )
-
-        }
-
-
-        dates = sorted(
-            days.keys()
-        )
-
+        dates = sorted(days.keys())
 
         trades = []
 
-
         diagnostics = {
-
-            "symbol":
-                symbol,
-
-            "status":
-                "OK",
-
-            "signal_days":
-                0,
-
-            "incomplete_days":
-                0,
-
-            "condition_1":
-                0,
-
-            "condition_2":
-                0,
-
-            "condition_3":
-                0,
-
-            "final_signals":
-                0,
-
-            "long_signals":
-                0,
-
-            "short_signals":
-                0,
-
-            "executed_trades":
-                0,
-
-            "target_hits":
-                0,
-
-            "stop_loss_hits":
-                0
-
+            "days_checked": 0,
+            "incomplete_days": 0,
+            "day_minus_2_pattern": 0,
+            "day_minus_1_pattern": 0,
+            "same_trend": 0,
+            "3m_confirmation": 0,
+            "final_signals": 0,
         }
 
+        # ----------------------------------------------------
+        # Need:
+        #
+        # i-2 = Day -2
+        # i-1 = previous day
+        # i   = trading day
+        #
+        # ----------------------------------------------------
 
-        # ====================================================
-        # SIGNAL LOOP
-        # ====================================================
+        for i in range(2, len(dates)):
 
-        for i in range(
-            len(dates) - 1
-        ):
+            day_minus_2_date = dates[i - 2]
+            previous_date = dates[i - 1]
+            trade_date = dates[i]
 
-            signal_date = dates[i]
+            day_minus_2 = days[
+                day_minus_2_date
+            ]
 
-            trade_date = dates[i + 1]
+            previous_day = days[
+                previous_date
+            ]
 
+            trade_day = days[
+                trade_date
+            ]
 
-            diagnostics[
-                "signal_days"
-            ] += 1
+            diagnostics["days_checked"] += 1
 
+            # ------------------------------------------------
+            # Required candles
+            # ------------------------------------------------
 
-            signal = evaluate_signal(
+            required_minus_2 = {
+                "15:28",
+                "15:29",
+            }
 
-                days[signal_date]
+            required_previous = {
+                "15:27",
+                "15:28",
+                "15:29",
+            }
 
+            times_minus_2 = set(
+                day_minus_2["time"].values
             )
 
+            times_previous = set(
+                previous_day["time"].values
+            )
 
-            if signal is None:
+            times_trade = set(
+                trade_day["time"].values
+            )
 
+            if not required_minus_2.issubset(
+                times_minus_2
+            ):
                 diagnostics[
                     "incomplete_days"
                 ] += 1
-
                 continue
 
-
-            # ------------------------------------------------
-            # Condition diagnostics.
-            # ------------------------------------------------
-
-            for number in range(
-                1,
-                4
+            if not required_previous.issubset(
+                times_previous
             ):
-
-                if signal[
-                    f"condition_{number}"
-                ]:
-
-                    diagnostics[
-                        f"condition_{number}"
-                    ] += 1
-
-
-            if not signal["passed"]:
-
+                diagnostics[
+                    "incomplete_days"
+                ] += 1
                 continue
 
+            if ENTRY_TIME not in times_trade:
+                diagnostics[
+                    "incomplete_days"
+                ] += 1
+                continue
+
+            if EXIT_TIME not in times_trade:
+                diagnostics[
+                    "incomplete_days"
+                ] += 1
+                continue
+
+            # ------------------------------------------------
+            # DAY -2
+            # ------------------------------------------------
+
+            trend_minus_2 = get_1m_pattern(
+                day_minus_2
+            )
+
+            if trend_minus_2 == 0:
+                continue
+
+            diagnostics[
+                "day_minus_2_pattern"
+            ] += 1
+
+            # ------------------------------------------------
+            # DAY -1
+            # ------------------------------------------------
+
+            trend_previous = get_1m_pattern(
+                previous_day
+            )
+
+            if trend_previous == 0:
+                continue
+
+            diagnostics[
+                "day_minus_1_pattern"
+            ] += 1
+
+            # ------------------------------------------------
+            # Day -2 and Day -1 must have
+            # SAME 15:28 trend
+            # ------------------------------------------------
+
+            if trend_previous != trend_minus_2:
+                continue
+
+            diagnostics[
+                "same_trend"
+            ] += 1
+
+            # ------------------------------------------------
+            # Previous day 3-minute last candle
+            # must have SAME trend as its 1-minute 15:28
+            # ------------------------------------------------
+
+            trend_3m = get_last_3m_trend(
+                previous_day
+            )
+
+            if trend_3m == 0:
+                continue
+
+            if trend_3m != trend_previous:
+                continue
+
+            diagnostics[
+                "3m_confirmation"
+            ] += 1
+
+            # ------------------------------------------------
+            # FINAL SIGNAL
+            # ------------------------------------------------
+
+            if TRADE_SIDE == "LONG" and trend_previous != 1:
+                continue
+
+            if TRADE_SIDE == "SHORT" and trend_previous != -1:
+                continue
 
             diagnostics[
                 "final_signals"
             ] += 1
 
-
-            side = signal[
-                "direction"
-            ]
-
-
-            if side == "LONG":
-
-                diagnostics[
-                    "long_signals"
-                ] += 1
-
-
-            elif side == "SHORT":
-
-                diagnostics[
-                    "short_signals"
-                ] += 1
-
-
             # ------------------------------------------------
-            # Side filter.
+            # NEXT DAY 09:15 TRADE
             # ------------------------------------------------
 
-            if (
+            trade = simulate_trade(
+                trade_day,
+                trend_previous
+            )
 
-                TRADE_SIDE != "BOTH"
-
-                and
-
-                side != TRADE_SIDE
-
-            ):
-
+            if trade is None:
                 continue
 
-
-            # =================================================
-            # NEXT DAY
-            # =================================================
-
-            next_day = days[
+            trade["symbol"] = symbol
+            trade["signal_day_minus_2"] = str(
+                day_minus_2_date
+            )
+            trade["signal_previous_day"] = str(
+                previous_date
+            )
+            trade["trade_date"] = str(
                 trade_date
-            ]
-
-
-            entry_rows = next_day.loc[
-
-                next_day["hm"] == 915
-
-            ]
-
-
-            exit_rows = next_day.loc[
-
-                next_day["hm"] == 1527
-
-            ]
-
-
-            if (
-
-                entry_rows.empty
-
-                or
-
-                exit_rows.empty
-
-            ):
-
-                continue
-
-
-            entry_price = float(
-
-                entry_rows.iloc[0][
-                    "open"
-                ]
-
             )
 
-
-            scheduled_exit_price = float(
-
-                exit_rows.iloc[0][
-                    "open"
-                ]
-
+            trade[
+                "day_minus_2_15_28_trend"
+            ] = (
+                "LONG"
+                if trend_minus_2 == 1
+                else "SHORT"
             )
 
-
-            if (
-
-                not math.isfinite(
-                    entry_price
-                )
-
-                or
-
-                not math.isfinite(
-                    scheduled_exit_price
-                )
-
-                or
-
-                entry_price <= 0
-
-            ):
-
-                continue
-
-
-            # =================================================
-            # EXIT LOGIC
-            # =================================================
-
-            exit_result = check_exit(
-
-                next_day,
-
-                entry_price,
-
-                side
-
+            trade[
+                "previous_15_28_trend"
+            ] = (
+                "LONG"
+                if trend_previous == 1
+                else "SHORT"
             )
 
-
-            if exit_result[
-                "exit_price"
-            ] is None:
-
-                exit_price = (
-                    scheduled_exit_price
-                )
-
-            else:
-
-                exit_price = (
-                    exit_result[
-                        "exit_price"
-                    ]
-                )
-
-
-            exit_type = (
-                exit_result[
-                    "exit_type"
-                ]
+            trade[
+                "previous_3m_trend"
+            ] = (
+                "LONG"
+                if trend_3m == 1
+                else "SHORT"
             )
 
-
-            if exit_result[
-                "target_hit"
-            ]:
-
-                diagnostics[
-                    "target_hits"
-                ] += 1
-
-
-            if exit_result[
-                "stop_loss_hit"
-            ]:
-
-                diagnostics[
-                    "stop_loss_hits"
-                ] += 1
-
-
-            # =================================================
-            # CALCULATE GROSS RETURN
-            # =================================================
-
-            if side == "LONG":
-
-                gross_return = (
-
-                    (
-                        exit_price
-                        -
-                        entry_price
-                    )
-
-                    /
-
-                    entry_price
-
-                    *
-
-                    100
-
-                )
-
-            else:
-
-                gross_return = (
-
-                    (
-                        entry_price
-                        -
-                        exit_price
-                    )
-
-                    /
-
-                    entry_price
-
-                    *
-
-                    100
-
-                )
-
-
-            # =================================================
-            # NET RETURN
-            # =================================================
-
-            net_return = (
-
-                gross_return
-                -
-                ROUND_TRIP_COST_PCT
-
-            )
-
-
-            # =================================================
-            # STORE TRADE
-            # =================================================
-
-            trades.append({
-
-                "symbol":
-                    symbol,
-
-                "signal_date":
-                    str(
-                        signal_date
-                    ),
-
-                "trade_date":
-                    str(
-                        trade_date
-                    ),
-
-                "direction":
-                    side,
-
-                "entry_0915_open":
-                    entry_price,
-
-                "target_price":
-
-                    (
-
-                        entry_price
-                        *
-                        (
-                            1
-                            +
-                            TARGET_PCT / 100
-                        )
-
-                        if side == "LONG"
-
-                        else
-
-                        entry_price
-                        *
-                        (
-                            1
-                            -
-                            TARGET_PCT / 100
-                        )
-
-                    ),
-
-                "stop_loss_price":
-
-                    (
-
-                        entry_price
-                        *
-                        (
-                            1
-                            -
-                            STOP_LOSS_PCT / 100
-                        )
-
-                        if side == "LONG"
-
-                        else
-
-                        entry_price
-                        *
-                        (
-                            1
-                            +
-                            STOP_LOSS_PCT / 100
-                        )
-
-                    ),
-
-                "exit_type":
-                    exit_type,
-
-                "exit_time":
-                    (
-                        exit_result[
-                            "exit_hm"
-                        ]
-
-                        if exit_result[
-                            "exit_hm"
-                        ] is not None
-
-                        else 1527
-                    ),
-
-                "exit_price":
-                    exit_price,
-
-                "gross_return_pct":
-                    gross_return,
-
-                "net_return_pct":
-                    net_return,
-
-                "target_hit":
-                    exit_result[
-                        "target_hit"
-                    ],
-
-                "stop_loss_hit":
-                    exit_result[
-                        "stop_loss_hit"
-                    ]
-
-            })
-
-
-            diagnostics[
-                "executed_trades"
-            ] += 1
-
-
-        return trades, diagnostics
-
-
-    except Exception as error:
-
-        return [], {
-
-            "symbol":
-                symbol,
-
-            "status":
-                "ERROR",
-
-            "signal_days":
-                0,
-
-            "incomplete_days":
-                0,
-
-            "condition_1":
-                0,
-
-            "condition_2":
-                0,
-
-            "condition_3":
-                0,
-
-            "final_signals":
-                0,
-
-            "long_signals":
-                0,
-
-            "short_signals":
-                0,
-
-            "executed_trades":
-                0,
-
-            "target_hits":
-                0,
-
-            "stop_loss_hits":
-                0,
-
-            "error":
-                repr(error)
-
+            trades.append(trade)
+
+        return {
+            "symbol": symbol,
+            "trades": trades,
+            "diagnostics": diagnostics,
+            "error": None,
         }
+
+    except Exception as e:
+
+        return {
+            "symbol": symbol,
+            "trades": [],
+            "diagnostics": {},
+            "error": str(e),
+        }
+
+
+# ============================================================
+# FIND ALL PARQUET FILES
+# ============================================================
+
+def find_parquet_files():
+
+    files = []
+
+    for directory in DATA_DIRS:
+
+        if not os.path.exists(directory):
+            continue
+
+        found = glob.glob(
+            os.path.join(
+                directory,
+                "**",
+                "*.parquet"
+            ),
+            recursive=True
+        )
+
+        files.extend(found)
+
+    # Remove duplicates
+    files = sorted(set(files))
+
+    return files
 
 
 # ============================================================
@@ -1913,142 +761,73 @@ def process_stock(filepath):
 # ============================================================
 
 def calculate_statistics(
-    returns
+    trades_df
 ):
 
-    if not returns:
+    if trades_df.empty:
+        return {}
 
-        return {
+    returns = trades_df[
+        "return_pct"
+    ].astype(float)
 
-            "trades":
-                0,
+    wins = returns > 0
 
-            "wins":
-                0,
+    losses = returns < 0
 
-            "losses":
-                0,
-
-            "win_rate_pct":
-                0.0,
-
-            "average_return_pct":
-                0.0,
-
-            "total_return_pct":
-                0.0,
-
-            "profit_factor":
-                0.0,
-
-            "best_trade_pct":
-                0.0,
-
-            "worst_trade_pct":
-                0.0
-
-        }
-
-
-    series = pd.Series(
-
-        returns,
-
-        dtype=float
-
+    total_trades = len(
+        trades_df
     )
 
-
-    wins = (
-        series > 0
+    winning_trades = int(
+        wins.sum()
     )
 
-
-    losses = (
-        series < 0
+    losing_trades = int(
+        losses.sum()
     )
 
-
-    gross_profit = float(
-
-        series[wins].sum()
-
+    win_rate = (
+        winning_trades
+        / total_trades
+        * 100
     )
 
+    average_return = returns.mean()
 
-    gross_loss = float(
+    total_return = returns.sum()
 
-        abs(
-            series[losses].sum()
-        )
+    gross_profit = returns[
+        returns > 0
+    ].sum()
 
+    gross_loss = abs(
+        returns[
+            returns < 0
+        ].sum()
     )
-
 
     if gross_loss > 0:
-
         profit_factor = (
-
             gross_profit
-            /
-            gross_loss
-
+            / gross_loss
         )
-
     else:
-
-        profit_factor = float(
-            "inf"
-        )
-
+        profit_factor = np.inf
 
     return {
-
-        "trades":
-            int(
-                len(series)
-            ),
-
-        "wins":
-            int(
-                wins.sum()
-            ),
-
-        "losses":
-            int(
-                losses.sum()
-            ),
-
-        "win_rate_pct":
-            float(
-                wins.mean()
-                *
-                100
-            ),
-
-        "average_return_pct":
-            float(
-                series.mean()
-            ),
-
-        "total_return_pct":
-            float(
-                series.sum()
-            ),
-
-        "profit_factor":
-            profit_factor,
-
-        "best_trade_pct":
-            float(
-                series.max()
-            ),
-
-        "worst_trade_pct":
-            float(
-                series.min()
-            )
-
+        "trades": total_trades,
+        "wins": winning_trades,
+        "losses": losing_trades,
+        "win_rate": win_rate,
+        "average_return": average_return,
+        "total_return": total_return,
+        "gross_profit": gross_profit,
+        "gross_loss": gross_loss,
+        "profit_factor": profit_factor,
+        "best_trade": returns.max(),
+        "worst_trade": returns.min(),
+        "median_return": returns.median(),
     }
 
 
@@ -2060,972 +839,695 @@ def main():
 
     start_time = time.time()
 
+    os.makedirs(
+        RESULTS_DIR,
+        exist_ok=True
+    )
+
+    print("=" * 70)
+    print("TWO-DAY EOD MOMENTUM BACKTEST")
+    print("=" * 70)
 
     print()
-    print("=" * 90)
-    print("NSE SCANNER BACKTEST")
-    print("2% TARGET / 1% STOP-LOSS")
-    print("=" * 90)
-
+    print("STRATEGY")
+    print("-" * 70)
 
     print(
-        f"Start date       : "
-        f"{START_DATE}"
+        "Day -2: 1m 15:28 & 15:29 opposite"
     )
-
 
     print(
-        f"End date         : "
-        f"{END_DATE}"
+        "Day -2: 15:28 volume > 15:29 volume"
     )
-
 
     print(
-        f"Trade side       : "
-        f"{TRADE_SIDE}"
+        "Day -1: 1m 15:28 & 15:29 opposite"
     )
-
 
     print(
-        f"Target           : "
-        f"{TARGET_PCT}%"
+        "Day -1: 15:28 volume > 15:29 volume"
     )
-
 
     print(
-        f"Stop-loss        : "
-        f"{STOP_LOSS_PCT}%"
+        "Day -1: 15:28 trend = Day -2 15:28 trend"
     )
-
 
     print(
-        f"Round-trip cost  : "
-        f"{ROUND_TRIP_COST_PCT}%"
+        "Day -1: 3m 15:27-15:29 trend = "
+        "Day -1 1m 15:28 trend"
     )
-
-
-    print(
-        f"Workers          : "
-        f"{MAX_WORKERS}"
-    )
-
 
     print()
-    print(
-        "Entry            : "
-        "NEXT DAY 09:15 OPEN"
-    )
+    print("TRADE")
+    print("-" * 70)
 
-
-    print(
-        "Exit             : "
-        "2% TARGET / 1% SL / 15:27 OPEN"
-    )
-
-
-    print()
-    print(
-        "If target + SL are both touched "
-        "in the same minute:"
-    )
-
-
-    print(
-        "CONSERVATIVE RULE → STOP-LOSS FIRST"
-    )
-
-
-    print("=" * 90)
+    print("Entry : Next trading day 09:15 OPEN")
+    print("Exit  : Same day 15:27 OPEN")
+    print("Target: NONE")
+    print("SL    : NONE")
     print()
 
+    print(
+        f"Trade side: {TRADE_SIDE}"
+    )
 
-    # ========================================================
-    # FILES
-    # ========================================================
+    print(
+        f"CPU workers: {MAX_WORKERS}"
+    )
+
+    # --------------------------------------------------------
+    # Find data
+    # --------------------------------------------------------
 
     files = find_parquet_files()
 
-
+    print()
     print(
-        f"Parquet files found: "
-        f"{len(files)}"
+        f"Parquet files found: {len(files):,}"
     )
-
 
     if not files:
 
-        raise RuntimeError(
-
-            "No historical Parquet files found."
-
+        print(
+            "ERROR: No Parquet files found."
         )
 
+        return
+
+    # --------------------------------------------------------
+    # Process stocks in parallel
+    # --------------------------------------------------------
 
     all_trades = []
 
-    all_diagnostics = []
+    total_diagnostics = {
+        "days_checked": 0,
+        "incomplete_days": 0,
+        "day_minus_2_pattern": 0,
+        "day_minus_1_pattern": 0,
+        "same_trend": 0,
+        "3m_confirmation": 0,
+        "final_signals": 0,
+    }
 
+    completed = 0
 
-    # ========================================================
-    # PARALLEL PROCESSING
-    # ========================================================
+    print()
+    print("Starting parallel backtest...")
+    print()
 
     with ProcessPoolExecutor(
-
         max_workers=MAX_WORKERS
-
     ) as executor:
 
-
         futures = {
-
             executor.submit(
-
                 process_stock,
-
-                filepath
-
-            ):
-                filepath
-
-            for filepath in files
-
+                path
+            ): path
+            for path in files
         }
-
-
-        completed = 0
-
 
         for future in as_completed(
             futures
         ):
 
+            result = future.result()
+
             completed += 1
 
+            # Trades
+            if result.get("trades"):
 
-            filepath = futures[
-                future
-            ]
-
-
-            try:
-
-                trades, diagnostic = (
-                    future.result()
+                all_trades.extend(
+                    result["trades"]
                 )
 
-
-            except Exception as error:
-
-                trades = []
-
-
-                diagnostic = {
-
-                    "symbol":
-                        Path(
-                            filepath
-                        ).stem,
-
-                    "status":
-                        "ERROR",
-
-                    "error":
-                        repr(error)
-
-                }
-
-
-            all_trades.extend(
-                trades
+            # Diagnostics
+            diagnostics = result.get(
+                "diagnostics",
+                {}
             )
 
+            for key in total_diagnostics:
 
-            all_diagnostics.append(
-                diagnostic
-            )
+                total_diagnostics[key] += (
+                    diagnostics.get(
+                        key,
+                        0
+                    )
+                )
 
+            if completed % 25 == 0:
 
-            print(
+                print(
+                    f"Processed "
+                    f"{completed:,}/"
+                    f"{len(files):,} stocks | "
+                    f"Trades: "
+                    f"{len(all_trades):,}"
+                )
 
-                f"[{completed:>4}/"
-                f"{len(files):>4}] "
-
-                f"{diagnostic.get('symbol', ''):<18} "
-
-                f"{diagnostic.get('status', ''):<10} "
-
-                f"signals="
-                f"{diagnostic.get('final_signals', 0):>5} "
-
-                f"trades="
-                f"{len(trades):>5}"
-
-            )
-
-
-    # ========================================================
-    # DIAGNOSTICS FILE
-    # ========================================================
-
-    diagnostics_df = pd.DataFrame(
-        all_diagnostics
-    )
-
-
-    diagnostics_df.to_csv(
-
-        RESULTS_DIR
-        /
-        "diagnostics_by_stock.csv",
-
-        index=False
-
-    )
-
-
-    # ========================================================
-    # TRADES DATAFRAME
-    # ========================================================
+    # --------------------------------------------------------
+    # Create dataframe
+    # --------------------------------------------------------
 
     trades_df = pd.DataFrame(
         all_trades
     )
 
+    # --------------------------------------------------------
+    # No trades
+    # --------------------------------------------------------
 
     if trades_df.empty:
 
-        trades_df = pd.DataFrame(
-
-            columns=[
-
-                "symbol",
-
-                "signal_date",
-
-                "trade_date",
-
-                "direction",
-
-                "entry_0915_open",
-
-                "target_price",
-
-                "stop_loss_price",
-
-                "exit_type",
-
-                "exit_time",
-
-                "exit_price",
-
-                "gross_return_pct",
-
-                "net_return_pct",
-
-                "target_hit",
-
-                "stop_loss_hit"
-
-            ]
-
+        print()
+        print(
+            "No trades generated."
         )
 
-
-    else:
-
-        trades_df = (
-
-            trades_df
-
-            .sort_values(
-
-                [
-
-                    "trade_date",
-
-                    "symbol"
-
-                ]
-
-            )
-
-            .reset_index(
-                drop=True
-            )
-
+        print()
+        print(
+            "Diagnostics:"
         )
 
+        for key, value in total_diagnostics.items():
+
+            print(
+                f"{key}: {value:,}"
+            )
+
+        return
+
+    # --------------------------------------------------------
+    # Sort
+    # --------------------------------------------------------
+
+    trades_df = trades_df.sort_values(
+        [
+            "trade_date",
+            "symbol"
+        ]
+    ).reset_index(
+        drop=True
+    )
+
+    # --------------------------------------------------------
+    # Save all trades
+    # --------------------------------------------------------
+
+    trades_path = os.path.join(
+        RESULTS_DIR,
+        "all_trades.csv"
+    )
 
     trades_df.to_csv(
-
-        RESULTS_DIR
-        /
-        "all_trades.csv",
-
+        trades_path,
         index=False
-
     )
 
+    # --------------------------------------------------------
+    # Overall statistics
+    # --------------------------------------------------------
 
-    # ========================================================
-    # OVERALL STATISTICS
-    # ========================================================
-
-    returns = (
-
-        trades_df[
-            "net_return_pct"
-        ].tolist()
-
-        if not trades_df.empty
-
-        else []
-
-    )
-
-
-    overall = calculate_statistics(
-        returns
-    )
-
-
-    # ========================================================
-    # EXIT TYPE STATISTICS
-    # ========================================================
-
-    exit_rows = []
-
-
-    for exit_type, group in (
-
-        trades_df.groupby(
-            "exit_type"
-        )
-
-        if not trades_df.empty
-
-        else []
-
-    ):
-
-        exit_returns = group[
-            "net_return_pct"
-        ].tolist()
-
-
-        stats = calculate_statistics(
-            exit_returns
-        )
-
-
-        exit_rows.append({
-
-            "exit_type":
-                exit_type,
-
-            **stats
-
-        })
-
-
-    pd.DataFrame(
-        exit_rows
-    ).to_csv(
-
-        RESULTS_DIR
-        /
-        "exit_type_statistics.csv",
-
-        index=False
-
-    )
-
-
-    # ========================================================
-    # TARGET / STOP STATISTICS
-    # ========================================================
-
-    total_trades = len(
+    stats = calculate_statistics(
         trades_df
     )
 
+    # --------------------------------------------------------
+    # Print results
+    # --------------------------------------------------------
 
-    target_hits = int(
+    print()
+    print("=" * 70)
+    print("BACKTEST RESULTS")
+    print("=" * 70)
 
-        trades_df[
-            "target_hit"
-        ].sum()
-
-        if not trades_df.empty
-
-        else 0
-
+    print(
+        f"Total trades       : "
+        f"{stats['trades']:,}"
     )
 
-
-    stop_losses = int(
-
-        trades_df[
-            "stop_loss_hit"
-        ].sum()
-
-        if not trades_df.empty
-
-        else 0
-
+    print(
+        f"Wins               : "
+        f"{stats['wins']:,}"
     )
 
-
-    scheduled_exits = (
-
-        total_trades
-        -
-        target_hits
-        -
-        stop_losses
-
+    print(
+        f"Losses             : "
+        f"{stats['losses']:,}"
     )
 
-
-    target_rate = (
-
-        target_hits
-        /
-        total_trades
-        *
-        100
-
-        if total_trades > 0
-
-        else 0
-
+    print(
+        f"Win rate           : "
+        f"{stats['win_rate']:.2f}%"
     )
 
-
-    stop_rate = (
-
-        stop_losses
-        /
-        total_trades
-        *
-        100
-
-        if total_trades > 0
-
-        else 0
-
+    print(
+        f"Average return     : "
+        f"{stats['average_return']:.4f}%"
     )
 
-
-    scheduled_rate = (
-
-        scheduled_exits
-        /
-        total_trades
-        *
-        100
-
-        if total_trades > 0
-
-        else 0
-
+    print(
+        f"Total return       : "
+        f"{stats['total_return']:.4f}%"
     )
 
-
-    pd.DataFrame([{
-
-        "total_trades":
-            total_trades,
-
-        "target_hits":
-            target_hits,
-
-        "target_hit_rate_pct":
-            target_rate,
-
-        "stop_loss_hits":
-            stop_losses,
-
-        "stop_loss_rate_pct":
-            stop_rate,
-
-        "15:27_exits":
-            scheduled_exits,
-
-        "15:27_exit_rate_pct":
-            scheduled_rate
-
-    }]).to_csv(
-
-        RESULTS_DIR
-        /
-        "risk_management_statistics.csv",
-
-        index=False
-
+    print(
+        f"Profit factor      : "
+        f"{stats['profit_factor']:.4f}"
     )
 
+    print(
+        f"Best trade         : "
+        f"{stats['best_trade']:.4f}%"
+    )
 
-    # ========================================================
-    # LONG / SHORT
-    # ========================================================
+    print(
+        f"Worst trade        : "
+        f"{stats['worst_trade']:.4f}%"
+    )
 
-    side_rows = []
+    print(
+        f"Median return      : "
+        f"{stats['median_return']:.4f}%"
+    )
 
+    # --------------------------------------------------------
+    # Long / Short statistics
+    # --------------------------------------------------------
 
-    for side in (
+    print()
+    print("=" * 70)
+    print("LONG / SHORT BREAKDOWN")
+    print("=" * 70)
 
+    for direction in [
         "LONG",
         "SHORT"
-
-    ):
+    ]:
 
         subset = trades_df[
-
-            trades_df[
-                "direction"
-            ]
-            ==
-            side
-
+            trades_df["direction"]
+            == direction
         ]
 
+        if subset.empty:
+            continue
 
-        side_returns = (
-
-            subset[
-                "net_return_pct"
-            ].tolist()
-
-            if not subset.empty
-
-            else []
-
+        direction_stats = calculate_statistics(
+            subset
         )
 
+        print()
+        print(direction)
 
-        stats = calculate_statistics(
-            side_returns
+        print(
+            f"Trades       : "
+            f"{direction_stats['trades']:,}"
         )
 
-
-        side_targets = int(
-
-            subset[
-                "target_hit"
-            ].sum()
-
-            if not subset.empty
-
-            else 0
-
+        print(
+            f"Wins         : "
+            f"{direction_stats['wins']:,}"
         )
 
-
-        side_stops = int(
-
-            subset[
-                "stop_loss_hit"
-            ].sum()
-
-            if not subset.empty
-
-            else 0
-
+        print(
+            f"Losses       : "
+            f"{direction_stats['losses']:,}"
         )
 
+        print(
+            f"Win rate     : "
+            f"{direction_stats['win_rate']:.2f}%"
+        )
 
-        side_rows.append({
+        print(
+            f"Avg return   : "
+            f"{direction_stats['average_return']:.4f}%"
+        )
 
-            "direction":
-                side,
+        print(
+            f"Total return : "
+            f"{direction_stats['total_return']:.4f}%"
+        )
 
-            **stats,
+        print(
+            f"Profit factor: "
+            f"{direction_stats['profit_factor']:.4f}"
+        )
 
-            "target_hits":
-                side_targets,
+    # --------------------------------------------------------
+    # Yearly results
+    # --------------------------------------------------------
 
-            "stop_loss_hits":
-                side_stops
+    trades_df["year"] = pd.to_datetime(
+        trades_df["trade_date"]
+    ).dt.year
 
+    yearly_rows = []
+
+    print()
+    print("=" * 70)
+    print("YEARLY RESULTS")
+    print("=" * 70)
+
+    for year, group in trades_df.groupby(
+        "year"
+    ):
+
+        year_stats = calculate_statistics(
+            group
+        )
+
+        yearly_rows.append({
+            "year": year,
+            **year_stats
         })
 
+        print()
+        print(year)
 
-    pd.DataFrame(
-        side_rows
-    ).to_csv(
+        print(
+            f"Trades       : "
+            f"{year_stats['trades']:,}"
+        )
 
-        RESULTS_DIR
-        /
-        "long_short_statistics.csv",
+        print(
+            f"Win rate     : "
+            f"{year_stats['win_rate']:.2f}%"
+        )
 
+        print(
+            f"Avg return   : "
+            f"{year_stats['average_return']:.4f}%"
+        )
+
+        print(
+            f"Total return : "
+            f"{year_stats['total_return']:.4f}%"
+        )
+
+        print(
+            f"Profit factor: "
+            f"{year_stats['profit_factor']:.4f}"
+        )
+
+    yearly_df = pd.DataFrame(
+        yearly_rows
+    )
+
+    yearly_df.to_csv(
+        os.path.join(
+            RESULTS_DIR,
+            "yearly_results.csv"
+        ),
         index=False
-
     )
 
-
-    # ========================================================
-    # YEARLY STATISTICS
-    # ========================================================
-
-    if not trades_df.empty:
-
-        trades_df["year"] = (
-
-            pd.to_datetime(
-
-                trades_df[
-                    "trade_date"
-                ]
-
-            )
-
-            .dt.year
-
-        )
-
-
-        yearly_rows = []
-
-
-        for year, group in (
-
-            trades_df.groupby(
-                "year"
-            )
-
-        ):
-
-            year_returns = group[
-
-                "net_return_pct"
-
-            ].tolist()
-
-
-            yearly_rows.append({
-
-                "year":
-                    int(year),
-
-                **calculate_statistics(
-                    year_returns
-                ),
-
-                "target_hits":
-                    int(
-                        group[
-                            "target_hit"
-                        ].sum()
-                    ),
-
-                "stop_loss_hits":
-                    int(
-                        group[
-                            "stop_loss_hit"
-                        ].sum()
-                    )
-
-            })
-
-
-        pd.DataFrame(
-
-            yearly_rows
-
-        ).to_csv(
-
-            RESULTS_DIR
-            /
-            "yearly_statistics.csv",
-
-            index=False
-
-        )
-
-
-    # ========================================================
-    # WORST TRADES
-    # ========================================================
-
-    if not trades_df.empty:
-
-        worst_trades = (
-
-            trades_df
-
-            .sort_values(
-
-                "net_return_pct",
-
-                ascending=True
-
-            )
-
-            .head(50)
-
-        )
-
-
-        worst_trades.to_csv(
-
-            RESULTS_DIR
-            /
-            "worst_50_trades.csv",
-
-            index=False
-
-        )
-
-
-    # ========================================================
-    # BEST TRADES
-    # ========================================================
-
-    if not trades_df.empty:
-
-        best_trades = (
-
-            trades_df
-
-            .sort_values(
-
-                "net_return_pct",
-
-                ascending=False
-
-            )
-
-            .head(50)
-
-        )
-
-
-        best_trades.to_csv(
-
-            RESULTS_DIR
-            /
-            "best_50_trades.csv",
-
-            index=False
-
-        )
-
-
-    # ========================================================
-    # PRINT FINAL RESULT
-    # ========================================================
+    # --------------------------------------------------------
+    # Signal diagnostics
+    # --------------------------------------------------------
 
     print()
-    print("=" * 90)
-    print("FINAL RESULT")
-    print("=" * 90)
-
-
-    print(
-
-        f"Trades          : "
-        f"{overall['trades']}"
-
-    )
-
-
-    print(
-
-        f"Wins            : "
-        f"{overall['wins']}"
-
-    )
-
-
-    print(
-
-        f"Losses          : "
-        f"{overall['losses']}"
-
-    )
-
-
-    print(
-
-        f"Win rate        : "
-        f"{overall['win_rate_pct']:.2f}%"
-
-    )
-
-
-    print(
-
-        f"Average return  : "
-        f"{overall['average_return_pct']:.4f}%"
-
-    )
-
-
-    print(
-
-        f"Total return    : "
-        f"{overall['total_return_pct']:.4f}%"
-
-    )
-
-
-    print(
-
-        f"Profit factor   : "
-        f"{overall['profit_factor']}"
-
-    )
-
-
-    print(
-
-        f"Best trade      : "
-        f"{overall['best_trade_pct']:.4f}%"
-
-    )
-
-
-    print(
-
-        f"Worst trade     : "
-        f"{overall['worst_trade_pct']:.4f}%"
-
-    )
-
-
-    # ========================================================
-    # RISK MANAGEMENT RESULTS
-    # ========================================================
-
-    print()
-    print("=" * 90)
-    print("TARGET / STOP-LOSS")
-    print("=" * 90)
-
-
-    print(
-
-        f"2% target hits  : "
-        f"{target_hits}"
-
-    )
-
-
-    print(
-
-        f"Target hit rate : "
-        f"{target_rate:.2f}%"
-
-    )
-
-
-    print(
-
-        f"1% SL hits      : "
-        f"{stop_losses}"
-
-    )
-
-
-    print(
-
-        f"Stop-loss rate  : "
-        f"{stop_rate:.2f}%"
-
-    )
-
-
-    print(
-
-        f"15:27 exits     : "
-        f"{scheduled_exits}"
-
-    )
-
-
-    print(
-
-        f"15:27 exit rate : "
-        f"{scheduled_rate:.2f}%"
-
-    )
-
-
-    # ========================================================
-    # DIAGNOSTICS
-    # ========================================================
-
-    print()
-    print("=" * 90)
+    print("=" * 70)
     print("SIGNAL DIAGNOSTICS")
-    print("=" * 90)
+    print("=" * 70)
 
-
-    if not diagnostics_df.empty:
-
-        print(
-
-            f"Signal days checked : "
-            f"{diagnostics_df['signal_days'].fillna(0).sum():,.0f}"
-
-        )
-
+    for key, value in total_diagnostics.items():
 
         print(
-
-            f"Incomplete days     : "
-            f"{diagnostics_df['incomplete_days'].fillna(0).sum():,.0f}"
-
+            f"{key:<25}: "
+            f"{value:,}"
         )
 
+    # --------------------------------------------------------
+    # Top / Worst trades
+    # --------------------------------------------------------
 
-        print(
+    print()
+    print("=" * 70)
+    print("BEST 20 TRADES")
+    print("=" * 70)
 
-            f"Condition 1 passed  : "
-            f"{diagnostics_df['condition_1'].fillna(0).sum():,.0f}"
+    best = trades_df.nlargest(
+        20,
+        "return_pct"
+    )
 
+    print(
+        best[
+            [
+                "symbol",
+                "trade_date",
+                "direction",
+                "entry_price",
+                "exit_price",
+                "return_pct",
+            ]
+        ].to_string(index=False)
+    )
+
+    print()
+    print("=" * 70)
+    print("WORST 20 TRADES")
+    print("=" * 70)
+
+    worst = trades_df.nsmallest(
+        20,
+        "return_pct"
+    )
+
+    print(
+        worst[
+            [
+                "symbol",
+                "trade_date",
+                "direction",
+                "entry_price",
+                "exit_price",
+                "return_pct",
+            ]
+        ].to_string(index=False)
+    )
+
+    # --------------------------------------------------------
+    # Monthly results
+    # --------------------------------------------------------
+
+    trades_df["month"] = pd.to_datetime(
+        trades_df["trade_date"]
+    ).dt.to_period("M").astype(str)
+
+    monthly_rows = []
+
+    for month, group in trades_df.groupby(
+        "month"
+    ):
+
+        month_stats = calculate_statistics(
+            group
         )
 
+        monthly_rows.append({
+            "month": month,
+            **month_stats
+        })
 
-        print(
+    monthly_df = pd.DataFrame(
+        monthly_rows
+    )
 
-            f"Condition 2 passed  : "
-            f"{diagnostics_df['condition_2'].fillna(0).sum():,.0f}"
+    monthly_df.to_csv(
+        os.path.join(
+            RESULTS_DIR,
+            "monthly_results.csv"
+        ),
+        index=False
+    )
 
+    # --------------------------------------------------------
+    # Daily results
+    # --------------------------------------------------------
+
+    daily_rows = []
+
+    for date, group in trades_df.groupby(
+        "trade_date"
+    ):
+
+        daily_stats = calculate_statistics(
+            group
         )
 
+        daily_rows.append({
+            "trade_date": date,
+            **daily_stats
+        })
 
-        print(
+    daily_df = pd.DataFrame(
+        daily_rows
+    )
 
-            f"Condition 3 passed  : "
-            f"{diagnostics_df['condition_3'].fillna(0).sum():,.0f}"
+    daily_df.to_csv(
+        os.path.join(
+            RESULTS_DIR,
+            "daily_results.csv"
+        ),
+        index=False
+    )
 
+    # --------------------------------------------------------
+    # Save diagnostics
+    # --------------------------------------------------------
+
+    diagnostics_df = pd.DataFrame(
+        [
+            total_diagnostics
+        ]
+    )
+
+    diagnostics_df.to_csv(
+        os.path.join(
+            RESULTS_DIR,
+            "diagnostics.csv"
+        ),
+        index=False
+    )
+
+    # --------------------------------------------------------
+    # Save summary
+    # --------------------------------------------------------
+
+    summary_path = os.path.join(
+        RESULTS_DIR,
+        "summary.txt"
+    )
+
+    with open(
+        summary_path,
+        "w",
+        encoding="utf-8"
+    ) as f:
+
+        f.write(
+            "TWO-DAY EOD MOMENTUM BACKTEST\n"
         )
 
-
-        print(
-
-            f"Final signals       : "
-            f"{diagnostics_df['final_signals'].fillna(0).sum():,.0f}"
-
+        f.write(
+            "=" * 60 + "\n\n"
         )
 
+        f.write(
+            "STRATEGY\n"
+        )
+
+        f.write(
+            "Day -2: 1m 15:28 & 15:29 opposite\n"
+        )
+
+        f.write(
+            "Day -2: 15:28 volume > 15:29\n"
+        )
+
+        f.write(
+            "Day -1: 1m 15:28 & 15:29 opposite\n"
+        )
+
+        f.write(
+            "Day -1: 15:28 volume > 15:29\n"
+        )
+
+        f.write(
+            "Day -1: same trend as Day -2\n"
+        )
+
+        f.write(
+            "Day -1: 3m 15:27-15:29 same trend\n"
+        )
+
+        f.write(
+            "\nTRADE\n"
+        )
+
+        f.write(
+            "Entry: next trading day 09:15 open\n"
+        )
+
+        f.write(
+            "Exit: 15:27 open\n"
+        )
+
+        f.write(
+            "Target: NONE\n"
+        )
+
+        f.write(
+            "Stop-loss: NONE\n\n"
+        )
+
+        for key, value in stats.items():
+
+            f.write(
+                f"{key}: {value}\n"
+            )
+
+        f.write(
+            "\nDIAGNOSTICS\n"
+        )
+
+        for key, value in total_diagnostics.items():
+
+            f.write(
+                f"{key}: {value}\n"
+            )
+
+    # --------------------------------------------------------
+    # Finish
+    # --------------------------------------------------------
+
+    elapsed = (
+        time.time()
+        - start_time
+    )
+
+    print()
+    print("=" * 70)
+    print("FILES SAVED")
+    print("=" * 70)
+
+    print(
+        f"{trades_path}"
+    )
+
+    print(
+        f"{RESULTS_DIR}/yearly_results.csv"
+    )
+
+    print(
+        f"{RESULTS_DIR}/monthly_results.csv"
+    )
+
+    print(
+        f"{RESULTS_DIR}/daily_results.csv"
+    )
+
+    print(
+        f"{RESULTS_DIR}/diagnostics.csv"
+    )
+
+    print(
+        f"{summary_path}"
+    )
 
     print()
     print(
-
-        f"Runtime: "
-        f"{(time.time() - start_time) / 60:.2f} minutes"
-
+        f"Backtest completed in "
+        f"{elapsed:.2f} seconds."
     )
 
-
-    print()
-    print(
-        "Results saved in results/"
-    )
+    print("=" * 70)
 
 
 # ============================================================
@@ -3033,5 +1535,4 @@ def main():
 # ============================================================
 
 if __name__ == "__main__":
-
     main()
