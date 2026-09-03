@@ -1,63 +1,77 @@
 """
-NSE 3-Minute EOD Momentum Backtest
+============================================================
+NSE 3-MINUTE + D-2 1-MINUTE BACKTEST
+============================================================
 
 STRATEGY
 --------
 
-SIGNAL DAY:
+D-1 = Previous trading day
+D-2 = Day before previous trading day
+D0  = Trading day on which the trade is executed
 
-1. 3-minute 15:24 and 15:27 must have opposite trends.
 
-2. 15:24 volume must be greater than 15:27 volume.
+D-1 CONDITIONS
+--------------
 
-3. Among the three 3-minute candles:
-       15:15
-       15:18
-       15:21
+1. 3-minute 15:24 and 15:27 must be opposite trends.
 
-   At least TWO must have the same trend as 15:24.
+2. 3-minute 15:24 volume must be greater than 15:27 volume.
 
-4. Morning 3-minute candles:
-       09:15
-       09:18
+3. 3-minute 09:15 and 09:18 must BOTH be opposite
+   to the 15:24 trend.
 
-   BOTH must have the opposite trend to 15:24.
 
-TRADE:
+D-2 CONDITION
+-------------
 
-- Direction = trend of 15:24
-- Entry = next trading day 09:15 OPEN
-- Exit = next trading day 15:27 OPEN
-- No target
-- No stop loss
+4. 1-minute 15:28 trend on D-2 must be the SAME as
+   the 3-minute 15:24 trend on D-1.
 
-IMPORTANT:
 
-3-minute candles are created from 1-minute data:
+TRADE
+-----
 
-09:15 = 09:15, 09:16, 09:17
-09:18 = 09:18, 09:19, 09:20
+5. Enter D0 at 09:15 OPEN.
+
+6. Direction = D-1 15:24 trend.
+
+7. Exit D0 at 15:27 OPEN.
+
+8. No target.
+
+9. No stop loss.
+
+10. No other 1-minute conditions.
+
+
+3-MINUTE CANDLE CONSTRUCTION
+----------------------------
+
+09:15 = 09:15 + 09:16 + 09:17
+09:18 = 09:18 + 09:19 + 09:20
+
 ...
-15:15 = 15:15, 15:16, 15:17
-15:18 = 15:18, 15:19, 15:20
-15:21 = 15:21, 15:22, 15:23
-15:24 = 15:24, 15:25, 15:26
-15:27 = 15:27, 15:28, 15:29
 
-CANDLE TREND:
+15:24 = 15:24 + 15:25 + 15:26
+15:27 = 15:27 + 15:28 + 15:29
 
-GREEN/BULLISH:
+
+TREND
+-----
+
+GREEN:
     Close > Open
 
-RED/BEARISH:
+RED:
     Close < Open
 
 DOJI:
     Close == Open
 
-Doji candles do NOT count as matching a trend.
+Doji does not qualify as either trend.
 
-NO 1-MINUTE SIGNAL CONDITIONS ARE USED.
+============================================================
 """
 
 from __future__ import annotations
@@ -66,7 +80,7 @@ import os
 import glob
 import warnings
 from pathlib import Path
-from datetime import datetime, time
+from datetime import time
 
 import numpy as np
 import pandas as pd
@@ -90,40 +104,54 @@ OUTPUT_TRADES = RESULTS_DIR / "trades.csv"
 OUTPUT_STOCKS = RESULTS_DIR / "stock_summary.csv"
 OUTPUT_DAILY = RESULTS_DIR / "daily_summary.csv"
 OUTPUT_SUMMARY = RESULTS_DIR / "summary.txt"
+OUTPUT_HTML = RESULTS_DIR / "index.html"
 
-# Assumed total round-trip transaction/slippage cost.
-# Change to 0.0 if you want completely raw results.
+
+# ------------------------------------------------------------
+# Trading cost
+# ------------------------------------------------------------
+#
+# This is deducted from every completed trade.
+#
+# 0.10 means 0.10% total round-trip cost.
+#
+# Change to 0.0 if you want raw price returns.
+# ------------------------------------------------------------
+
 ROUND_TRIP_COST_PCT = 0.10
 
 
 # ============================================================
-# TIME DEFINITIONS
+# TIME SETTINGS
 # ============================================================
 
-SIGNAL_TIMES = [
+MORNING_TIMES = [
     "09:15",
     "09:18",
-    "15:15",
-    "15:18",
-    "15:21",
+]
+
+AFTERNOON_TIMES = [
     "15:24",
     "15:27",
 ]
+
+D2_1MIN_TIME = "15:28"
 
 ENTRY_TIME = "09:15"
 EXIT_TIME = "15:27"
 
 
 # ============================================================
-# TREND FUNCTION
+# TREND
 # ============================================================
 
 def candle_trend(open_price, close_price):
     """
-    Return:
+    Returns:
+
         1  = bullish / green
        -1  = bearish / red
-        0  = doji
+        0  = doji / invalid
     """
 
     if pd.isna(open_price) or pd.isna(close_price):
@@ -139,49 +167,72 @@ def candle_trend(open_price, close_price):
 
 
 # ============================================================
-# FIND PARQUET FILES
+# FIND ALL PARQUET FILES
 # ============================================================
 
 def find_parquet_files():
+
     files = []
 
-    print("\nSearching for Parquet files...")
+    print()
+    print("=" * 70)
+    print("SEARCHING FOR PARQUET FILES")
+    print("=" * 70)
 
     for directory in DATA_DIRS:
 
-        if not os.path.exists(directory):
-            print(f"Directory not found: {directory}")
+        if not os.path.isdir(directory):
+
+            print(
+                f"Directory not found: {directory}"
+            )
+
             continue
 
         found = glob.glob(
-            os.path.join(directory, "**", "*.parquet"),
+            os.path.join(
+                directory,
+                "**",
+                "*.parquet"
+            ),
             recursive=True
         )
 
-        print(f"{directory}: {len(found)} files")
+        print(
+            f"{directory}: {len(found):,} files"
+        )
 
         files.extend(found)
 
-    # Remove duplicates
-    files = sorted(set(files))
+    files = sorted(
+        set(files)
+    )
 
-    print(f"\nTotal Parquet files found: {len(files)}")
+    print(
+        f"Total Parquet files: {len(files):,}"
+    )
 
     return files
 
 
 # ============================================================
-# NORMALIZE COLUMN NAMES
+# NORMALIZE COLUMNS
 # ============================================================
 
 def normalize_columns(df):
 
     df = df.copy()
 
-    # Flatten MultiIndex columns if necessary
-    if isinstance(df.columns, pd.MultiIndex):
+    # --------------------------------------------------------
+    # Flatten MultiIndex columns
+    # --------------------------------------------------------
 
-        new_columns = []
+    if isinstance(
+        df.columns,
+        pd.MultiIndex
+    ):
+
+        flattened = []
 
         for col in df.columns:
 
@@ -192,37 +243,77 @@ def normalize_columns(df):
                 value = str(value)
 
                 if value.lower() != "nan":
+
                     parts.append(value)
 
-            new_columns.append("_".join(parts))
+            flattened.append(
+                "_".join(parts)
+            )
 
-        df.columns = new_columns
+        df.columns = flattened
+
+    # --------------------------------------------------------
+    # Detect columns
+    # --------------------------------------------------------
 
     rename_map = {}
 
     for column in df.columns:
 
-        c = str(column).strip().lower()
+        name = str(
+            column
+        ).strip().lower()
 
-        if c in ["datetime", "date_time", "timestamp", "time"]:
+        if name in [
+            "datetime",
+            "date_time",
+            "timestamp",
+            "time",
+            "date",
+        ]:
+
             rename_map[column] = "datetime"
 
-        elif c in ["open", "open_price"]:
+        elif name in [
+            "open",
+            "open_price",
+        ]:
+
             rename_map[column] = "open"
 
-        elif c in ["high", "high_price"]:
+        elif name in [
+            "high",
+            "high_price",
+        ]:
+
             rename_map[column] = "high"
 
-        elif c in ["low", "low_price"]:
+        elif name in [
+            "low",
+            "low_price",
+        ]:
+
             rename_map[column] = "low"
 
-        elif c in ["close", "close_price", "adj close"]:
+        elif name in [
+            "close",
+            "close_price",
+            "adj close",
+            "adj_close",
+        ]:
+
             rename_map[column] = "close"
 
-        elif c in ["volume", "vol"]:
+        elif name in [
+            "volume",
+            "vol",
+        ]:
+
             rename_map[column] = "volume"
 
-    df = df.rename(columns=rename_map)
+    df = df.rename(
+        columns=rename_map
+    )
 
     return df
 
@@ -235,34 +326,48 @@ def load_parquet(path):
 
     try:
 
-        df = pd.read_parquet(path)
+        df = pd.read_parquet(
+            path
+        )
 
     except Exception as e:
 
-        print(f"Could not read {path}: {e}")
+        print(
+            f"ERROR reading {path}: {e}"
+        )
+
         return None
 
-    df = normalize_columns(df)
+    df = normalize_columns(
+        df
+    )
 
-    required = ["open", "high", "low", "close", "volume"]
+    required_columns = [
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume",
+    ]
 
     missing = [
         column
-        for column in required
+        for column in required_columns
         if column not in df.columns
     ]
 
     if missing:
 
         print(
-            f"Skipping {path} - missing columns: {missing}"
+            f"Skipping {path}"
+            f" - missing: {missing}"
         )
 
         return None
 
-    # --------------------------------------------------------
+    # ========================================================
     # DATETIME
-    # --------------------------------------------------------
+    # ========================================================
 
     if "datetime" in df.columns:
 
@@ -271,44 +376,51 @@ def load_parquet(path):
             errors="coerce"
         )
 
-    elif isinstance(df.index, pd.DatetimeIndex):
+    elif isinstance(
+        df.index,
+        pd.DatetimeIndex
+    ):
 
-        dt = pd.to_datetime(
-            df.index,
-            errors="coerce"
+        dt = pd.Series(
+            pd.to_datetime(
+                df.index,
+                errors="coerce"
+            ),
+            index=df.index
         )
 
     else:
 
-        print(f"Skipping {path} - no datetime information")
+        print(
+            f"Skipping {path} - "
+            f"datetime not found"
+        )
+
         return None
 
-    # Remove timezone if present
+    # --------------------------------------------------------
+    # Remove timezone
+    # --------------------------------------------------------
+
     try:
 
-        if getattr(dt.dt, "tz", None) is not None:
-            dt = dt.dt.tz_localize(None)
+        if dt.dt.tz is not None:
+
+            dt = (
+                dt
+                .dt
+                .tz_localize(None)
+            )
 
     except Exception:
         pass
 
     df["datetime"] = dt
 
-    df = df.dropna(
-        subset=[
-            "datetime",
-            "open",
-            "high",
-            "low",
-            "close",
-            "volume",
-        ]
-    )
+    # ========================================================
+    # NUMERIC DATA
+    # ========================================================
 
-    if df.empty:
-        return None
-
-    # Numeric conversion
     for column in [
         "open",
         "high",
@@ -322,8 +434,13 @@ def load_parquet(path):
             errors="coerce"
         )
 
+    # ========================================================
+    # CLEAN
+    # ========================================================
+
     df = df.dropna(
         subset=[
+            "datetime",
             "open",
             "high",
             "low",
@@ -332,61 +449,72 @@ def load_parquet(path):
         ]
     )
 
-    df = df.sort_values("datetime")
+    if df.empty:
+
+        return None
+
+    df = df.sort_values(
+        "datetime"
+    )
 
     df = df.drop_duplicates(
         subset=["datetime"],
         keep="last"
     )
 
-    df = df.set_index("datetime")
+    df = df.set_index(
+        "datetime"
+    )
 
     return df
 
 
 # ============================================================
-# STOCK NAME FROM FILE
+# GET SYMBOL
 # ============================================================
 
 def get_symbol(path):
 
-    name = Path(path).stem.upper()
+    name = Path(
+        path
+    ).stem.upper()
 
-    # Remove common suffixes
-    for suffix in [
+    suffixes = [
         "_1MIN",
         "_1MINUTE",
         "_MINUTE",
         "_DATA",
         "_HISTORICAL",
-    ]:
+    ]
 
-        if name.endswith(suffix):
-            name = name[:-len(suffix)]
+    for suffix in suffixes:
+
+        if name.endswith(
+            suffix
+        ):
+
+            name = name[
+                :-len(suffix)
+            ]
 
     return name
 
 
 # ============================================================
-# CREATE 3-MINUTE DATA
+# CREATE 3-MINUTE CANDLES
 # ============================================================
 
 def create_3min(df):
 
     """
-    Resample 1-minute data into NSE-style 3-minute candles.
-
-    Candles begin at:
-        09:15
-        09:18
-        09:21
-        ...
+    Converts 1-minute NSE data into
+    3-minute candles aligned to 09:15.
     """
 
     data = df.copy()
 
     # --------------------------------------------------------
-    # Keep NSE regular market hours
+    # NSE regular session
     # --------------------------------------------------------
 
     data = data.between_time(
@@ -395,11 +523,12 @@ def create_3min(df):
     )
 
     if data.empty:
+
         return pd.DataFrame()
 
-    # --------------------------------------------------------
-    # Resample from 09:15 alignment
-    # --------------------------------------------------------
+    # ========================================================
+    # RESAMPLE
+    # ========================================================
 
     candles = (
         data
@@ -408,7 +537,7 @@ def create_3min(df):
             origin="start_day",
             offset="15min",
             label="left",
-            closed="left"
+            closed="left",
         )
         .agg(
             {
@@ -430,116 +559,214 @@ def create_3min(df):
         ]
     )
 
-    # Keep only actual NSE 3-minute candle starts
-    candles = candles[
-        candles.index.time >= time(9, 15)
-    ]
+    # --------------------------------------------------------
+    # Keep NSE candle starts
+    # --------------------------------------------------------
 
     candles = candles[
-        candles.index.time <= time(15, 27)
+        (
+            candles.index.time
+            >= time(9, 15)
+        )
+        &
+        (
+            candles.index.time
+            <= time(15, 27)
+        )
     ]
 
     return candles
 
 
 # ============================================================
-# GET SPECIFIC 3-MINUTE CANDLE
+# GET CANDLE BY TIME
 # ============================================================
 
-def get_3m_candle(day_data, hhmm):
+def get_candle(
+    data,
+    hhmm
+):
 
-    target = pd.Timestamp(
-        f"{day_data.index[0].date()} {hhmm}"
-    )
+    if data is None or data.empty:
 
-    # More reliable: compare time
-    matches = day_data[
-        day_data.index.strftime("%H:%M") == hhmm
+        return None
+
+    matches = data[
+        data.index.strftime(
+            "%H:%M"
+        ) == hhmm
     ]
 
     if matches.empty:
+
         return None
 
     return matches.iloc[0]
 
 
 # ============================================================
-# CHECK SIGNAL
+# GET DAILY DATA
 # ============================================================
 
-def check_signal(day_1m, day_3m):
+def get_day_data(
+    df,
+    date_value
+):
 
-    """
-    Returns signal information if all conditions pass.
+    return df[
+        df.index.date
+        == date_value
+    ]
 
-    Otherwise returns None.
-    """
 
-    # ========================================================
-    # REQUIRED 3-MINUTE CANDLES
-    # ========================================================
+# ============================================================
+# GET AVAILABLE TRADING DAYS
+# ============================================================
 
-    required_times = [
+def get_trading_days(df):
+
+    if df.empty:
+
+        return []
+
+    days = sorted(
+        set(
+            df.index.date
+        )
+    )
+
+    return days
+
+
+# ============================================================
+# CHECK WHETHER A DAY HAS REQUIRED 3-MIN CANDLES
+# ============================================================
+
+def valid_3m_signal_day(
+    day_3m
+):
+
+    required = [
         "09:15",
         "09:18",
-        "15:15",
-        "15:18",
-        "15:21",
         "15:24",
         "15:27",
     ]
 
-    candles = {}
+    for hhmm in required:
 
-    for hhmm in required_times:
-
-        candle = get_3m_candle(
+        candle = get_candle(
             day_3m,
             hhmm
         )
 
         if candle is None:
-            return None
 
-        candles[hhmm] = candle
+            return False
+
+    return True
+
+
+# ============================================================
+# CHECK D-1 SIGNAL
+# ============================================================
+
+def check_previous_day_signal(
+    day_3m
+):
+
+    """
+    Check all D-1 conditions.
+
+    Returns a dictionary if valid.
+    Otherwise None.
+    """
+
+    # ========================================================
+    # GET CANDLES
+    # ========================================================
+
+    candle_0915 = get_candle(
+        day_3m,
+        "09:15"
+    )
+
+    candle_0918 = get_candle(
+        day_3m,
+        "09:18"
+    )
+
+    candle_1524 = get_candle(
+        day_3m,
+        "15:24"
+    )
+
+    candle_1527 = get_candle(
+        day_3m,
+        "15:27"
+    )
+
+    if any(
+        candle is None
+        for candle in [
+            candle_0915,
+            candle_0918,
+            candle_1524,
+            candle_1527,
+        ]
+    ):
+
+        return None
 
     # ========================================================
     # TRENDS
     # ========================================================
 
-    trends = {}
+    trend_0915 = candle_trend(
+        candle_0915["open"],
+        candle_0915["close"]
+    )
 
-    for hhmm, candle in candles.items():
+    trend_0918 = candle_trend(
+        candle_0918["open"],
+        candle_0918["close"]
+    )
 
-        trends[hhmm] = candle_trend(
-            candle["open"],
-            candle["close"]
-        )
+    trend_1524 = candle_trend(
+        candle_1524["open"],
+        candle_1524["close"]
+    )
 
-    # --------------------------------------------------------
-    # 15:24 MUST HAVE A VALID TREND
-    # --------------------------------------------------------
+    trend_1527 = candle_trend(
+        candle_1527["open"],
+        candle_1527["close"]
+    )
 
-    direction = trends["15:24"]
+    # ========================================================
+    # 15:24 MUST HAVE VALID TREND
+    # ========================================================
 
-    if direction == 0:
+    if trend_1524 == 0:
+
         return None
 
     # ========================================================
     # CONDITION 1
     #
-    # 15:24 AND 15:27 MUST BE OPPOSITE
+    # 15:24 AND 15:27 OPPOSITE
     # ========================================================
 
-    if trends["15:27"] == 0:
+    if trend_1527 == 0:
+
         return None
 
-    cond_1 = (
-        trends["15:24"]
-        == -trends["15:27"]
+    condition_1 = (
+        trend_1524
+        == -trend_1527
     )
 
-    if not cond_1:
+    if not condition_1:
+
         return None
 
     # ========================================================
@@ -548,58 +775,41 @@ def check_signal(day_1m, day_3m):
     # 15:24 VOLUME > 15:27 VOLUME
     # ========================================================
 
-    volume_1524 = candles["15:24"]["volume"]
-    volume_1527 = candles["15:27"]["volume"]
+    volume_1524 = float(
+        candle_1524["volume"]
+    )
 
-    cond_2 = (
+    volume_1527 = float(
+        candle_1527["volume"]
+    )
+
+    condition_2 = (
         volume_1524
         > volume_1527
     )
 
-    if not cond_2:
+    if not condition_2:
+
         return None
 
     # ========================================================
     # CONDITION 3
     #
-    # OUT OF 15:15, 15:18, 15:21
-    # AT LEAST TWO MUST MATCH 15:24
+    # BOTH MORNING CANDLES OPPOSITE TO 15:24
     # ========================================================
 
-    afternoon_confirmation_times = [
-        "15:15",
-        "15:18",
-        "15:21",
-    ]
-
-    afternoon_matches = sum(
-        trends[hhmm] == direction
-        for hhmm in afternoon_confirmation_times
+    condition_3 = (
+        trend_0915 != 0
+        and
+        trend_0918 != 0
+        and
+        trend_0915 == -trend_1524
+        and
+        trend_0918 == -trend_1524
     )
 
-    cond_3 = afternoon_matches >= 2
+    if not condition_3:
 
-    if not cond_3:
-        return None
-
-    # ========================================================
-    # CONDITION 4
-    #
-    # MORNING 09:15 AND 09:18 MUST BOTH BE
-    # OPPOSITE TO 15:24
-    # ========================================================
-
-    morning_0915 = trends["09:15"]
-    morning_0918 = trends["09:18"]
-
-    cond_4 = (
-        morning_0915 != 0
-        and morning_0918 != 0
-        and morning_0915 == -direction
-        and morning_0918 == -direction
-    )
-
-    if not cond_4:
         return None
 
     # ========================================================
@@ -607,67 +817,169 @@ def check_signal(day_1m, day_3m):
     # ========================================================
 
     return {
-        "direction": direction,
+        "direction": trend_1524,
 
-        "trend_0915": morning_0915,
-        "trend_0918": morning_0918,
+        "trend_0915": trend_0915,
+        "trend_0918": trend_0918,
 
-        "trend_1515": trends["15:15"],
-        "trend_1518": trends["15:18"],
-        "trend_1521": trends["15:21"],
-        "trend_1524": trends["15:24"],
-        "trend_1527": trends["15:27"],
+        "trend_1524": trend_1524,
+        "trend_1527": trend_1527,
 
         "volume_1524": volume_1524,
         "volume_1527": volume_1527,
 
-        "afternoon_matches": afternoon_matches,
-
-        "condition_1524_1527_opposite": True,
-        "condition_1524_volume_higher": True,
-        "condition_2_of_3_afternoon": True,
-        "condition_morning_opposite": True,
+        "volume_ratio":
+            (
+                volume_1524
+                / volume_1527
+                if volume_1527 > 0
+                else np.nan
+            ),
     }
 
 
 # ============================================================
-# FIND NEXT TRADING DAY
+# CHECK D-2 1-MIN CONDITION
 # ============================================================
 
-def find_next_trading_day(
-    available_days,
-    signal_date
+def check_d2_condition(
+    day_d2_1m,
+    required_direction
 ):
 
-    future_days = [
-        day
-        for day in available_days
-        if day > signal_date
-    ]
+    """
+    D-2 15:28 1-minute candle must have
+    the same trend as D-1 3-minute 15:24.
+    """
 
-    if not future_days:
+    candle_1528 = get_candle(
+        day_d2_1m,
+        D2_1MIN_TIME
+    )
+
+    if candle_1528 is None:
+
         return None
 
-    return future_days[0]
+    trend_1528 = candle_trend(
+        candle_1528["open"],
+        candle_1528["close"]
+    )
+
+    # Doji does not qualify
+    if trend_1528 == 0:
+
+        return None
+
+    if trend_1528 != required_direction:
+
+        return None
+
+    return {
+        "trend_1528": trend_1528,
+        "open_1528":
+            float(candle_1528["open"]),
+        "close_1528":
+            float(candle_1528["close"]),
+        "volume_1528":
+            float(candle_1528["volume"]),
+    }
 
 
 # ============================================================
-# GET PRICE AT TIME
+# FIND ENTRY / EXIT
 # ============================================================
 
-def get_minute_price(
-    day_data,
-    hhmm
+def get_trade_prices(
+    trade_day_1m
 ):
 
-    matches = day_data[
-        day_data.index.strftime("%H:%M") == hhmm
-    ]
+    entry_candle = get_candle(
+        trade_day_1m,
+        ENTRY_TIME
+    )
 
-    if matches.empty:
+    exit_candle = get_candle(
+        trade_day_1m,
+        EXIT_TIME
+    )
+
+    if entry_candle is None:
+
         return None
 
-    return matches.iloc[0]
+    if exit_candle is None:
+
+        return None
+
+    entry_price = float(
+        entry_candle["open"]
+    )
+
+    exit_price = float(
+        exit_candle["open"]
+    )
+
+    if not np.isfinite(
+        entry_price
+    ):
+
+        return None
+
+    if not np.isfinite(
+        exit_price
+    ):
+
+        return None
+
+    if entry_price <= 0:
+
+        return None
+
+    return {
+        "entry_price": entry_price,
+        "exit_price": exit_price,
+    }
+
+
+# ============================================================
+# CALCULATE TRADE RETURN
+# ============================================================
+
+def calculate_return(
+    entry_price,
+    exit_price,
+    direction
+):
+
+    if direction == 1:
+
+        # LONG
+        gross = (
+            (
+                exit_price
+                - entry_price
+            )
+            / entry_price
+        ) * 100
+
+    else:
+
+        # SHORT
+        gross = (
+            (
+                entry_price
+                - exit_price
+            )
+            / entry_price
+        ) * 100
+
+    net = (
+        gross
+        - ROUND_TRIP_COST_PCT
+    )
+
+    return gross, net
 
 
 # ============================================================
@@ -680,182 +992,197 @@ def process_stock(
     total_stocks
 ):
 
-    symbol = get_symbol(path)
+    symbol = get_symbol(
+        path
+    )
 
     print(
         f"[{stock_number}/{total_stocks}] "
         f"{symbol}"
     )
 
-    df = load_parquet(path)
+    # ========================================================
+    # LOAD DATA
+    # ========================================================
 
-    if df is None or df.empty:
-        return []
-
-    # --------------------------------------------------------
-    # Create 3-minute candles
-    # --------------------------------------------------------
-
-    df_3m = create_3min(df)
-
-    if df_3m.empty:
-        return []
-
-    # --------------------------------------------------------
-    # Trading days
-    # --------------------------------------------------------
-
-    available_days = sorted(
-        set(df.index.date)
-        & set(df_3m.index.date)
+    df = load_parquet(
+        path
     )
 
-    if len(available_days) < 2:
+    if df is None or df.empty:
+
+        return []
+
+    # ========================================================
+    # CREATE 3-MINUTE DATA
+    # ========================================================
+
+    df_3m = create_3min(
+        df
+    )
+
+    if df_3m.empty:
+
+        return []
+
+    # ========================================================
+    # TRADING DAYS
+    # ========================================================
+
+    trading_days = get_trading_days(
+        df
+    )
+
+    if len(trading_days) < 3:
+
         return []
 
     trades = []
 
     # ========================================================
-    # TEST EVERY SIGNAL DAY
+    # LOOP THROUGH D-1
+    #
+    # index:
+    #
+    # i-2 = D-2
+    # i-1 = D-1
+    # i   = D0
+    #
+    # We therefore start at index 1.
     # ========================================================
 
-    for signal_date in available_days:
+    for i in range(
+        1,
+        len(trading_days) - 1
+    ):
 
-        # ----------------------------------------------------
-        # Need next trading day for entry
-        # ----------------------------------------------------
+        d2 = trading_days[
+            i - 1
+        ]
 
-        trade_date = find_next_trading_day(
-            available_days,
-            signal_date
+        d1 = trading_days[
+            i
+        ]
+
+        d0 = trading_days[
+            i + 1
+        ]
+
+        # ====================================================
+        # D-1 3-MIN DATA
+        # ====================================================
+
+        d1_3m = get_day_data(
+            df_3m,
+            d1
         )
 
-        if trade_date is None:
+        if d1_3m.empty:
+
             continue
 
-        # ----------------------------------------------------
-        # Signal day data
-        # ----------------------------------------------------
+        # ====================================================
+        # D-1 SIGNAL
+        # ====================================================
 
-        day_1m = df[
-            df.index.date == signal_date
-        ]
-
-        day_3m = df_3m[
-            df_3m.index.date == signal_date
-        ]
-
-        if day_1m.empty or day_3m.empty:
-            continue
-
-        # ----------------------------------------------------
-        # Check signal
-        # ----------------------------------------------------
-
-        signal = check_signal(
-            day_1m,
-            day_3m
+        signal = (
+            check_previous_day_signal(
+                d1_3m
+            )
         )
 
         if signal is None:
+
             continue
 
-        # ====================================================
-        # NEXT DAY ENTRY
-        # ====================================================
-
-        trade_day_1m = df[
-            df.index.date == trade_date
+        direction = signal[
+            "direction"
         ]
 
-        if trade_day_1m.empty:
-            continue
+        # ====================================================
+        # D-2 1-MIN DATA
+        # ====================================================
 
-        entry_candle = get_minute_price(
-            trade_day_1m,
-            ENTRY_TIME
+        d2_1m = get_day_data(
+            df,
+            d2
         )
 
-        exit_candle = get_minute_price(
-            trade_day_1m,
-            EXIT_TIME
+        if d2_1m.empty:
+
+            continue
+
+        # ====================================================
+        # D-2 15:28 CONDITION
+        # ====================================================
+
+        d2_condition = (
+            check_d2_condition(
+                d2_1m,
+                direction
+            )
         )
 
-        if entry_candle is None:
+        if d2_condition is None:
+
             continue
 
-        if exit_candle is None:
-            continue
+        # ====================================================
+        # D0 TRADE DATA
+        # ====================================================
 
-        entry_price = float(
-            entry_candle["open"]
+        d0_1m = get_day_data(
+            df,
+            d0
         )
 
-        exit_price = float(
-            exit_candle["open"]
+        if d0_1m.empty:
+
+            continue
+
+        prices = get_trade_prices(
+            d0_1m
         )
 
-        if not np.isfinite(entry_price):
+        if prices is None:
+
             continue
 
-        if not np.isfinite(exit_price):
-            continue
+        entry_price = prices[
+            "entry_price"
+        ]
 
-        if entry_price <= 0:
-            continue
-
-        # ====================================================
-        # RAW RETURN
-        # ====================================================
-
-        direction = signal["direction"]
-
-        if direction == 1:
-
-            # Long
-            gross_return_pct = (
-                (exit_price - entry_price)
-                / entry_price
-            ) * 100
-
-        else:
-
-            # Short
-            gross_return_pct = (
-                (entry_price - exit_price)
-                / entry_price
-            ) * 100
+        exit_price = prices[
+            "exit_price"
+        ]
 
         # ====================================================
-        # COST
+        # RETURN
         # ====================================================
 
-        net_return_pct = (
-            gross_return_pct
-            - ROUND_TRIP_COST_PCT
+        gross_return, net_return = (
+            calculate_return(
+                entry_price,
+                exit_price,
+                direction
+            )
+        )
+
+        win = (
+            net_return > 0
         )
 
         # ====================================================
-        # WIN / LOSS
-        # ====================================================
-
-        win = net_return_pct > 0
-
-        # ====================================================
-        # STORE TRADE
+        # STORE
         # ====================================================
 
         trades.append(
             {
                 "symbol": symbol,
 
-                "signal_date": str(
-                    signal_date
-                ),
-
-                "trade_date": str(
-                    trade_date
-                ),
+                "d2_date": str(d2),
+                "signal_date": str(d1),
+                "trade_date": str(d0),
 
                 "direction": (
                     "LONG"
@@ -863,33 +1190,87 @@ def process_stock(
                     else "SHORT"
                 ),
 
-                "entry_time": ENTRY_TIME,
-                "exit_time": EXIT_TIME,
+                # D-2
+                "d2_15:28_trend":
+                    d2_condition[
+                        "trend_1528"
+                    ],
 
-                "entry_price": entry_price,
-                "exit_price": exit_price,
+                "d2_15:28_open":
+                    d2_condition[
+                        "open_1528"
+                    ],
 
-                "gross_return_pct": gross_return_pct,
-                "cost_pct": ROUND_TRIP_COST_PCT,
-                "net_return_pct": net_return_pct,
+                "d2_15:28_close":
+                    d2_condition[
+                        "close_1528"
+                    ],
 
-                "win": int(win),
+                "d2_15:28_volume":
+                    d2_condition[
+                        "volume_1528"
+                    ],
 
-                # Signal diagnostics
-                "09:15_trend": signal["trend_0915"],
-                "09:18_trend": signal["trend_0918"],
+                # D-1
+                "d1_09:15_trend":
+                    signal[
+                        "trend_0915"
+                    ],
 
-                "15:15_trend": signal["trend_1515"],
-                "15:18_trend": signal["trend_1518"],
-                "15:21_trend": signal["trend_1521"],
-                "15:24_trend": signal["trend_1524"],
-                "15:27_trend": signal["trend_1527"],
+                "d1_09:18_trend":
+                    signal[
+                        "trend_0918"
+                    ],
 
-                "15:24_volume": signal["volume_1524"],
-                "15:27_volume": signal["volume_1527"],
+                "d1_15:24_trend":
+                    signal[
+                        "trend_1524"
+                    ],
 
-                "15:15_18_21_matches":
-                    signal["afternoon_matches"],
+                "d1_15:27_trend":
+                    signal[
+                        "trend_1527"
+                    ],
+
+                "d1_15:24_volume":
+                    signal[
+                        "volume_1524"
+                    ],
+
+                "d1_15:27_volume":
+                    signal[
+                        "volume_1527"
+                    ],
+
+                "d1_volume_ratio":
+                    signal[
+                        "volume_ratio"
+                    ],
+
+                # D0 trade
+                "entry_time":
+                    ENTRY_TIME,
+
+                "exit_time":
+                    EXIT_TIME,
+
+                "entry_price":
+                    entry_price,
+
+                "exit_price":
+                    exit_price,
+
+                "gross_return_pct":
+                    gross_return,
+
+                "cost_pct":
+                    ROUND_TRIP_COST_PCT,
+
+                "net_return_pct":
+                    net_return,
+
+                "win":
+                    int(win),
             }
         )
 
@@ -897,35 +1278,16 @@ def process_stock(
 
 
 # ============================================================
-# CALCULATE MAX DRAWDOWN
-# ============================================================
-
-def calculate_max_drawdown(returns):
-
-    if len(returns) == 0:
-        return 0.0
-
-    equity = (
-        1
-        + returns / 100
-    ).cumprod()
-
-    peak = equity.cummax()
-
-    drawdown = (
-        equity / peak - 1
-    ) * 100
-
-    return float(
-        drawdown.min()
-    )
-
-
-# ============================================================
 # PROFIT FACTOR
 # ============================================================
 
-def calculate_profit_factor(returns):
+def calculate_profit_factor(
+    returns
+):
+
+    returns = pd.Series(
+        returns
+    )
 
     gross_profit = returns[
         returns > 0
@@ -940,12 +1302,47 @@ def calculate_profit_factor(returns):
     if gross_loss == 0:
 
         if gross_profit > 0:
+
             return float("inf")
 
         return 0.0
 
+    return (
+        gross_profit
+        / gross_loss
+    )
+
+
+# ============================================================
+# MAX DRAWDOWN
+# ============================================================
+
+def calculate_max_drawdown(
+    returns
+):
+
+    returns = pd.Series(
+        returns
+    )
+
+    if returns.empty:
+
+        return 0.0
+
+    equity = (
+        1
+        + returns / 100
+    ).cumprod()
+
+    peak = equity.cummax()
+
+    drawdown = (
+        equity / peak
+        - 1
+    ) * 100
+
     return float(
-        gross_profit / gross_loss
+        drawdown.min()
     )
 
 
@@ -953,7 +1350,9 @@ def calculate_profit_factor(returns):
 # CREATE SUMMARY
 # ============================================================
 
-def create_summary(trades_df):
+def create_summary(
+    trades_df
+):
 
     if trades_df.empty:
 
@@ -962,7 +1361,7 @@ def create_summary(trades_df):
 BACKTEST RESULTS
 ============================================================
 
-No trades were generated.
+NO QUALIFYING TRADES FOUND.
 
 ============================================================
 """
@@ -1027,120 +1426,145 @@ No trades were generated.
         returns.min()
     )
 
-    long_df = trades_df[
-        trades_df["direction"] == "LONG"
+    # ========================================================
+    # LONG / SHORT
+    # ========================================================
+
+    long_trades = trades_df[
+        trades_df["direction"]
+        == "LONG"
     ]
 
-    short_df = trades_df[
-        trades_df["direction"] == "SHORT"
+    short_trades = trades_df[
+        trades_df["direction"]
+        == "SHORT"
     ]
 
-    long_win_rate = 0.0
-
-    if len(long_df) > 0:
+    if len(long_trades) > 0:
 
         long_win_rate = (
-            long_df["win"].mean()
+            long_trades["win"].mean()
             * 100
         )
 
-    short_win_rate = 0.0
+    else:
 
-    if len(short_df) > 0:
+        long_win_rate = 0.0
+
+    if len(short_trades) > 0:
 
         short_win_rate = (
-            short_df["win"].mean()
+            short_trades["win"].mean()
             * 100
         )
 
-    # --------------------------------------------------------
-    # Signal statistics
-    # --------------------------------------------------------
+    else:
 
-    avg_volume_ratio = (
-        trades_df["15:24_volume"]
-        / trades_df["15:27_volume"]
-    ).mean()
+        short_win_rate = 0.0
 
-    avg_confirmation_matches = (
+    # ========================================================
+    # SIGNAL DIAGNOSTICS
+    # ========================================================
+
+    average_volume_ratio = (
         trades_df[
-            "15:15_18_21_matches"
+            "d1_volume_ratio"
         ].mean()
     )
 
-    # --------------------------------------------------------
-    # Summary text
-    # --------------------------------------------------------
+    # ========================================================
+    # SUMMARY
+    # ========================================================
 
     text = f"""
 ============================================================
-NSE 3-MINUTE EOD STRATEGY BACKTEST
+NSE 3-MINUTE + D-2 1-MINUTE STRATEGY
 ============================================================
 
-STRATEGY CONDITIONS
+STRATEGY
 ------------------------------------------------------------
 
-1. 3-min 15:24 and 15:27:
-   - Opposite trends
-   - 15:24 volume > 15:27 volume
+D-1:
 
-2. 3-min 15:15 / 15:18 / 15:21:
-   - At least 2 match 15:24 trend
+3-min 15:24 and 15:27:
+    Opposite trends
 
-3. Morning:
-   - 09:15 opposite to 15:24
-   - 09:18 opposite to 15:24
+3-min 15:24:
+    Volume > 15:27
 
-4. Trade:
-   - Next trading day 09:15 open
-   - Direction = 15:24 trend
-   - Exit = 15:27 open
+3-min 09:15:
+    Opposite to 15:24
 
-5. All 1-minute conditions:
-   - REMOVED
+3-min 09:18:
+    Opposite to 15:24
+
+
+D-2:
+
+1-min 15:28:
+    Same trend as D-1 3-min 15:24
+
+
+TRADE:
+
+D0 09:15 OPEN:
+    Entry
+
+Direction:
+    D-1 15:24 trend
+
+D0 15:27 OPEN:
+    Exit
+
+No target.
+No stop loss.
 
 ------------------------------------------------------------
-BACKTEST RESULTS
+RESULTS
 ------------------------------------------------------------
 
 Total trades       : {total_trades:,}
+
 Winning trades     : {wins:,}
+
 Losing trades      : {losses:,}
 
 Win rate           : {win_rate:.2f}%
 
 Average trade      : {average_return:.4f}%
+
 Total return       : {total_return:.4f}%
 
 Profit factor      : {profit_factor:.4f}
 
 Best trade         : {best_trade:.4f}%
+
 Worst trade        : {worst_trade:.4f}%
 
-Max drawdown       : {max_drawdown:.4f}%
+Maximum drawdown   : {max_drawdown:.4f}%
 
 ------------------------------------------------------------
-DIRECTION
+LONG / SHORT
 ------------------------------------------------------------
 
-Long trades        : {len(long_df):,}
+Long trades        : {len(long_trades):,}
+
 Long win rate      : {long_win_rate:.2f}%
 
-Short trades       : {len(short_df):,}
+Short trades       : {len(short_trades):,}
+
 Short win rate     : {short_win_rate:.2f}%
 
 ------------------------------------------------------------
 SIGNAL DIAGNOSTICS
 ------------------------------------------------------------
 
-Average 15:24 / 15:27
-volume ratio       : {avg_volume_ratio:.2f}x
-
-Average number of
-15:15/18/21 matches : {avg_confirmation_matches:.2f}
+Average
+15:24 / 15:27
+volume ratio       : {average_volume_ratio:.2f}x
 
 ------------------------------------------------------------
-COST ASSUMPTION
+COST
 ------------------------------------------------------------
 
 Round-trip cost    : {ROUND_TRIP_COST_PCT:.2f}%
@@ -1160,7 +1584,9 @@ Round-trip cost    : {ROUND_TRIP_COST_PCT:.2f}%
 # STOCK SUMMARY
 # ============================================================
 
-def create_stock_summary(trades_df):
+def create_stock_summary(
+    trades_df
+):
 
     if trades_df.empty:
 
@@ -1173,54 +1599,74 @@ def create_stock_summary(trades_df):
 
     rows = []
 
-    for symbol, group in trades_df.groupby(
-        "symbol"
+    for symbol, group in (
+        trades_df.groupby("symbol")
     ):
 
         returns = group[
             "net_return_pct"
         ]
 
-        trades = len(group)
+        trade_count = len(
+            group
+        )
 
         wins = int(
             group["win"].sum()
         )
 
         losses = (
-            trades
+            trade_count
             - wins
         )
 
         win_rate = (
-            wins / trades * 100
-            if trades > 0
-            else 0
+            wins
+            / trade_count
+            * 100
         )
 
         rows.append(
             {
-                "symbol": symbol,
-                "trades": trades,
-                "wins": wins,
-                "losses": losses,
-                "win_rate_pct": win_rate,
-                "avg_return_pct": returns.mean(),
-                "total_return_pct": returns.sum(),
+                "symbol":
+                    symbol,
+
+                "trades":
+                    trade_count,
+
+                "wins":
+                    wins,
+
+                "losses":
+                    losses,
+
+                "win_rate_pct":
+                    win_rate,
+
+                "avg_return_pct":
+                    returns.mean(),
+
+                "total_return_pct":
+                    returns.sum(),
+
                 "profit_factor":
                     calculate_profit_factor(
                         returns
                     ),
+
                 "best_trade_pct":
                     returns.max(),
+
                 "worst_trade_pct":
                     returns.min(),
             }
         )
 
-    result = pd.DataFrame(rows)
+    summary = pd.DataFrame(
+        rows
+    )
 
-    result = result.sort_values(
+    summary = summary.sort_values(
         [
             "total_return_pct",
             "win_rate_pct",
@@ -1228,7 +1674,7 @@ def create_stock_summary(trades_df):
         ascending=False
     )
 
-    result.to_csv(
+    summary.to_csv(
         OUTPUT_STOCKS,
         index=False
     )
@@ -1238,7 +1684,9 @@ def create_stock_summary(trades_df):
 # DAILY SUMMARY
 # ============================================================
 
-def create_daily_summary(trades_df):
+def create_daily_summary(
+    trades_df
+):
 
     if trades_df.empty:
 
@@ -1253,12 +1701,21 @@ def create_daily_summary(trades_df):
         trades_df
         .groupby("trade_date")
         .agg(
-            trades=("net_return_pct", "count"),
-            wins=("win", "sum"),
+            trades=(
+                "net_return_pct",
+                "count"
+            ),
+
+            wins=(
+                "win",
+                "sum"
+            ),
+
             net_return_pct=(
                 "net_return_pct",
                 "sum"
             ),
+
             avg_return_pct=(
                 "net_return_pct",
                 "mean"
@@ -1292,9 +1749,9 @@ def create_daily_summary(trades_df):
 # HTML REPORT
 # ============================================================
 
-def create_html_report(trades_df):
-
-    html_path = RESULTS_DIR / "index.html"
+def create_html_report(
+    trades_df
+):
 
     if trades_df.empty:
 
@@ -1302,16 +1759,21 @@ def create_html_report(trades_df):
 <!DOCTYPE html>
 <html>
 <head>
+<meta charset="UTF-8">
 <title>Backtest Results</title>
 </head>
+
 <body>
-<h1>NSE 3-Minute Strategy</h1>
-<p>No trades generated.</p>
+
+<h1>NSE Strategy Backtest</h1>
+
+<p>No qualifying trades were found.</p>
+
 </body>
 </html>
 """
 
-        html_path.write_text(
+        OUTPUT_HTML.write_text(
             html,
             encoding="utf-8"
         )
@@ -1350,14 +1812,14 @@ def create_html_report(trades_df):
         )
     )
 
-    max_dd = (
+    max_drawdown = (
         calculate_max_drawdown(
             returns
         )
     )
 
     # --------------------------------------------------------
-    # Latest trades
+    # Show latest 500 trades
     # --------------------------------------------------------
 
     latest = trades_df.tail(
@@ -1378,18 +1840,20 @@ def create_html_report(trades_df):
 
 <meta charset="UTF-8">
 
-<title>NSE 3-Minute Strategy Backtest</title>
+<title>
+NSE 3-Minute + D-2 Strategy
+</title>
 
 <style>
 
 body {{
     font-family: Arial, sans-serif;
-    margin: 30px;
     background: #f5f5f5;
+    margin: 30px;
 }}
 
 .container {{
-    max-width: 1400px;
+    max-width: 1500px;
     margin: auto;
 }}
 
@@ -1402,7 +1866,6 @@ body {{
 
 .metric {{
     display: inline-block;
-    width: 18%;
     min-width: 180px;
     padding: 15px;
     margin: 5px;
@@ -1427,17 +1890,14 @@ table {{
 }}
 
 th, td {{
-    padding: 8px;
     border: 1px solid #ddd;
+    padding: 7px;
     text-align: right;
+    white-space: nowrap;
 }}
 
 th {{
     background: #eee;
-}}
-
-h1 {{
-    margin-bottom: 5px;
 }}
 
 </style>
@@ -1450,75 +1910,132 @@ h1 {{
 
 <div class="card">
 
-<h1>NSE 3-Minute EOD Strategy</h1>
+<h1>
+NSE 3-Minute + D-2 1-Minute Strategy
+</h1>
 
 <p>
-Next-day 09:15 entry → 15:27 exit
+D-2 15:28 confirmation →
+D-1 15:24 signal →
+D0 09:15 entry →
+D0 15:27 exit
 </p>
 
 </div>
 
+
 <div class="card">
 
 <div class="metric">
+
 <h3>Total Trades</h3>
-<p>{total_trades:,}</p>
+
+<p>
+{total_trades:,}
+</p>
+
 </div>
 
+
 <div class="metric">
+
 <h3>Win Rate</h3>
-<p>{win_rate:.2f}%</p>
+
+<p>
+{win_rate:.2f}%
+</p>
+
 </div>
 
+
 <div class="metric">
+
 <h3>Average Trade</h3>
-<p>{avg_return:.4f}%</p>
+
+<p>
+{avg_return:.4f}%
+</p>
+
 </div>
 
+
 <div class="metric">
+
 <h3>Total Return</h3>
-<p>{total_return:.4f}%</p>
+
+<p>
+{total_return:.4f}%
+</p>
+
 </div>
 
+
 <div class="metric">
+
 <h3>Profit Factor</h3>
-<p>{profit_factor:.3f}</p>
+
+<p>
+{profit_factor:.3f}
+</p>
+
 </div>
+
 
 <div class="metric">
+
 <h3>Max Drawdown</h3>
-<p>{max_dd:.4f}%</p>
+
+<p>
+{max_drawdown:.4f}%
+</p>
+
 </div>
 
 </div>
+
 
 <div class="card">
 
-<h2>Strategy Rules</h2>
+<h2>Strategy Conditions</h2>
 
 <ul>
 
-<li>3-minute 15:24 and 15:27 are opposite.</li>
+<li>
+D-1 3-min 15:24 and 15:27 are opposite.
+</li>
 
-<li>15:24 volume is greater than 15:27.</li>
+<li>
+D-1 15:24 volume is greater than 15:27.
+</li>
 
-<li>At least 2 of 15:15, 15:18 and 15:21 match 15:24.</li>
+<li>
+D-1 09:15 is opposite to 15:24.
+</li>
 
-<li>09:15 and 09:18 are both opposite to 15:24.</li>
+<li>
+D-1 09:18 is opposite to 15:24.
+</li>
 
-<li>Next trading day 09:15 open entry.</li>
+<li>
+D-2 1-min 15:28 matches D-1 3-min 15:24.
+</li>
 
-<li>Direction follows 15:24.</li>
+<li>
+D0 09:15 open entry.
+</li>
 
-<li>Exit at 15:27 open.</li>
+<li>
+D0 15:27 open exit.
+</li>
 
-<li>No 1-minute conditions.</li>
-
-<li>No target or stop loss.</li>
+<li>
+No target or stop loss.
+</li>
 
 </ul>
 
 </div>
+
 
 <div class="card">
 
@@ -1535,7 +2052,7 @@ Next-day 09:15 entry → 15:27 exit
 </html>
 """
 
-    html_path.write_text(
+    OUTPUT_HTML.write_text(
         html,
         encoding="utf-8"
     )
@@ -1547,48 +2064,48 @@ Next-day 09:15 entry → 15:27 exit
 
 def main():
 
+    print()
     print("=" * 70)
-    print("NSE 3-MINUTE STRATEGY BACKTEST")
+    print("NSE BACKTEST STARTING")
     print("=" * 70)
 
-    print("\nStrategy:")
-    print("15:24 vs 15:27 = opposite")
-    print("15:24 volume > 15:27 volume")
-    print("At least 2 of 15:15/18/21 = 15:24 trend")
-    print("09:15 and 09:18 = opposite to 15:24")
-    print("Next day 09:15 OPEN entry")
-    print("15:27 OPEN exit")
-    print("ALL 1-MINUTE CONDITIONS REMOVED")
+    print()
+    print("D-1 3-min 15:24 vs 15:27 = OPPOSITE")
+    print("D-1 15:24 volume > 15:27 volume")
+    print("D-1 09:15 = OPPOSITE to 15:24")
+    print("D-1 09:18 = OPPOSITE to 15:24")
+    print("D-2 1-min 15:28 = SAME as D-1 3-min 15:24")
+    print("D0 09:15 OPEN = ENTRY")
+    print("D0 15:27 OPEN = EXIT")
+    print("No target / stop loss")
     print()
 
-    # --------------------------------------------------------
-    # Find files
-    # --------------------------------------------------------
+    # ========================================================
+    # FIND DATA
+    # ========================================================
 
     files = find_parquet_files()
 
     if not files:
 
+        print()
         print(
-            "\nERROR: No Parquet files found."
-        )
-
-        print(
-            "Make sure the historical-data repositories "
-            "were cloned correctly."
+            "ERROR: No Parquet files found."
         )
 
         return
 
-    # --------------------------------------------------------
-    # Process stocks
-    # --------------------------------------------------------
+    # ========================================================
+    # PROCESS
+    # ========================================================
 
     all_trades = []
 
-    total = len(files)
+    total_files = len(
+        files
+    )
 
-    for i, path in enumerate(
+    for number, path in enumerate(
         files,
         start=1
     ):
@@ -1597,49 +2114,47 @@ def main():
 
             trades = process_stock(
                 path,
-                i,
-                total
+                number,
+                total_files
             )
 
             if trades:
+
                 all_trades.extend(
                     trades
                 )
 
         except Exception as e:
 
+            print()
             print(
-                f"ERROR processing "
-                f"{path}: {e}"
+                f"ERROR processing {path}"
             )
 
-    # --------------------------------------------------------
-    # Convert to DataFrame
-    # --------------------------------------------------------
+            print(
+                repr(e)
+            )
+
+    # ========================================================
+    # DATAFRAME
+    # ========================================================
 
     trades_df = pd.DataFrame(
         all_trades
     )
 
+    # ========================================================
+    # NO TRADES
+    # ========================================================
+
     if trades_df.empty:
 
-        print(
-            "\n=================================================="
-        )
+        print()
+        print("=" * 70)
+        print("BACKTEST COMPLETE")
+        print("=" * 70)
+        print("No qualifying trades.")
 
-        print(
-            "BACKTEST FINISHED"
-        )
-
-        print(
-            "No qualifying trades were found."
-        )
-
-        print(
-            "=================================================="
-        )
-
-        # Still create output files
         trades_df.to_csv(
             OUTPUT_TRADES,
             index=False
@@ -1663,9 +2178,9 @@ def main():
 
         return
 
-    # --------------------------------------------------------
-    # Sort
-    # --------------------------------------------------------
+    # ========================================================
+    # SORT
+    # ========================================================
 
     trades_df = trades_df.sort_values(
         [
@@ -1676,18 +2191,14 @@ def main():
         drop=True
     )
 
-    # --------------------------------------------------------
-    # Save trades
-    # --------------------------------------------------------
+    # ========================================================
+    # SAVE
+    # ========================================================
 
     trades_df.to_csv(
         OUTPUT_TRADES,
         index=False
     )
-
-    # --------------------------------------------------------
-    # Create reports
-    # --------------------------------------------------------
 
     create_stock_summary(
         trades_df
@@ -1705,28 +2216,36 @@ def main():
         trades_df
     )
 
-    # --------------------------------------------------------
-    # Final console output
-    # --------------------------------------------------------
+    # ========================================================
+    # FINAL OUTPUT
+    # ========================================================
+
+    returns = trades_df[
+        "net_return_pct"
+    ]
+
+    wins = int(
+        trades_df["win"].sum()
+    )
+
+    print()
+    print("=" * 70)
+    print("BACKTEST COMPLETE")
+    print("=" * 70)
 
     print(
-        "\n============================================================"
+        f"Total trades: "
+        f"{len(trades_df):,}"
     )
 
     print(
-        "BACKTEST COMPLETE"
+        f"Wins: "
+        f"{wins:,}"
     )
 
     print(
-        "============================================================"
-    )
-
-    print(
-        f"Trades: {len(trades_df):,}"
-    )
-
-    print(
-        f"Wins: {int(trades_df['win'].sum()):,}"
+        f"Losses: "
+        f"{len(trades_df) - wins:,}"
     )
 
     print(
@@ -1736,51 +2255,33 @@ def main():
 
     print(
         f"Average return: "
-        f"{trades_df['net_return_pct'].mean():.4f}%"
+        f"{returns.mean():.4f}%"
     )
 
     print(
         f"Total return: "
-        f"{trades_df['net_return_pct'].sum():.4f}%"
+        f"{returns.sum():.4f}%"
     )
 
     print(
         f"Profit factor: "
-        f"{calculate_profit_factor(trades_df['net_return_pct']):.4f}"
+        f"{calculate_profit_factor(returns):.4f}"
     )
 
     print(
-        f"Max drawdown: "
-        f"{calculate_max_drawdown(trades_df['net_return_pct']):.4f}%"
+        f"Maximum drawdown: "
+        f"{calculate_max_drawdown(returns):.4f}%"
     )
 
-    print(
-        "\nResults saved to:"
-    )
+    print()
+    print("Files created:")
+    print(f"  {OUTPUT_TRADES}")
+    print(f"  {OUTPUT_STOCKS}")
+    print(f"  {OUTPUT_DAILY}")
+    print(f"  {OUTPUT_SUMMARY}")
+    print(f"  {OUTPUT_HTML}")
 
-    print(
-        f"  {OUTPUT_TRADES}"
-    )
-
-    print(
-        f"  {OUTPUT_STOCKS}"
-    )
-
-    print(
-        f"  {OUTPUT_DAILY}"
-    )
-
-    print(
-        f"  {OUTPUT_SUMMARY}"
-    )
-
-    print(
-        f"  {RESULTS_DIR / 'index.html'}"
-    )
-
-    print(
-        "============================================================"
-    )
+    print("=" * 70)
 
 
 # ============================================================
