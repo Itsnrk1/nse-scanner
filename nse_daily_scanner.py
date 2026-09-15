@@ -1,5 +1,5 @@
 # =============================================================================
-# NSE DAILY SCANNER — FAST + RELIABLE VERSION
+# NSE DAILY SCANNER â€” FAST + RELIABLE VERSION
 # =============================================================================
 #
 # EXACT STRATEGY CONDITIONS
@@ -9,7 +9,7 @@
 #       15:24 volume > 15:27 volume
 #
 # 2) 3-MIN MORNING:
-#       09:15 and 09:18 must BOTH be in the SAME trend as 15:24
+#       9:15 and 9:18 must BOTH match 15:24 direction
 #
 # 3) 1-MIN:
 #       15:28 and 15:29 must be OPPOSITE trends
@@ -22,13 +22,14 @@
 #       3-min 15:24
 #
 # ENTRY:
-#       Next trading day at 09:15 open
+#       Next trading day at 9:15 open
 #
 # EXIT:
 #       15:27
-#
 # =============================================================================
-#
+
+
+# =============================================================================
 # INSTALL
 # =============================================================================
 #
@@ -74,18 +75,43 @@ except ImportError:
 # CONFIGURATION
 # =============================================================================
 
+# -------------------------------------------------------------------------
+# SPEED
+# -------------------------------------------------------------------------
+
+# Start with 12 workers.
+#
+# If Yahoo begins rate limiting:
+#
+#     12 -> 10 -> 8
+#
+# Do NOT immediately use 30-50 workers.
+#
 MAX_WORKERS = 12
 
+
+# Number of retries for a failed request.
 MAX_RETRIES = 4
 
+
+# Initial data request.
+#
+# 3 days is normally enough when scanner is run after the market closes.
+#
 INITIAL_PERIOD = "3d"
 
+
+# Fallback period if the initial request does not contain a complete day.
+#
 FIVE_DAY_FALLBACK = "7d"
 
+
+# Timeout for each Yahoo request.
 REQUEST_TIMEOUT = 20
 
-MIN_RETRY_SLEEP = 1.0
 
+# Small random delay after failed requests.
+MIN_RETRY_SLEEP = 1.0
 MAX_RETRY_SLEEP = 3.0
 
 
@@ -145,7 +171,7 @@ NIFTY_50 = [
     "BAJAJ-AUTO",
     "SHRIRAMFIN",
     "LTIM",
-    "UPL"
+    "UPL",
 
 ]
 
@@ -310,16 +336,14 @@ NIFTY_NEXT_150 = [
     "GRANULES",
     "GRSE",
     "HFCL",
-    "HONAUT"
+    "HONAUT",
 
 ]
 
 
-STOCK_UNIVERSE = list(
-    dict.fromkeys(
-        NIFTY_50 + NIFTY_NEXT_150
-    )
-)
+STOCK_UNIVERSE = list(dict.fromkeys(
+    NIFTY_50 + NIFTY_NEXT_150
+))
 
 
 # =============================================================================
@@ -337,11 +361,7 @@ try:
         index_name="Nifty 500"
     )
 
-    if (
-        df is not None
-        and not df.empty
-        and "Symbol" in df.columns
-    ):
+    if df is not None and not df.empty and "Symbol" in df.columns:
 
         fetched = (
             df["Symbol"]
@@ -352,9 +372,7 @@ try:
             .tolist()
         )
 
-        fetched = list(
-            dict.fromkeys(fetched)
-        )
+        fetched = list(dict.fromkeys(fetched))
 
         if len(fetched) > len(STOCK_UNIVERSE):
 
@@ -386,9 +404,7 @@ try:
     import requests
     from io import StringIO
 
-    print(
-        "Attempting to load NSE official equity list..."
-    )
+    print("Attempting to load NSE official equity list...")
 
     headers = {
 
@@ -404,7 +420,7 @@ try:
             "application/xml;q=0.9,*/*;q=0.8",
 
         "Accept-Language":
-            "en-US,en;q=0.9"
+            "en-US,en;q=0.9",
 
     }
 
@@ -421,9 +437,12 @@ try:
 
 
     response = session.get(
+
         "https://nsearchives.nseindia.com/"
         "content/equities/sec_list.csv",
+
         timeout=20
+
     )
 
 
@@ -436,22 +455,28 @@ try:
 
 
     symbol_col = next(
+
         (
             c
             for c in full_df.columns
             if "symbol" in c.lower()
         ),
+
         None
+
     )
 
 
     series_col = next(
+
         (
             c
             for c in full_df.columns
             if "series" in c.lower()
         ),
+
         None
+
     )
 
 
@@ -469,14 +494,18 @@ try:
 
 
         symbols = (
+
             full_df[symbol_col]
             .dropna()
             .astype(str)
             .str.strip()
             .str.upper()
             .tolist()
+
         )
 
+
+        # Remove obvious non-equity instruments.
 
         banned = (
 
@@ -488,14 +517,12 @@ try:
             "MUTUAL",
             "FUND",
             "INDEX"
-
         )
 
 
         symbols = [
 
-            s
-            for s in symbols
+            s for s in symbols
             if not any(
                 word in s
                 for word in banned
@@ -504,9 +531,7 @@ try:
         ]
 
 
-        symbols = list(
-            dict.fromkeys(symbols)
-        )
+        symbols = list(dict.fromkeys(symbols))
 
 
         if len(symbols) > len(STOCK_UNIVERSE):
@@ -527,16 +552,12 @@ except Exception as e:
 
 
 print()
-
 print("=" * 70)
-
 print(
     f"FINAL STOCK UNIVERSE: "
     f"{len(STOCK_UNIVERSE)}"
 )
-
 print("=" * 70)
-
 print()
 
 
@@ -559,7 +580,7 @@ NEEDED_HM = {
 
     1527,
     1528,
-    1529
+    1529,
 
 }
 
@@ -568,10 +589,7 @@ NEEDED_HM = {
 # HELPER: DIRECTION
 # =============================================================================
 
-def candle_direction(
-    open_price,
-    close_price
-):
+def candle_direction(open_price, close_price):
 
     if close_price > open_price:
         return 1
@@ -592,10 +610,9 @@ def clean_yahoo_data(df):
         return None
 
 
-    if isinstance(
-        df.columns,
-        pd.MultiIndex
-    ):
+    # Flatten MultiIndex columns if Yahoo returns them.
+
+    if isinstance(df.columns, pd.MultiIndex):
 
         df.columns = [
             c[0]
@@ -606,8 +623,9 @@ def clean_yahoo_data(df):
     df = df.reset_index()
 
 
-    timestamp_col = None
+    # Locate timestamp column.
 
+    timestamp_col = None
 
     for candidate in (
         "Datetime",
@@ -619,7 +637,6 @@ def clean_yahoo_data(df):
         if candidate in df.columns:
 
             timestamp_col = candidate
-
             break
 
 
@@ -636,20 +653,16 @@ def clean_yahoo_data(df):
 
     valid_ts = ts.notna()
 
-
     if not valid_ts.any():
         return None
 
 
-    df = df.loc[
-        valid_ts
-    ].copy()
+    df = df.loc[valid_ts].copy()
+
+    ts = ts.loc[valid_ts]
 
 
-    ts = ts.loc[
-        valid_ts
-    ]
-
+    # Convert to India time.
 
     if ts.dt.tz is not None:
 
@@ -659,10 +672,15 @@ def clean_yahoo_data(df):
 
     else:
 
+        # Yahoo timestamps should normally be
+        # timezone aware. This is a fallback.
+
         ts = ts.dt.tz_localize(
             "Asia/Kolkata"
         )
 
+
+    # Required columns.
 
     required = [
         "Open",
@@ -682,9 +700,7 @@ def clean_yahoo_data(df):
     out = pd.DataFrame({
 
         "date":
-            ts.dt.strftime(
-                "%Y-%m-%d"
-            ),
+            ts.dt.strftime("%Y-%m-%d"),
 
         "hm":
             (
@@ -709,12 +725,12 @@ def clean_yahoo_data(df):
             pd.to_numeric(
                 df["Volume"],
                 errors="coerce"
-            ).values
+            ).values,
 
     })
 
 
-    # NSE regular session only.
+    # Keep only NSE regular trading session.
 
     out = out[
         out["hm"].between(
@@ -723,6 +739,8 @@ def clean_yahoo_data(df):
         )
     ]
 
+
+    # Remove invalid values.
 
     out = out.dropna(
         subset=[
@@ -733,12 +751,17 @@ def clean_yahoo_data(df):
     )
 
 
+    # Duplicate protection.
+
     out = out.drop_duplicates(
+
         subset=[
             "date",
             "hm"
         ],
+
         keep="last"
+
     )
 
 
@@ -752,12 +775,11 @@ def clean_yahoo_data(df):
 def find_complete_days(rows):
 
     if rows is None or rows.empty:
+
         return []
 
 
-    by_date = rows.groupby(
-        "date"
-    )
+    by_date = rows.groupby("date")
 
 
     complete_days = []
@@ -774,9 +796,7 @@ def find_complete_days(rows):
             available
         ):
 
-            complete_days.append(
-                date
-            )
+            complete_days.append(date)
 
 
     return sorted(
@@ -788,12 +808,10 @@ def find_complete_days(rows):
 # FETCH DATA
 # =============================================================================
 
-def download_symbol(
-    symbol,
-    period
-):
+def download_symbol(symbol, period):
 
     ticker = f"{symbol}.NS"
+
 
     last_error = None
 
@@ -848,6 +866,8 @@ def download_symbol(
             last_error = e
 
 
+        # Exponential backoff + jitter.
+
         if attempt < MAX_RETRIES - 1:
 
             sleep_time = min(
@@ -881,6 +901,10 @@ def download_symbol(
 
 def fetch_symbol_rows(symbol):
 
+    # ---------------------------------------------------------
+    # FIRST: small request
+    # ---------------------------------------------------------
+
     rows = download_symbol(
         symbol,
         INITIAL_PERIOD
@@ -899,6 +923,10 @@ def fetch_symbol_rows(symbol):
             return rows, "OK"
 
 
+    # ---------------------------------------------------------
+    # FALLBACK: larger request
+    # ---------------------------------------------------------
+
     rows = download_symbol(
         symbol,
         FIVE_DAY_FALLBACK
@@ -916,6 +944,9 @@ def fetch_symbol_rows(symbol):
 
             return rows, "FALLBACK"
 
+
+        # Data exists but required candles
+        # aren't complete.
 
         return rows, "INCOMPLETE"
 
@@ -946,7 +977,6 @@ def evaluate_rows(rows):
     for _, row in rows.iterrows():
 
         date = row["date"]
-
         hm = int(row["hm"])
 
 
@@ -964,17 +994,32 @@ def evaluate_rows(rows):
 
     def valid_candle(row):
 
-        if row is None:
-            return False
-
         try:
 
             return (
+
                 pd.notna(row["open"])
+
                 and
+
                 pd.notna(row["close"])
+
                 and
+
                 pd.notna(row["volume"])
+
+                and
+
+                float(row["open"]) > 0
+
+                and
+
+                float(row["close"]) > 0
+
+                and
+
+                float(row["volume"]) >= 0
+
             )
 
         except Exception:
@@ -983,302 +1028,201 @@ def evaluate_rows(rows):
 
 
     # -------------------------------------------------------------------------
-    # FIND LATEST COMPLETE SIGNAL DAY
+    # FIND LATEST COMPLETE DAY
+    #
+    # IMPORTANT:
+    #
+    # We search backwards.
+    #
+    # Therefore, if Yahoo's newest day is incomplete,
+    # we don't automatically throw away the stock.
     # -------------------------------------------------------------------------
 
-    complete_days = []
+    complete_dates = []
 
 
-    for date, day in by_date.items():
+    for date, minute_map in by_date.items():
 
-        if all(
-            hm in day
-            for hm in NEEDED_HM
-        ):
+        good = True
 
-            complete_days.append(
+
+        for hm in NEEDED_HM:
+
+            if hm not in minute_map:
+
+                good = False
+                break
+
+
+            if not valid_candle(
+                minute_map[hm]
+            ):
+
+                good = False
+                break
+
+
+        if good:
+
+            complete_dates.append(
                 date
             )
 
 
-    if not complete_days:
+    if not complete_dates:
 
         return {
             "status": "INCOMPLETE"
         }
 
 
+    # Latest usable trading day.
+
     signal_date = max(
-        complete_days
+        complete_dates
     )
 
 
-    day = by_date[
+    m = by_date[
         signal_date
     ]
 
 
-    # -------------------------------------------------------------------------
-    # REQUIRED 1-MIN CANDLES
-    # -------------------------------------------------------------------------
-
-    required_rows = [
-
-        915,
-        916,
-        917,
-        918,
-        919,
-        920,
-
-        1524,
-        1525,
-        1526,
-        1527,
-        1528,
-        1529
-
-    ]
-
-
-    if not all(
-        hm in day
-        for hm in required_rows
-    ):
-
-        return {
-            "status": "INCOMPLETE",
-            "signal_date": signal_date
-        }
-
-
-    for hm in required_rows:
-
-        if not valid_candle(
-            day[hm]
-        ):
-
-            return {
-                "status": "INCOMPLETE",
-                "signal_date": signal_date
-            }
-
-
-    # -------------------------------------------------------------------------
-    # 3-MINUTE CANDLE AGGREGATION
-    # -------------------------------------------------------------------------
+    # =========================================================================
+    # 3-MIN AGGREGATION
+    # =========================================================================
 
     def aggregate_3m(
-        minute_rows
+        minutes
     ):
 
-        if not minute_rows:
-            return None
-
-
-        first = minute_rows[0]
-
-        last = minute_rows[-1]
-
-
-        if any(
-            not valid_candle(r)
-            for r in minute_rows
-        ):
-
-            return None
+        candles = [
+            m[x]
+            for x in minutes
+        ]
 
 
         return {
 
             "open":
-                float(first["open"]),
+                float(
+                    candles[0]["open"]
+                ),
 
             "close":
-                float(last["close"]),
+                float(
+                    candles[-1]["close"]
+                ),
 
             "volume":
                 sum(
-                    float(r["volume"])
-                    for r in minute_rows
+                    float(
+                        x["volume"]
+                    )
+                    for x in candles
                 )
 
         }
 
 
     # -------------------------------------------------------------------------
-    # 09:15 3-MIN
-    #
-    # 09:15 = 09:15, 09:16, 09:17
-    # -------------------------------------------------------------------------
-
-    candle_915_3m = aggregate_3m(
-        [
-            day[915],
-            day[916],
-            day[917]
-        ]
-    )
-
-
-    # -------------------------------------------------------------------------
-    # 09:18 3-MIN
-    #
-    # 09:18 = 09:18, 09:19, 09:20
-    # -------------------------------------------------------------------------
-
-    candle_918_3m = aggregate_3m(
-        [
-            day[918],
-            day[919],
-            day[920]
-        ]
-    )
-
-
-    # -------------------------------------------------------------------------
     # 15:24 3-MIN
-    #
-    # 15:24 = 15:24, 15:25, 15:26
     # -------------------------------------------------------------------------
 
-    candle_1524_3m = aggregate_3m(
+    candle_1524 = aggregate_3m(
+
         [
-            day[1524],
-            day[1525],
-            day[1526]
+            1524,
+            1525,
+            1526
         ]
+
     )
 
 
     # -------------------------------------------------------------------------
     # 15:27 3-MIN
-    #
-    # 15:27 = 15:27, 15:28, 15:29
     # -------------------------------------------------------------------------
 
-    candle_1527_3m = aggregate_3m(
+    candle_1527 = aggregate_3m(
+
         [
-            day[1527],
-            day[1528],
-            day[1529]
+            1527,
+            1528,
+            1529
         ]
+
     )
 
 
-    if any(
-        x is None
-        for x in [
-            candle_915_3m,
-            candle_918_3m,
-            candle_1524_3m,
-            candle_1527_3m
-        ]
-    ):
+    # -------------------------------------------------------------------------
+    # 09:15 3-MIN
+    # -------------------------------------------------------------------------
 
-        return {
-            "status": "INCOMPLETE",
-            "signal_date": signal_date
-        }
+    candle_915 = aggregate_3m(
+
+        [
+            915,
+            916,
+            917
+        ]
+
+    )
 
 
     # -------------------------------------------------------------------------
+    # 09:18 3-MIN
+    # -------------------------------------------------------------------------
+
+    candle_918 = aggregate_3m(
+
+        [
+            918,
+            919,
+            920
+        ]
+
+    )
+
+
+    # =========================================================================
     # DIRECTIONS
-    # -------------------------------------------------------------------------
-
-    dir_915_3m = candle_direction(
-
-        candle_915_3m["open"],
-
-        candle_915_3m["close"]
-
-    )
-
-
-    dir_918_3m = candle_direction(
-
-        candle_918_3m["open"],
-
-        candle_918_3m["close"]
-
-    )
-
+    # =========================================================================
 
     dir_1524 = candle_direction(
 
-        candle_1524_3m["open"],
-
-        candle_1524_3m["close"]
+        candle_1524["open"],
+        candle_1524["close"]
 
     )
 
 
     dir_1527 = candle_direction(
 
-        candle_1527_3m["open"],
+        candle_1527["open"],
+        candle_1527["close"]
 
-        candle_1527_3m["close"]
-
-    )
-
-
-    vol_1524 = candle_1524_3m[
-        "volume"
-    ]
-
-
-    vol_1527 = candle_1527_3m[
-        "volume"
-    ]
-
-
-    # -------------------------------------------------------------------------
-    # 1-MINUTE 15:28 / 15:29
-    # -------------------------------------------------------------------------
-
-    candle_1528_1m = day[1528]
-
-    candle_1529_1m = day[1529]
-
-
-    dir_1528_1m = candle_direction(
-
-        candle_1528_1m["open"],
-
-        candle_1528_1m["close"]
-
-    )
-
-
-    dir_1529_1m = candle_direction(
-
-        candle_1529_1m["open"],
-
-        candle_1529_1m["close"]
-
-    )
-
-
-    vol_1528 = float(
-        candle_1528_1m["volume"]
-    )
-
-
-    vol_1529 = float(
-        candle_1529_1m["volume"]
     )
 
 
     # =========================================================================
-    # STRATEGY CONDITIONS
-    # =========================================================================
-
-    # -------------------------------------------------------------------------
     # CONDITION 1
     #
-    # 15:24 and 15:27 must be opposite.
-    # 15:24 volume must be greater than 15:27.
-    # -------------------------------------------------------------------------
+    # 3-MIN 15:24 AND 15:27
+    # OPPOSITE
+    #
+    # 15:24 VOLUME > 15:27
+    # =========================================================================
+
+    vol_1524 = candle_1524[
+        "volume"
+    ]
+
+
+    vol_1527 = candle_1527[
+        "volume"
+    ]
+
 
     cond1 = (
 
@@ -1299,18 +1243,30 @@ def evaluate_rows(rows):
     )
 
 
-    # -------------------------------------------------------------------------
+    # =========================================================================
     # CONDITION 2
     #
-    # 09:15 and 09:18 must BOTH be in the same
-    # trend as 15:24.
-    # -------------------------------------------------------------------------
+    # 3-MIN 09:15 AND 09:18
+    # MUST BOTH MATCH 15:24
+    # =========================================================================
+
+    dir_915_3m = candle_direction(
+
+        candle_915["open"],
+        candle_915["close"]
+
+    )
+
+
+    dir_918_3m = candle_direction(
+
+        candle_918["open"],
+        candle_918["close"]
+
+    )
+
 
     cond2 = (
-
-        dir_1524 != 0
-
-        and
 
         dir_915_3m != 0
 
@@ -1320,21 +1276,54 @@ def evaluate_rows(rows):
 
         and
 
-        dir_915_3m == dir_1524
+        dir_1524 != 0
 
         and
 
-        dir_918_3m == dir_1524
+        dir_915_3m == dir_918_3m
+
+        and
+
+        dir_915_3m != dir_1524
 
     )
 
 
-    # -------------------------------------------------------------------------
-    # CONDITION 3
+    # =========================================================================
+    
+# CONDITION 3
     #
-    # 15:28 and 15:29 must be opposite.
-    # 15:28 volume must be greater than 15:29.
-    # -------------------------------------------------------------------------
+    # 1-MIN 15:28 AND 15:29
+    # OPPOSITE
+    #
+    # 15:28 VOLUME > 15:29
+    # =========================================================================
+
+    dir_1528_1m = candle_direction(
+
+        m[1528]["open"],
+        m[1528]["close"]
+
+    )
+
+
+    dir_1529_1m = candle_direction(
+
+        m[1529]["open"],
+        m[1529]["close"]
+
+    )
+
+
+    vol_1528 = float(
+        m[1528]["volume"]
+    )
+
+
+    vol_1529 = float(
+        m[1529]["volume"]
+    )
+
 
     cond3 = (
 
@@ -1355,11 +1344,12 @@ def evaluate_rows(rows):
     )
 
 
-    # -------------------------------------------------------------------------
+    # =========================================================================
     # CONDITION 4
     #
-    # 1-minute 15:28 must match 3-minute 15:24.
-    # -------------------------------------------------------------------------
+    # 1-MIN 15:28
+    # MUST MATCH 3-MIN 15:24
+    # =========================================================================
 
     cond4 = (
 
@@ -1376,9 +1366,9 @@ def evaluate_rows(rows):
     )
 
 
-    # -------------------------------------------------------------------------
+    # =========================================================================
     # FINAL RESULT
-    # -------------------------------------------------------------------------
+    # =========================================================================
 
     passed = (
 
@@ -1393,9 +1383,9 @@ def evaluate_rows(rows):
     )
 
 
-    # -------------------------------------------------------------------------
+    # =========================================================================
     # FINAL DIRECTION
-    # -------------------------------------------------------------------------
+    # =========================================================================
 
     if dir_1524 == 1:
 
@@ -1410,47 +1400,22 @@ def evaluate_rows(rows):
         direction = None
 
 
-    # =========================================================================
-    # RETURN RESULT
-    # =========================================================================
-
     return {
 
-        "status": "MATCH" if passed else "NO_MATCH",
+        "status":
+            "PASS"
+            if passed
+            else
+            "FAIL",
 
-        "signal_date": signal_date,
+        "date":
+            signal_date,
 
-        "direction": direction,
-
-        "dir_915_3m":
-            dir_915_3m,
-
-        "dir_918_3m":
-            dir_918_3m,
-
-        "dir_1524":
-            dir_1524,
-
-        "dir_1527":
-            dir_1527,
-
-        "dir_1528_1m":
-            dir_1528_1m,
-
-        "dir_1529_1m":
-            dir_1529_1m,
-
-        "vol_1524":
-            vol_1524,
-
-        "vol_1527":
-            vol_1527,
-
-        "vol_1528":
-            vol_1528,
-
-        "vol_1529":
-            vol_1529,
+        "direction":
+            direction
+            if passed
+            else
+            None,
 
         "cond1":
             cond1,
@@ -1464,21 +1429,34 @@ def evaluate_rows(rows):
         "cond4":
             cond4,
 
-        "passed":
-            passed
+        "details": {
+
+            "15:24_vol":
+                f"{vol_1524:,.0f}",
+
+            "15:27_vol":
+                f"{vol_1527:,.0f}",
+
+            "15:28_vol":
+                f"{vol_1528:,.0f}",
+
+            "15:29_vol":
+                f"{vol_1529:,.0f}",
+
+        }
 
     }
 
 
 # =============================================================================
-# SCAN ONE SYMBOL
+# SCAN ONE STOCK
 # =============================================================================
 
-def scan_symbol(symbol):
+def scan_one_symbol(symbol):
 
     try:
 
-        rows, fetch_status = fetch_symbol_rows(
+        rows, data_status = fetch_symbol_rows(
             symbol
         )
 
@@ -1491,7 +1469,10 @@ def scan_symbol(symbol):
                     symbol,
 
                 "status":
-                    "NO_DATA"
+                    "NO_DATA",
+
+                "data_status":
+                    data_status
 
             }
 
@@ -1503,7 +1484,7 @@ def scan_symbol(symbol):
 
         result["symbol"] = symbol
 
-        result["fetch_status"] = fetch_status
+        result["data_status"] = data_status
 
 
         return result
@@ -1526,193 +1507,371 @@ def scan_symbol(symbol):
 
 
 # =============================================================================
-# FORMAT DIRECTION
+# FAST PARALLEL SCAN
 # =============================================================================
 
-def direction_text(direction):
+def scan_all_symbols(symbols):
 
-    if direction == 1:
-        return "GREEN"
+    total = len(symbols)
 
-    if direction == -1:
-        return "RED"
+    results = []
 
-    return "DOJI"
+    completed = 0
 
 
-# =============================================================================
-# FORMAT VOLUME
-# =============================================================================
-
-def format_volume(value):
-
-    if value is None:
-        return "-"
+    print()
+    print(
+        f"Scanning {total} stocks "
+        f"with {MAX_WORKERS} workers..."
+    )
+    print()
 
 
-    try:
-
-        value = float(value)
+    start = time.time()
 
 
-        if value >= 1_000_000:
+    with ThreadPoolExecutor(
 
-            return (
-                f"{value / 1_000_000:.2f}M"
+        max_workers=MAX_WORKERS
+
+    ) as executor:
+
+
+        futures = {
+
+            executor.submit(
+                scan_one_symbol,
+                symbol
+            ):
+                symbol
+
+            for symbol in symbols
+
+        }
+
+
+        for future in as_completed(
+            futures
+        ):
+
+            symbol = futures[future]
+
+
+            try:
+
+                result = future.result()
+
+
+            except Exception as e:
+
+                result = {
+
+                    "symbol":
+                        symbol,
+
+                    "status":
+                        "ERROR",
+
+                    "error":
+                        str(e)
+
+                }
+
+
+            results.append(
+                result
             )
 
 
-        if value >= 1_000:
+            completed += 1
 
-            return (
-                f"{value / 1_000:.1f}K"
+
+            status = result.get(
+                "status"
             )
 
 
-        return f"{value:.0f}"
+            if status == "PASS":
+
+                print(
+
+                    f"[{completed}/{total}] "
+                    f"{symbol:<15} "
+                    f"*** MATCH *** "
+                    f"{result.get('direction')} "
+                    f"({result.get('date')})"
+
+                )
 
 
-    except Exception:
+            elif status == "ERROR":
 
-        return "-"
+                print(
+
+                    f"[{completed}/{total}] "
+                    f"{symbol:<15} "
+                    f"ERROR"
+
+                )
+
+
+            elif status == "NO_DATA":
+
+                print(
+
+                    f"[{completed}/{total}] "
+                    f"{symbol:<15} "
+                    f"NO DATA"
+
+                )
+
+
+            elif status == "INCOMPLETE":
+
+                print(
+
+                    f"[{completed}/{total}] "
+                    f"{symbol:<15} "
+                    f"INCOMPLETE DATA"
+
+                )
+
+
+            else:
+
+                print(
+
+                    f"[{completed}/{total}] "
+                    f"{symbol:<15} "
+                    f"NO MATCH"
+
+                )
+
+
+    elapsed = time.time() - start
+
+
+    results.sort(
+
+        key=lambda x:
+            x.get(
+                "symbol",
+                ""
+            )
+
+    )
+
+
+    return results, elapsed
 
 
 # =============================================================================
 # HTML REPORT
 # =============================================================================
 
-def generate_html(
+def generate_html_report(
     results,
-    signal_date,
-    output_file="index.html"
+    elapsed
 ):
 
     matches = [
 
         r
         for r in results
-        if r.get("status") == "MATCH"
+
+        if r.get("status")
+        == "PASS"
 
     ]
 
 
-    matches = sorted(
+    fails = [
 
-        matches,
+        r
+        for r in results
+
+        if r.get("status")
+        == "FAIL"
+
+    ]
+
+
+    incomplete = [
+
+        r
+        for r in results
+
+        if r.get("status")
+        == "INCOMPLETE"
+
+    ]
+
+
+    no_data = [
+
+        r
+        for r in results
+
+        if r.get("status")
+        == "NO_DATA"
+
+    ]
+
+
+    errors = [
+
+        r
+        for r in results
+
+        if r.get("status")
+        == "ERROR"
+
+    ]
+
+
+    # -------------------------------------------------------------------------
+    # MATCH LIST
+    # -------------------------------------------------------------------------
+
+    if matches:
+
+        match_html = "".join(
+
+            f"""
+            <div class="match">
+                <span class="direction
+                {'long' if r['direction']=='LONG'
+                else 'short'}">
+                    {r['direction']}
+                </span>
+
+                <b>{r['symbol']}</b>
+
+                <span class="date">
+                    Signal day: {r['date']}
+                </span>
+            </div>
+            """
+
+            for r in matches
+
+        )
+
+    else:
+
+        match_html = """
+
+        <div class="none">
+            No stocks matched today.
+        </div>
+
+        """
+
+
+    # -------------------------------------------------------------------------
+    # TABLE
+    # -------------------------------------------------------------------------
+
+    table_rows = ""
+
+
+    for r in sorted(
+
+        results,
 
         key=lambda x: (
 
-            0
-            if x.get("direction") == "LONG"
-            else 1,
+            x.get("status")
+            != "PASS",
 
             x.get("symbol", "")
 
         )
 
-    )
+    ):
 
 
-    total = len(results)
-
-    match_count = len(matches)
-
-
-    long_count = sum(
-
-        1
-        for r in matches
-        if r.get("direction") == "LONG"
-
-    )
-
-
-    short_count = sum(
-
-        1
-        for r in matches
-        if r.get("direction") == "SHORT"
-
-    )
-
-
-    rows_html = ""
-
-
-    for r in matches:
-
-        symbol = r.get(
-            "symbol",
-            ""
+        status = r.get(
+            "status",
+            "UNKNOWN"
         )
 
 
-        direction = r.get(
-            "direction",
-            ""
-        )
+        if status == "PASS":
+
+            status_class = "pass"
 
 
-        if direction == "LONG":
+        elif status == "FAIL":
 
-            direction_class = "long"
+            status_class = "fail"
 
 
         else:
 
-            direction_class = "short"
+            status_class = "skip"
 
 
-        rows_html += f"""
+        details = r.get(
+            "details",
+            {}
+        )
+
+
+        table_rows += f"""
 
         <tr>
 
-            <td>
-                <strong>{symbol}</strong>
-            </td>
-
-            <td class="{direction_class}">
-                {direction}
+            <td class="symbol">
+                {r.get('symbol', '')}
             </td>
 
             <td>
-                {direction_text(r.get("dir_915_3m"))}
+                {r.get('date', 'â€”')}
             </td>
 
             <td>
-                {direction_text(r.get("dir_918_3m"))}
+                {r.get('direction', 'â€”') or 'â€”'}
             </td>
 
             <td>
-                {direction_text(r.get("dir_1524"))}
+                {badge(r.get('cond1'))}
+                <br>
+                <small>
+                15:24:
+                {details.get('15:24_vol', 'â€”')}
+                /
+                15:27:
+                {details.get('15:27_vol', 'â€”')}
+                </small>
             </td>
 
             <td>
-                {direction_text(r.get("dir_1527"))}
+                {badge(r.get('cond2'))}
             </td>
 
             <td>
-                {direction_text(r.get("dir_1528_1m"))}
+                {badge(r.get('cond3'))}
+                <br>
+                <small>
+                15:28:
+                {details.get('15:28_vol', 'â€”')}
+                &gt;
+                15:29:
+                {details.get('15:29_vol', 'â€”')}
+                </small>
             </td>
 
             <td>
-                {direction_text(r.get("dir_1529_1m"))}
+                {badge(r.get('cond4'))}
+            </td>
+
+            <td class="{status_class}">
+                {status}
             </td>
 
             <td>
-                {format_volume(r.get("vol_1524"))}
-            </td>
-
-            <td>
-                {format_volume(r.get("vol_1527"))}
-            </td>
-
-            <td>
-                {format_volume(r.get("vol_1528"))}
-            </td>
-
-            <td>
-                {format_volume(r.get("vol_1529"))}
+                {r.get('data_status', 'â€”')}
             </td>
 
         </tr>
@@ -1720,27 +1879,11 @@ def generate_html(
         """
 
 
-    if not rows_html:
+    # -------------------------------------------------------------------------
+    # HTML
+    # -------------------------------------------------------------------------
 
-        rows_html = """
-
-        <tr>
-
-            <td
-                colspan="12"
-                class="no-match"
-            >
-
-                No stocks matched all 4 conditions.
-
-            </td>
-
-        </tr>
-
-        """
-
-
-    generated_at = datetime.now().strftime(
+    scan_time = datetime.now().strftime(
         "%Y-%m-%d %H:%M:%S"
     )
 
@@ -1755,15 +1898,9 @@ def generate_html(
 
 <meta charset="UTF-8">
 
-<meta
-    name="viewport"
-    content="width=device-width, initial-scale=1.0"
->
-
 <title>
-    NSE Daily Scanner
+NSE Scanner
 </title>
-
 
 <style>
 
@@ -1771,235 +1908,305 @@ body {{
 
     font-family:
         Arial,
-        Helvetica,
         sans-serif;
 
-    margin: 0;
+    background:
+        #f5f5f5;
 
-    background: #f5f7fa;
+    color:
+        #222;
 
-    color: #222;
+    margin:
+        0;
+
+    padding:
+        25px;
 
 }}
-
 
 .container {{
 
-    max-width: 1600px;
+    max-width:
+        1400px;
 
-    margin: auto;
-
-    padding: 20px;
+    margin:
+        auto;
 
 }}
-
 
 h1 {{
 
-    margin-bottom: 5px;
+    margin-bottom:
+        5px;
 
 }}
-
 
 .subtitle {{
 
-    color: #666;
-
-    margin-bottom: 20px;
-
-}}
-
-
-.cards {{
-
-    display: grid;
-
-    grid-template-columns:
-        repeat(
-            auto-fit,
-            minmax(
-                180px,
-                1fr
-            )
-        );
-
-    gap: 15px;
-
-    margin-bottom: 25px;
+    color:
+        #777;
 
 }}
 
+.stats {{
 
-.card {{
+    display:
+        flex;
 
-    background: white;
+    flex-wrap:
+        wrap;
 
-    padding: 18px;
+    gap:
+        10px;
 
-    border-radius: 10px;
-
-    box-shadow:
-        0 2px 8px
-        rgba(
-            0,
-            0,
-            0,
-            0.08
-        );
+    margin:
+        20px 0;
 
 }}
 
+.stat {{
 
-.card-title {{
+    background:
+        white;
 
-    color: #777;
+    padding:
+        15px 20px;
 
-    font-size: 13px;
+    border-radius:
+        8px;
 
-    margin-bottom: 8px;
-
-}}
-
-
-.card-value {{
-
-    font-size: 26px;
-
-    font-weight: bold;
+    border:
+        1px solid #ddd;
 
 }}
 
+.stat b {{
 
-table {{
+    font-size:
+        22px;
 
-    width: 100%;
-
-    border-collapse:
-        collapse;
-
-    background: white;
-
-    border-radius: 10px;
-
-    overflow: hidden;
+    display:
+        block;
 
 }}
 
+.match-box {{
 
-th {{
+    background:
+        white;
 
-    background: #202938;
+    border:
+        1px solid #ddd;
 
-    color: white;
+    border-radius:
+        8px;
 
-    padding: 11px 8px;
+    padding:
+        20px;
 
-    font-size: 12px;
-
-    white-space: nowrap;
+    margin-bottom:
+        20px;
 
 }}
 
+.match {{
 
-td {{
-
-    padding: 11px 8px;
+    padding:
+        8px 0;
 
     border-bottom:
         1px solid #eee;
 
-    text-align: center;
-
-    font-size: 13px;
-
 }}
 
+.direction {{
 
-tr:hover {{
+    display:
+        inline-block;
 
-    background: #f8fafc;
+    padding:
+        3px 7px;
+
+    border-radius:
+        4px;
+
+    font-size:
+        11px;
+
+    font-weight:
+        bold;
+
+    margin-right:
+        8px;
 
 }}
-
 
 .long {{
 
-    color: #0a8f4d;
+    background:
+        #dff5e5;
 
-    font-weight: bold;
+    color:
+        #08752f;
 
 }}
-
 
 .short {{
 
-    color: #d12c2c;
+    background:
+        #f8dddd;
 
-    font-weight: bold;
-
-}}
-
-
-.no-match {{
-
-    padding: 35px;
-
-    color: #777;
+    color:
+        #a52222;
 
 }}
 
+.date {{
 
-.strategy {{
+    color:
+        #777;
 
-    margin-top: 25px;
-
-    background: white;
-
-    padding: 20px;
-
-    border-radius: 10px;
-
-    box-shadow:
-        0 2px 8px
-        rgba(
-            0,
-            0,
-            0,
-            0.08
-        );
+    margin-left:
+        8px;
 
 }}
 
+table {{
 
-.strategy li {{
+    width:
+        100%;
 
-    margin-bottom: 8px;
+    border-collapse:
+        collapse;
+
+    background:
+        white;
+
+    font-size:
+        13px;
 
 }}
 
+th {{
+
+    background:
+        #ededed;
+
+    padding:
+        10px;
+
+    text-align:
+        left;
+
+}}
+
+td {{
+
+    padding:
+        9px 10px;
+
+    border-top:
+        1px solid #eee;
+
+}}
+
+.symbol {{
+
+    font-weight:
+        bold;
+
+}}
+
+small {{
+
+    color:
+        #777;
+
+    font-size:
+        10px;
+
+}}
+
+.badge {{
+
+    display:
+        inline-block;
+
+    padding:
+        2px 6px;
+
+    border-radius:
+        4px;
+
+    font-size:
+        10px;
+
+    font-weight:
+        bold;
+
+}}
+
+.badge.pass {{
+
+    background:
+        #dff5e5;
+
+    color:
+        #08752f;
+
+}}
+
+.badge.fail {{
+
+    background:
+        #f8dddd;
+
+    color:
+        #a52222;
+
+}}
+
+.pass {{
+
+    color:
+        #08752f;
+
+    font-weight:
+        bold;
+
+}}
+
+.fail {{
+
+    color:
+        #999;
+
+}}
+
+.skip {{
+
+    color:
+        #b07000;
+
+}}
+
+.none {{
+
+    color:
+        #777;
+
+}}
 
 .footer {{
 
-    margin-top: 25px;
+    margin-top:
+        25px;
 
-    color: #777;
+    color:
+        #777;
 
-    font-size: 12px;
-
-}}
-
-
-@media (
-    max-width: 900px
-) {{
-
-    table {{
-
-        display: block;
-
-        overflow-x: auto;
-
-    }}
+    font-size:
+        12px;
 
 }}
 
@@ -2014,77 +2221,96 @@ tr:hover {{
 
 
 <h1>
-    NSE Daily Scanner
+NSE Daily Scanner
 </h1>
 
 
 <div class="subtitle">
 
-    Signal date:
-    <strong>{signal_date}</strong>
+Generated:
+{scan_time}
 
-    &nbsp; | &nbsp;
+<br>
 
-    Generated:
-    <strong>{generated_at}</strong>
-
-</div>
-
-
-<div class="cards">
-
-
-<div class="card">
-
-    <div class="card-title">
-        Stocks Scanned
-    </div>
-
-    <div class="card-value">
-        {total}
-    </div>
+Yahoo Finance 1-minute data
 
 </div>
 
 
-<div class="card">
+<div class="stats">
 
-    <div class="card-title">
-        Matches
-    </div>
+<div class="stat">
 
-    <div class="card-value">
-        {match_count}
-    </div>
+<b>{len(results)}</b>
+
+Stocks scanned
 
 </div>
 
 
-<div class="card">
+<div class="stat">
 
-    <div class="card-title">
-        LONG
-    </div>
+<b>{len(matches)}</b>
 
-    <div class="card-value long">
-        {long_count}
-    </div>
+Matches
 
 </div>
 
 
-<div class="card">
+<div class="stat">
 
-    <div class="card-title">
-        SHORT
-    </div>
+<b>{len(fails)}</b>
 
-    <div class="card-value short">
-        {short_count}
-    </div>
+No match
 
 </div>
 
+
+<div class="stat">
+
+<b>{len(incomplete)}</b>
+
+Incomplete
+
+</div>
+
+
+<div class="stat">
+
+<b>{len(no_data)}</b>
+
+No data
+
+</div>
+
+
+<div class="stat">
+
+<b>{len(errors)}</b>
+
+Errors
+
+</div>
+
+
+<div class="stat">
+
+<b>{elapsed:.1f}s</b>
+
+Scan time
+
+</div>
+
+</div>
+
+
+<div class="match-box">
+
+<h2>
+Matches
+</h2>
+
+{match_html}
 
 </div>
 
@@ -2096,51 +2322,43 @@ tr:hover {{
 <tr>
 
 <th>
-    Stock
+Symbol
 </th>
 
 <th>
-    Direction
+Signal Day
 </th>
 
 <th>
-    09:15<br>3M
+Direction
 </th>
 
 <th>
-    09:18<br>3M
+3M 15:24 / 15:27
 </th>
 
 <th>
-    15:24<br>3M
+3M Morning
 </th>
 
 <th>
-    15:27<br>3M
+1M 15:28 / 15:29
 </th>
 
 <th>
-    15:28<br>1M
+1M / 3M Match
 </th>
 
 <th>
-    15:29<br>1M
+1M Morning
 </th>
 
 <th>
-    15:24<br>Vol
+Result
 </th>
 
 <th>
-    15:27<br>Vol
-</th>
-
-<th>
-    15:28<br>Vol
-</th>
-
-<th>
-    15:29<br>Vol
+Data
 </th>
 
 </tr>
@@ -2150,78 +2368,52 @@ tr:hover {{
 
 <tbody>
 
-{rows_html}
+{table_rows}
 
 </tbody>
 
 </table>
 
 
-<div class="strategy">
-
-<h2>
-    Strategy Conditions
-</h2>
-
-
-<ol>
-
-<li>
-    <strong>3-minute:</strong>
-    15:24 and 15:27 must be opposite trends,
-    and 15:24 volume must be greater than 15:27.
-</li>
-
-
-<li>
-    <strong>3-minute morning:</strong>
-    09:15 and 09:18 must both be in the same
-    trend as 15:24.
-</li>
-
-
-<li>
-    <strong>1-minute:</strong>
-    15:28 and 15:29 must be opposite trends,
-    and 15:28 volume must be greater than 15:29.
-</li>
-
-
-<li>
-    <strong>1-minute / 3-minute confirmation:</strong>
-    1-minute 15:28 must match 3-minute 15:24.
-</li>
-
-
-<li>
-    <strong>Final direction:</strong>
-    3-minute 15:24.
-</li>
-
-
-<li>
-    <strong>Entry:</strong>
-    Next trading day at 09:15 open.
-</li>
-
-
-<li>
-    <strong>Exit:</strong>
-    15:27.
-</li>
-
-</ol>
-
-</div>
-
-
 <div class="footer">
 
-    Scanner uses Yahoo Finance 1-minute data
-    and NSE symbols.
+<b>Strategy:</b>
 
-    The scanner only accepts a signal day when
-    all required minute candles are available.
+3-min 15:24 and 15:27 opposite,
+15:24 volume greater than 15:27.
+
+<br>
+
+3-min 09:15 and 09:18 both match
+15:24 direction.
+
+<br>
+
+1-min 15:28 and 15:29 opposite,
+15:28 volume greater than 15:29.
+
+<br>
+
+1-min 15:28 matches 3-min 15:24.
+
+<br>
+
+1-min 09:15 and 09:16 both match
+15:28.
+
+<br>
+
+<b>
+Entry:
+</b>
+Next trading day 09:15 open.
+
+<br>
+
+<b>
+Exit:
+</b>
+15:27.
 
 </div>
 
@@ -2236,7 +2428,7 @@ tr:hover {{
 
 
     with open(
-        output_file,
+        "index.html",
         "w",
         encoding="utf-8"
     ) as f:
@@ -2245,220 +2437,76 @@ tr:hover {{
 
 
 # =============================================================================
-# MAIN SCANNER
+# BADGE
+# =============================================================================
+
+def badge(value):
+
+    if value is True:
+
+        return (
+            '<span class="badge pass">'
+            'PASS'
+            '</span>'
+        )
+
+
+    if value is False:
+
+        return (
+            '<span class="badge fail">'
+            'FAIL'
+            '</span>'
+        )
+
+
+    return "â€”"
+
+
+# =============================================================================
+# MAIN
 # =============================================================================
 
 def main():
 
-    start_time = time.time()
-
-
+    print()
+    print("=" * 70)
+    print("NSE DAILY SCANNER")
+    print("=" * 70)
     print()
 
-    print("=" * 70)
 
-    print(
-        "NSE DAILY SCANNER"
+    start = time.time()
+
+
+    results, elapsed = scan_all_symbols(
+        STOCK_UNIVERSE
     )
 
-    print("=" * 70)
-
-    print()
-
-
-    print(
-        f"Scanning {len(STOCK_UNIVERSE)} stocks..."
-    )
-
-    print()
-
-
-    results = []
-
-
-    # -------------------------------------------------------------------------
-    # PARALLEL DOWNLOAD
-    # -------------------------------------------------------------------------
-
-    with ThreadPoolExecutor(
-        max_workers=MAX_WORKERS
-    ) as executor:
-
-
-        future_map = {
-
-            executor.submit(
-                scan_symbol,
-                symbol
-            ):
-                symbol
-
-            for symbol in STOCK_UNIVERSE
-
-        }
-
-
-        completed = 0
-
-        total = len(
-            future_map
-        )
-
-
-        for future in as_completed(
-            future_map
-        ):
-
-            symbol = future_map[
-                future
-            ]
-
-
-            try:
-
-                result = future.result()
-
-                results.append(
-                    result
-                )
-
-
-            except Exception as e:
-
-                results.append({
-
-                    "symbol":
-                        symbol,
-
-                    "status":
-                        "ERROR",
-
-                    "error":
-                        str(e)
-
-                })
-
-
-            completed += 1
-
-
-            if (
-                completed % 25 == 0
-                or completed == total
-            ):
-
-                print(
-                    f"Progress: "
-                    f"{completed}/{total}"
-                )
-
-
-    # -------------------------------------------------------------------------
-    # FIND SIGNAL DATE
-    # -------------------------------------------------------------------------
-
-    signal_dates = [
-
-        r.get("signal_date")
-
-        for r in results
-
-        if r.get("signal_date")
-
-    ]
-
-
-    if signal_dates:
-
-        signal_date = max(
-            signal_dates
-        )
-
-    else:
-
-        signal_date = (
-            datetime.now()
-            .strftime("%Y-%m-%d")
-        )
-
-
-    # -------------------------------------------------------------------------
-    # MATCHES
-    # -------------------------------------------------------------------------
 
     matches = [
 
         r
         for r in results
-        if r.get("status") == "MATCH"
+
+        if r.get("status")
+        == "PASS"
 
     ]
 
 
-    matches = sorted(
-
-        matches,
-
-        key=lambda x:
-            x.get("symbol", "")
-
-    )
-
-
-    # -------------------------------------------------------------------------
-    # GENERATE HTML
-    # -------------------------------------------------------------------------
-
-    generate_html(
-
-        results,
-
-        signal_date,
-
-        "index.html"
-
-    )
-
-
-    # -------------------------------------------------------------------------
-    # CONSOLE OUTPUT
-    # -------------------------------------------------------------------------
-
     print()
-
     print("=" * 70)
-
-    print(
-        "SCAN COMPLETE"
-    )
-
+    print("FINAL RESULTS")
     print("=" * 70)
-
-    print()
-
-
-    print(
-        f"Signal date : {signal_date}"
-    )
-
-
-    print(
-        f"Stocks      : {len(results)}"
-    )
-
-
-    print(
-        f"Matches     : {len(matches)}"
-    )
-
-
     print()
 
 
     if matches:
 
         print(
-            "MATCHING STOCKS:"
+            f"MATCHES FOUND: "
+            f"{len(matches)}"
         )
 
         print()
@@ -2467,47 +2515,108 @@ def main():
         for r in matches:
 
             print(
-                f"{r['symbol']:15s}"
-                f" {r['direction']}"
-            )
 
+                f"{r['symbol']:<15}"
+                f"{r['direction']:<8}"
+                f"Signal day: "
+                f"{r['date']}"
+
+            )
 
     else:
 
         print(
-            "No stocks matched all conditions."
+            "NO MATCHES TODAY."
         )
 
 
     print()
 
 
-    elapsed = (
-        time.time()
-        -
-        start_time
+    pass_count = sum(
+
+        r.get("status") == "PASS"
+        for r in results
+
+    )
+
+
+    fail_count = sum(
+
+        r.get("status") == "FAIL"
+        for r in results
+
+    )
+
+
+    incomplete_count = sum(
+
+        r.get("status") == "INCOMPLETE"
+        for r in results
+
+    )
+
+
+    no_data_count = sum(
+
+        r.get("status") == "NO_DATA"
+        for r in results
+
+    )
+
+
+    error_count = sum(
+
+        r.get("status") == "ERROR"
+        for r in results
+
     )
 
 
     print(
-        f"Time taken: "
-        f"{elapsed:.1f} seconds"
+        f"PASS:       {pass_count}"
     )
 
+    print(
+        f"FAIL:       {fail_count}"
+    )
+
+    print(
+        f"INCOMPLETE: {incomplete_count}"
+    )
+
+    print(
+        f"NO DATA:    {no_data_count}"
+    )
+
+    print(
+        f"ERROR:      {error_count}"
+    )
 
     print()
 
     print(
-        "HTML report saved as:"
-    )
-
-    print(
-        "index.html"
+        f"Scan time:  {elapsed:.1f} seconds"
     )
 
     print()
 
     print("=" * 70)
+
+
+    generate_html_report(
+        results,
+        elapsed
+    )
+
+
+    print()
+    print(
+        "HTML report written to:"
+    )
+    print(
+        "index.html"
+    )
 
 
 # =============================================================================
