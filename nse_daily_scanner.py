@@ -497,8 +497,7 @@ No stocks matched the strategy on the latest complete day.
 </tr>
 """
     else:
-        body_html = "
-".join(body)
+        body_html = "\n".join(body)
 
     document = f"""<!DOCTYPE html>
 <html lang="en">
