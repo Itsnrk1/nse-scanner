@@ -1,5 +1,5 @@
 # =============================================================================
-# NSE DAILY MOMENTUM SCANNER — FIXED VERSION
+# NSE DAILY MOMENTUM SCANNER â€” FIXED VERSION
 # =============================================================================
 #
 # MAIN LIVE SCANNER
@@ -20,37 +20,24 @@
 # 1) 3-MIN:
 #       15:24 volume > 15:27 volume
 #
-#       IMPORTANT:
 #       15:24 and 15:27 trend relationship DOES NOT MATTER.
 #       They may be SAME or OPPOSITE.
 #
-#
-# 2) 3-MIN MORNING:
-#       09:15 and 09:18 must be SAME trend.
-#
-#       IMPORTANT:
-#       There is NO connection between the morning candles
-#       and the 15:24 / 15:27 candles.
-#
-#
-# 3) 1-MIN:
+# 2) 1-MIN:
 #       15:28 and 15:29 must be OPPOSITE trends.
-#
 #       15:28 volume > 15:29 volume
 #
+# 3) 1-MIN / 3-MIN:
+#       1-min 15:28 trend must equal 3-min 15:24 trend.
 #
-# 4) 1-MIN / 3-MIN:
-#       1-min 15:28 trend must equal
-#       3-min 15:24 trend.
-#
-#
-# 5) FINAL DIRECTION:
+# 4) FINAL DIRECTION:
 #       1-min 15:28 trend
 #
-#
-# 6) TRADE:
+# 5) TRADE:
 #       Entry = NEXT trading day 09:15 OPEN
 #       Exit  = 15:27
+#
+#       Morning 09:15 / 09:18 candles are NOT used or required.
 #
 # =============================================================================
 # INSTALL
@@ -166,25 +153,15 @@ NSE_EQUITY_URL = (
 # =============================================================================
 
 NEEDED_HM = {
-
-    # Morning
-    915,
-    916,
-    917,
-
-    918,
-    919,
-    920,
-
-    # Afternoon
+    # Only the afternoon window used by the current strategy.
+    # 3m 15:24 = 15:24,25,26
+    # 3m 15:27 = 15:27,28,29
     1524,
     1525,
     1526,
-
     1527,
     1528,
     1529,
-
 }
 
 
@@ -1116,7 +1093,7 @@ def fetch_symbol_rows(
 ):
 
     # ---------------------------------------------------------------------
-    # FIRST ATTEMPT — 3 DAYS
+    # FIRST ATTEMPT â€” 3 DAYS
     # ---------------------------------------------------------------------
 
     rows, error = yahoo_download(
@@ -1139,7 +1116,7 @@ def fetch_symbol_rows(
 
 
     # ---------------------------------------------------------------------
-    # SECOND ATTEMPT — 7 DAYS
+    # SECOND ATTEMPT â€” 7 DAYS
     # ---------------------------------------------------------------------
     #
     # Only one fallback request.
@@ -1335,28 +1312,6 @@ def evaluate_rows(
 
 
     # ---------------------------------------------------------------------
-    # MORNING
-    # ---------------------------------------------------------------------
-
-    candle_0915 = aggregate_3m([
-
-        915,
-        916,
-        917,
-
-    ])
-
-
-    candle_0918 = aggregate_3m([
-
-        918,
-        919,
-        920,
-
-    ])
-
-
-    # ---------------------------------------------------------------------
     # AFTERNOON
     # ---------------------------------------------------------------------
 
@@ -1381,22 +1336,6 @@ def evaluate_rows(
     # =========================================================================
     # DIRECTIONS
     # =========================================================================
-
-    d0915 = candle_direction(
-
-        candle_0915["open"],
-        candle_0915["close"]
-
-    )
-
-
-    d0918 = candle_direction(
-
-        candle_0918["open"],
-        candle_0918["close"]
-
-    )
-
 
     d1524 = candle_direction(
 
@@ -1466,122 +1405,43 @@ def evaluate_rows(
 
     # =========================================================================
     # CONDITION 1
-    #
-    # 3-MIN:
-    #
-    # 15:24 volume > 15:27 volume
-    #
-    # NO TREND RELATIONSHIP REQUIRED.
+    # 3m 15:24 volume > 3m 15:27 volume.
+    # 15:24 / 15:27 trend relationship is ignored.
     # =========================================================================
-
     cond1 = (
-
         d1524 != 0
-
-        and
-
-        v1524 > v1527
-
+        and v1524 > v1527
     )
 
 
     # =========================================================================
     # CONDITION 2
-    #
-    # 3-MIN MORNING:
-    #
-    # 09:15 and 09:18 SAME TREND
-    #
-    # NO CONNECTION TO 15:24 / 15:27.
+    # 1m 15:28 and 15:29 must be opposite trends.
+    # 15:28 volume > 15:29 volume.
     # =========================================================================
-
     cond2 = (
-
-        d0915 != 0
-
-        and
-
-        d0918 != 0
-
-        and
-
-        d0915 == d0918
-
+        d1528 != 0
+        and d1529 != 0
+        and d1528 != d1529
+        and v1528 > v1529
     )
 
 
     # =========================================================================
     # CONDITION 3
-    #
-    # 1-MIN:
-    #
-    # 15:28 and 15:29 OPPOSITE
-    #
-    # 15:28 volume > 15:29 volume
+    # 1m 15:28 trend = 3m 15:24 trend.
     # =========================================================================
-
     cond3 = (
-
         d1528 != 0
-
-        and
-
-        d1529 != 0
-
-        and
-
-        d1528 != d1529
-
-        and
-
-        v1528 > v1529
-
+        and d1524 != 0
+        and d1528 == d1524
     )
 
-
-    # =========================================================================
-    # CONDITION 4
-    #
-    # 1-MIN 15:28
-    #
-    # MUST MATCH 3-MIN 15:24
-    # =========================================================================
-
-    cond4 = (
-
-        d1528 != 0
-
-        and
-
-        d1524 != 0
-
-        and
-
-        d1528 == d1524
-
-    )
-
-
-    # =========================================================================
-    # FINAL
-    # =========================================================================
 
     passed = (
-
         cond1
-
-        and
-
-        cond2
-
-        and
-
-        cond3
-
-        and
-
-        cond4
-
+        and cond2
+        and cond3
     )
 
 
@@ -1633,16 +1493,10 @@ def evaluate_rows(
         "cond3":
             cond3,
 
-        "cond4":
-            cond4,
+        "unused_old_condition":
+            unused_old_condition,
 
         "details": {
-
-            "d0915":
-                d0915,
-
-            "d0918":
-                d0918,
 
             "d1524":
                 d1524,
@@ -1914,7 +1768,7 @@ def badge(value):
         )
 
 
-    return "—"
+    return "â€”"
 
 
 # =============================================================================
@@ -2032,7 +1886,7 @@ def generate_html_report(
                 <span class="date">
 
                     Signal day:
-                    {esc(r.get('date', '—'))}
+                    {esc(r.get('date', 'â€”'))}
 
                 </span>
 
@@ -2126,7 +1980,7 @@ def generate_html_report(
                     {esc(
                         r.get(
                             'date',
-                            '—'
+                            'â€”'
                         )
                     )}
                 </td>
@@ -2137,7 +1991,7 @@ def generate_html_report(
                             'direction'
                         )
                         or
-                        '—'
+                        'â€”'
                     )}
                 </td>
 
@@ -2182,22 +2036,6 @@ def generate_html_report(
                     <br>
 
                     <small>
-                    09:15 ↔ 09:18
-                    </small>
-
-                </td>
-
-                <td>
-
-                    {badge(
-                        r.get(
-                            'cond3'
-                        )
-                    )}
-
-                    <br>
-
-                    <small>
 
                     15:28:
                     {details.get(
@@ -2221,14 +2059,14 @@ def generate_html_report(
 
                     {badge(
                         r.get(
-                            'cond4'
+                            'cond3'
                         )
                     )}
 
                     <br>
 
                     <small>
-                    15:28 ↔ 3M 15:24
+                    15:28 â†” 3M 15:24
                     </small>
 
                 </td>
@@ -2244,7 +2082,7 @@ def generate_html_report(
                     {esc(
                         r.get(
                             'data_status',
-                            '—'
+                            'â€”'
                         )
                     )}
 
@@ -2752,7 +2590,7 @@ Direction
 </th>
 
 <th>
-3M Morning
+1M 15:28 / 15:29
 </th>
 
 <th>
@@ -2805,30 +2643,21 @@ is ignored. They can be the same or opposite.
 
 <br>
 
-3. 3-min 09:15 and 09:18 must be the same trend.
+3. 1-min 15:28 and 15:29 must be opposite trends.
 
 <br>
 
-4. The morning 09:15 / 09:18 candles have
-NO connection to 15:24 / 15:27.
-
-<br>
-
-5. 1-min 15:28 and 15:29 must be opposite trends.
-
-<br>
-
-6. 1-min 15:28 volume must be greater than
+4. 1-min 15:28 volume must be greater than
 15:29 volume.
 
 <br>
 
-7. 1-min 15:28 trend must match
+5. 1-min 15:28 trend must match
 3-min 15:24 trend.
 
 <br>
 
-8. Final direction = 1-min 15:28.
+6. Final direction = 1-min 15:28.
 
 <br>
 
