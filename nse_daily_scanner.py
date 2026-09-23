@@ -95,20 +95,56 @@ FALLBACK_PERIOD = "7d"
 REQUEST_TIMEOUT = 20
 
 # If fewer than this share of symbols have the 15:29 candle on the signal
-# day, the report shows a "data looks incomplete" warning.
-SESSION_COMPLETE_SHARE = 0.50
+# day, the report shows a "data looks incomplete" warning. Kept low because
+# illiquid stocks often have no trade in the last minute; when Yahoo's data
+# is genuinely unfinished the share is close to 0%.
+SESSION_COMPLETE_SHARE = 0.20
+
+
+# =============================================================================
+# UNIVERSE SIZE  <-- change this to scan more / fewer stocks
+# =============================================================================
+#
+#   "NIFTY500"      ~500 stocks   (large + mid + small caps)
+#   "TOTAL_MARKET"  ~750 stocks   (Nifty 500 + Nifty Microcap 250)  [default]
+#   "ALL_NSE"       ~1800+ stocks (every EQ-series stock on NSE)
+#
+# If the chosen list cannot be downloaded, the scanner falls back to the next
+# smaller list automatically (see get_stock_universe).
+#
+UNIVERSE_MODE = "TOTAL_MARKET"
 
 
 # =============================================================================
 # OFFICIAL UNIVERSE SOURCES
 # =============================================================================
 
-NIFTY500_URL = (
-    "https://www.niftyindices.com/"
-    "IndexConstituent/"
-    "ind_nifty500list.csv"
-)
+# Each index is tried on niftyindices.com first, then on NSE's archive server
+# (niftyindices.com is sometimes blocked from cloud runners such as GitHub
+# Actions).
+INDEX_CSV_URLS = {
+    "Nifty 500": [
+        "https://www.niftyindices.com/IndexConstituent/ind_nifty500list.csv",
+        "https://nsearchives.nseindia.com/content/indices/ind_nifty500list.csv",
+    ],
+    "Nifty Microcap 250": [
+        "https://www.niftyindices.com/IndexConstituent/ind_niftymicrocap250_list.csv",
+        "https://nsearchives.nseindia.com/content/indices/ind_niftymicrocap250_list.csv",
+    ],
+    "Nifty Total Market": [
+        "https://www.niftyindices.com/IndexConstituent/ind_niftytotalmarket_list.csv",
+        "https://nsearchives.nseindia.com/content/indices/ind_niftytotalmarket_list.csv",
+    ],
+}
 
+# Reject obviously bad / partial downloads.
+INDEX_MIN_SYMBOLS = {
+    "Nifty 500": 450,
+    "Nifty Microcap 250": 200,
+    "Nifty Total Market": 650,
+}
+
+# NSE official equity security list (all EQ-series stocks).
 NSE_EQUITY_URL = (
     "https://nsearchives.nseindia.com/"
     "content/equities/sec_list.csv"
@@ -218,45 +254,84 @@ def normalize_symbols(values):
     return list(dict.fromkeys(symbols))
 
 
-def load_nifty500():
+def load_index_csv(name):
+    """Download one NSE index constituent list. Returns symbols or None."""
 
-    try:
-        print()
-        print("Attempting to load current Nifty 500 universe...")
+    minimum = INDEX_MIN_SYMBOLS[name]
 
-        session = requests.Session()
-        session.headers.update(NSE_HEADERS)
+    print()
+    print(f"Attempting to load {name} universe...")
+
+    for url in INDEX_CSV_URLS[name]:
 
         try:
-            session.get("https://www.niftyindices.com/", timeout=15)
-        except Exception:
-            pass
+            host = url.split("/")[2]
 
-        response = session.get(NIFTY500_URL, timeout=20)
-        response.raise_for_status()
+            session = requests.Session()
+            session.headers.update({
+                **NSE_HEADERS,
+                "Referer": f"https://{host}/",
+            })
 
-        df = pd.read_csv(StringIO(response.text))
+            try:
+                session.get(f"https://{host}/", timeout=15)
+            except Exception:
+                pass
 
-        symbol_column = None
-        for column in df.columns:
-            if str(column).strip().lower() == "symbol":
-                symbol_column = column
-                break
+            response = session.get(url, timeout=20)
+            response.raise_for_status()
 
-        if symbol_column is None:
-            raise ValueError("Symbol column not found")
+            df = pd.read_csv(StringIO(response.text))
 
-        symbols = normalize_symbols(df[symbol_column].dropna().tolist())
+            symbol_column = None
+            for column in df.columns:
+                if str(column).strip().lower() == "symbol":
+                    symbol_column = column
+                    break
 
-        if len(symbols) < 450:
-            raise ValueError(f"Only {len(symbols)} symbols returned")
+            if symbol_column is None:
+                raise ValueError("Symbol column not found")
 
-        print(f"Nifty 500 loaded successfully: {len(symbols)} symbols")
+            symbols = normalize_symbols(df[symbol_column].dropna().tolist())
+
+            if len(symbols) < minimum:
+                raise ValueError(f"Only {len(symbols)} symbols returned")
+
+            print(f"{name} loaded successfully: {len(symbols)} symbols")
+            return symbols
+
+        except Exception as e:
+            print(f"{name} loading failed ({url.split('/')[2]}): {e}")
+
+    return None
+
+
+def load_nifty500():
+    return load_index_csv("Nifty 500")
+
+
+def load_total_market():
+    """~750 stocks = Nifty 500 + Nifty Microcap 250."""
+
+    # 1) The official Total Market list, if available.
+    symbols = load_index_csv("Nifty Total Market")
+    if symbols:
         return symbols
 
-    except Exception as e:
-        print(f"Nifty 500 loading failed: {e}")
-        return None
+    # 2) Build it ourselves (Total Market is defined as exactly this union).
+    base = load_index_csv("Nifty 500")
+    micro = load_index_csv("Nifty Microcap 250")
+
+    if base and micro:
+        combined = list(dict.fromkeys(base + micro))
+        print(
+            f"Total Market built from Nifty 500 + Microcap 250: "
+            f"{len(combined)} symbols"
+        )
+        return combined
+
+    print("Could not build the Total Market universe.")
+    return None
 
 
 def load_nse_equity_list():
@@ -314,15 +389,27 @@ def get_stock_universe():
     print()
     print("=" * 70)
     print("LOADING NSE STOCK UNIVERSE")
+    print(f"Requested mode: {UNIVERSE_MODE}")
     print("=" * 70)
 
-    symbols = load_nifty500()
-    if symbols:
-        return symbols, "Nifty 500 official CSV"
+    # Tried in order; the first list that loads is used.
+    attempts = []
 
-    symbols = load_nse_equity_list()
-    if symbols:
-        return symbols, "NSE official equity list"
+    if UNIVERSE_MODE == "ALL_NSE":
+        attempts.append(("NSE official equity list (all EQ)", load_nse_equity_list))
+
+    if UNIVERSE_MODE in ("ALL_NSE", "TOTAL_MARKET"):
+        attempts.append(("Nifty Total Market (Nifty 500 + Microcap 250)", load_total_market))
+
+    attempts.append(("Nifty 500 official CSV", load_nifty500))
+    attempts.append(("NSE official equity list", load_nse_equity_list))
+
+    for label, loader in attempts:
+
+        symbols = loader()
+
+        if symbols:
+            return symbols, label
 
     print()
     print(f"Using built-in fallback universe: {len(FALLBACK_UNIVERSE)} symbols")
