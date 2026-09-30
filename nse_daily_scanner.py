@@ -7,42 +7,32 @@
 # Output: index.html
 #
 # =============================================================================
-# STRATEGY (UNCHANGED)
+# STRATEGY
 # =============================================================================
 #
-# 1) 3-MIN:   15:24 volume > 15:27 volume
-#             (15:24 / 15:27 trend relationship does NOT matter)
+# "Previous day" = the latest trading day present in the data.
+# "Day before previous day" (signal day) = the day right before that - every
+#   condition below is evaluated on THIS day, at the 3-minute timeframe.
+# "Next day" = the day the trade is entered (the session after "previous
+#   day").
 #
-# 2) 1-MIN:   15:28 and 15:29 must be OPPOSITE trends
-#             15:28 volume > 15:29 volume
+# 1) 15:24 volume > 15:27 volume, AND at least 2 of the four candles at
+#    15:15, 15:18, 15:21 and 15:27 share the 15:24 candle's trend.
 #
-# 3) 1-MIN / 3-MIN: 1-min 15:28 trend must equal 3-min 15:24 trend
+# 2) The 9:15 candle's trend matches the 15:24 candle's trend.
 #
-# 4) FINAL DIRECTION: 1-min 15:28 trend
+# FINAL DIRECTION: 15:24 candle's trend (up = LONG, down = SHORT).
 #
-# 5) TRADE: Entry = next trading day 09:15 OPEN, Exit = 15:27
+# TRADE: Entry = next trading session's 09:15 OPEN, Exit = that session's
+#        15:27.
 #
-# =============================================================================
-# WHAT WAS FIXED (strategy logic untouched)
-# =============================================================================
-#
-# - NameError: `unused_old_condition` was returned but never defined, so every
-#   symbol that reached the end of evaluate_rows() became an ERROR.
-# - yf.download() is not thread-safe (shared global state), so running it in a
-#   ThreadPoolExecutor returned empty / mixed-up data. Now uses
-#   yf.Ticker(...).history(), which is safe per thread.
-# - INCOMPLETE: Yahoo does not return a row for a minute with no trades, so
-#   any stock missing even one of the six candles was rejected. A missing
-#   minute is now treated as "no trade": volume 0, no trend. The missing
-#   minutes are listed in the Data column.
-# - The old code silently fell back to an OLDER "complete" day. Now the latest
-#   session is used, and symbols on a different date than the rest of the
-#   market are marked STALE instead of producing a stale signal.
-# - Banner warns when Yahoo's data for the day looks unfinished (few symbols
-#   have the 15:29 candle).
-# - Rate-limit (429) errors are retried with a longer back-off, and real
-#   errors are reported as ERROR instead of being hidden as NO_DATA.
-# - HTML table had 9 headers for 8 columns; fixed. Mojibake characters fixed.
+# Yahoo has no native 3-minute interval, so every 3-minute candle here is
+# built from three 1-minute bars (Open = open of the earliest sub-minute
+# with data, Close = close of the latest, Volume = sum). A missing
+# sub-minute is treated as "no trade" (0 volume, no trend); when that
+# makes a 3-min candle less than fully complete, it's flagged for manual
+# verification rather than silently trusted (see "partial_3m" / "Verify"
+# tags).
 #
 # INSTALL:
 #   python -m pip install yfinance pandas requests curl_cffi
@@ -89,15 +79,18 @@ MAX_WORKERS = 8
 # Attempts per request (only rate limits / network errors are retried).
 MAX_RETRIES = 3
 
-INITIAL_PERIOD = "3d"
+INITIAL_PERIOD = "5d"
+
+# Yahoo keeps roughly 7-8 days of 1-minute data in total, so this is close
+# to the practical maximum.
 FALLBACK_PERIOD = "7d"
 
 REQUEST_TIMEOUT = 20
 
-# If fewer than this share of symbols have the 15:29 candle on the signal
-# day, the report shows a "data looks incomplete" warning. Kept low because
-# illiquid stocks often have no trade in the last minute; when Yahoo's data
-# is genuinely unfinished the share is close to 0%.
+# If fewer than this share of symbols have all 18 required one-minute bars
+# on the signal day, the report shows a "data looks incomplete" warning.
+# Kept low because illiquid stocks often have a few no-trade minutes; when
+# Yahoo's data is genuinely broken the share is close to 0%.
 SESSION_COMPLETE_SHARE = 0.20
 
 
@@ -155,8 +148,18 @@ NSE_EQUITY_URL = (
 # REQUIRED 1-MINUTE CANDLES
 # =============================================================================
 
-# 3m 15:24 = 15:24,25,26      3m 15:27 = 15:27,28,29
-NEEDED_HM = {1524, 1525, 1526, 1527, 1528, 1529}
+# The six 3-minute candles the strategy needs, each built from three
+# 1-minute bars. All are read from "day before previous day" (signal day).
+CANDLE_GROUPS_3M = {
+    "0915": [915, 916, 917],
+    "1515": [1515, 1516, 1517],
+    "1518": [1518, 1519, 1520],
+    "1521": [1521, 1522, 1523],
+    "1524": [1524, 1525, 1526],
+    "1527": [1527, 1528, 1529],
+}
+
+NEEDED_HM = {hm for group in CANDLE_GROUPS_3M.values() for hm in group}
 
 
 # =============================================================================
@@ -590,17 +593,39 @@ def candle_direction(open_price, close_price):
 
 def aggregate_3m(m, minutes):
     """3-minute candle built from whichever of the 3 one-minute candles
-    exist. A minute with no trades is simply absent from Yahoo's data."""
+    exist. Yahoo has no native 3-minute interval, so this combines three
+    1-minute bars: Open = open of the earliest sub-minute that has data,
+    Close = close of the latest sub-minute that has data, Volume = sum of
+    the sub-minutes' volumes. This is the correct construction as long as
+    a missing sub-minute really means "no trades" rather than "Yahoo
+    dropped a real bar" - the code cannot tell those two apart, which is
+    exactly what a manual cross-check (e.g. on TradingView) is good for.
+    """
 
-    candles = [m[minute] for minute in minutes if minute in m]
+    present = [minute for minute in minutes if minute in m]
+    missing = [minute for minute in minutes if minute not in m]
 
-    if not candles:
-        return {"open": None, "close": None, "volume": 0.0}
+    if not present:
+        return {
+            "open": None,
+            "close": None,
+            "volume": 0,
+            "minutes_used": [],
+            "minutes_missing": missing,
+            "partial": True,
+        }
+
+    candles = [m[minute] for minute in present]
 
     return {
         "open": candles[0][0],
         "close": candles[-1][1],
-        "volume": sum(c[2] for c in candles),
+        "volume": sum(int(round(c[2])) for c in candles),
+        "minutes_used": present,
+        "minutes_missing": missing,
+        # True whenever this 3-min candle was not built from all 3
+        # sub-minutes - the ambiguous case worth double-checking manually.
+        "partial": len(present) < len(minutes),
     }
 
 
@@ -609,6 +634,16 @@ def aggregate_3m(m, minutes):
 # =============================================================================
 
 def evaluate_rows(rows):
+    """Strategy (all on "day before previous day" - two trading days before
+    entry - at the 3-minute timeframe):
+
+    1) 15:24 volume > 15:27 volume, AND at least 2 of {15:15, 15:18, 15:21,
+       15:27} share 15:24's trend.
+    2) The 9:15 candle's trend matches 15:24's trend.
+
+    Direction = LONG if 15:24 trended up, SHORT if down. Entry = next
+    trading session's 09:15 open. Exit = that same session's 15:27.
+    """
 
     if rows is None or rows.empty:
         return {"status": "NO_DATA"}
@@ -624,79 +659,83 @@ def evaluate_rows(rows):
     ):
         by_date.setdefault(date, {})[int(hm)] = (float(o), float(c), float(v))
 
-    # ---------------------------------------------------------------------
-    # SIGNAL DAY = latest day that has any candle in the 15:24-15:29 window.
-    # (If the scan runs before the close / next morning, this skips a day
-    # that has no closing-window data at all.)
-    # ---------------------------------------------------------------------
+    dates = sorted(by_date)
 
-    dates_with_window = sorted(
-        d for d, minute_map in by_date.items()
-        if any(hm in minute_map for hm in NEEDED_HM)
-    )
+    # Need at least 2 distinct trading days: "previous day" (the latest one
+    # present - today if the market is still open, else yesterday) and
+    # "day before previous day" (the one the strategy actually reads).
+    if len(dates) < 2:
+        return {
+            "status": "INCOMPLETE",
+            "date": dates[-1] if dates else None,
+            "previous_day": None,
+            "missing": sorted(NEEDED_HM),
+            "note": "fewer than 2 trading days of data available",
+        }
 
-    signal_date = dates_with_window[-1] if dates_with_window else max(by_date)
+    previous_day = dates[-1]
+    signal_date = dates[-2]
 
     m = by_date[signal_date]
 
     missing = [hm for hm in sorted(NEEDED_HM) if hm not in m]
-    last_hm = max(m)
 
-    # No candle at all in the closing window: nothing to evaluate.
     if len(missing) == len(NEEDED_HM):
         return {
             "status": "INCOMPLETE",
             "date": signal_date,
+            "previous_day": previous_day,
             "missing": missing,
-            "last_hm": last_hm,
         }
 
     # ---------------------------------------------------------------------
-    # 3-MIN CANDLES
+    # THE SIX 3-MINUTE CANDLES
     # ---------------------------------------------------------------------
 
-    candle_1524 = aggregate_3m(m, [1524, 1525, 1526])
-    candle_1527 = aggregate_3m(m, [1527, 1528, 1529])
+    candles = {
+        label: aggregate_3m(m, minutes)
+        for label, minutes in CANDLE_GROUPS_3M.items()
+    }
 
-    # ---------------------------------------------------------------------
-    # DIRECTIONS
-    # ---------------------------------------------------------------------
+    d = {
+        label: candle_direction(c["open"], c["close"])
+        for label, c in candles.items()
+    }
 
-    d1524 = candle_direction(candle_1524["open"], candle_1524["close"])
-    d1527 = candle_direction(candle_1527["open"], candle_1527["close"])
+    v1524 = candles["1524"]["volume"]
+    v1527 = candles["1527"]["volume"]
 
-    d1528 = candle_direction(*m[1528][:2]) if 1528 in m else 0
-    d1529 = candle_direction(*m[1529][:2]) if 1529 in m else 0
-
-    # ---------------------------------------------------------------------
-    # VOLUMES
-    # ---------------------------------------------------------------------
-
-    v1524 = candle_1524["volume"]
-    v1527 = candle_1527["volume"]
-    v1528 = m[1528][2] if 1528 in m else 0.0
-    v1529 = m[1529][2] if 1529 in m else 0.0
-
-    # CONDITION 1: 3m 15:24 volume > 3m 15:27 volume
-    cond1 = d1524 != 0 and v1524 > v1527
-
-    # CONDITION 2: 1m 15:28 / 15:29 opposite trends, 15:28 volume larger
-    cond2 = (
-        d1528 != 0
-        and d1529 != 0
-        and d1528 != d1529
-        and v1528 > v1529
+    # True whenever any of the six 3-min candles was built from fewer than
+    # all 3 of its sub-minutes - i.e. "missing minute" is ambiguous between
+    # "no trades" and "Yahoo dropped a bar", so the result is worth a
+    # manual check rather than fully trusting as-is.
+    partial_groups = sorted(
+        label for label, c in candles.items() if c.get("partial")
     )
+    partial_3m = len(partial_groups) > 0
 
-    # CONDITION 3: 1m 15:28 trend == 3m 15:24 trend
-    cond3 = d1528 != 0 and d1524 != 0 and d1528 == d1524
+    d1524 = d["1524"]
 
-    passed = cond1 and cond2 and cond3
+    # CONDITION 1a: 15:24 volume > 15:27 volume
+    cond1a = d1524 != 0 and v1524 > v1527
 
-    # FINAL DIRECTION = 1-min 15:28
-    if d1528 == 1:
+    # CONDITION 1b: at least 2 of {15:15, 15:18, 15:21, 15:27} share
+    # 15:24's trend.
+    compare_labels = ["1515", "1518", "1521", "1527"]
+    matches = sum(1 for label in compare_labels if d1524 != 0 and d[label] == d1524)
+    cond1b = matches >= 2
+
+    cond1 = cond1a and cond1b
+
+    # CONDITION 2: 9:15 trend == 15:24 trend.
+    cond2 = d1524 != 0 and d["0915"] != 0 and d["0915"] == d1524
+
+    passed = cond1 and cond2
+
+    # FINAL DIRECTION = 15:24 trend
+    if d1524 == 1:
         direction = "LONG"
-    elif d1528 == -1:
+    elif d1524 == -1:
         direction = "SHORT"
     else:
         direction = None
@@ -704,22 +743,33 @@ def evaluate_rows(rows):
     return {
         "status": "PASS" if passed else "FAIL",
         "date": signal_date,
+        "previous_day": previous_day,
         "direction": direction if passed else None,
         "raw_direction": direction,
         "cond1": cond1,
+        "cond1a": cond1a,
+        "cond1b": cond1b,
+        "cond1b_matches": matches,
         "cond2": cond2,
-        "cond3": cond3,
         "missing": missing,
-        "last_hm": last_hm,
+        "partial_3m": partial_3m,
+        "partial_groups": partial_groups,
+        "candle_minutes_used": {
+            label: c.get("minutes_used", []) for label, c in candles.items()
+        },
         "details": {
-            "d1524": d1524,
-            "d1527": d1527,
-            "d1528": d1528,
-            "d1529": d1529,
-            "15:24_vol": v1524,
-            "15:27_vol": v1527,
-            "15:28_vol": v1528,
-            "15:29_vol": v1529,
+            "d0915": d["0915"],
+            "d1515": d["1515"],
+            "d1518": d["1518"],
+            "d1521": d["1521"],
+            "d1524": d["1524"],
+            "d1527": d["1527"],
+            "0915_vol": candles["0915"]["volume"],
+            "1515_vol": candles["1515"]["volume"],
+            "1518_vol": candles["1518"]["volume"],
+            "1521_vol": candles["1521"]["volume"],
+            "1524_vol": v1524,
+            "1527_vol": v1527,
         },
     }
 
@@ -841,22 +891,24 @@ def mark_stale(results):
 
 
 def session_warning(results):
-    """Warn when Yahoo's data for the signal day looks unfinished."""
+    """Warn when a large share of symbols are missing part of the required
+    18 one-minute bars on the signal day - a sign of a broad Yahoo
+    data-quality issue for that day, not just isolated thin trading."""
 
-    with_data = [r for r in results if r.get("last_hm") is not None]
+    evaluated = [r for r in results if r.get("status") in ("PASS", "FAIL")]
 
-    if not with_data:
+    if not evaluated:
         return None
 
-    done = sum(1 for r in with_data if r["last_hm"] >= 1529)
-    share = done / len(with_data)
+    complete = sum(1 for r in evaluated if not r.get("missing"))
+    share = complete / len(evaluated)
 
     if share < SESSION_COMPLETE_SHARE:
         return (
-            f"Only {share:.0%} of symbols have the 15:29 candle on the "
-            f"signal day. Yahoo's data for that day is probably not "
-            f"complete yet (or the market has not closed). "
-            f"Re-run later - these results are unreliable."
+            f"Only {share:.0%} of scanned symbols have all 18 required "
+            f"one-minute bars on the signal day (day before previous day). "
+            f"Yahoo's data for that day may be unusually incomplete - "
+            f"treat matches with extra caution and verify on TradingView."
         )
 
     return None
@@ -891,49 +943,389 @@ def badge(value):
 
 
 def trend_name(d):
-    return {1: "UP", -1: "DOWN"}.get(d, "FLAT")
+    return {1: "Up", -1: "Down"}.get(d, "Flat")
 
 
 def hm_text(hm):
     return f"{hm // 100:02d}:{hm % 100:02d}"
 
 
+# Order the six 3-minute candles are shown in, throughout the report.
+CANDLE_ORDER = ["0915", "1515", "1518", "1521", "1524", "1527"]
+CANDLE_LABEL = {
+    "0915": "09:15", "1515": "15:15", "1518": "15:18",
+    "1521": "15:21", "1524": "15:24", "1527": "15:27",
+}
+
+
+def arrow(d):
+    return {1: "\u25b2", -1: "\u25bc"}.get(d, "\u2013")  # â–² â–¼ â€“
+
+
+def trend_class(d):
+    return {1: "up", -1: "down"}.get(d, "flat")
+
+
+def candle_strip(details, partial_groups):
+    """Compact 6-candle strip shown per row, e.g. 09:15â–² 15:15â–² 15:18â–¼ ..."""
+
+    if not details:
+        return ""
+
+    partial_groups = set(partial_groups or [])
+    chips = []
+
+    for label in CANDLE_ORDER:
+        d = details.get(f"d{label}")
+        cls = trend_class(d)
+        flag = " candle-partial" if label in partial_groups else ""
+        chips.append(
+            f'<span class="candle {cls}{flag}">'
+            f'{CANDLE_LABEL[label]}<b>{arrow(d)}</b></span>'
+        )
+
+    return "".join(chips)
+
+
 CSS = """
-body { font-family: Arial, sans-serif; background: #f5f5f5; color: #222;
-       margin: 0; padding: 25px; }
-.container { max-width: 1500px; margin: auto; }
-h1 { margin-bottom: 5px; }
-.subtitle { color: #777; line-height: 1.6; }
-.warn { background: #fff3cd; border: 1px solid #e0c36a; color: #6b5200;
-        border-radius: 8px; padding: 12px 16px; margin: 18px 0; }
-.stats { display: flex; flex-wrap: wrap; gap: 10px; margin: 20px 0; }
-.stat { background: white; padding: 15px 20px; border-radius: 8px;
-        border: 1px solid #ddd; }
-.stat b { font-size: 22px; display: block; }
-.match-box { background: white; border: 1px solid #ddd; border-radius: 8px;
-             padding: 20px; margin-bottom: 20px; }
-.match { padding: 9px 0; border-bottom: 1px solid #eee; }
-.direction { display: inline-block; padding: 3px 7px; border-radius: 4px;
-             font-size: 11px; font-weight: bold; margin-right: 8px; }
-.long { background: #dff5e5; color: #08752f; }
-.short { background: #f8dddd; color: #a52222; }
-.date { color: #777; margin-left: 8px; }
-table { width: 100%; border-collapse: collapse; background: white;
-        font-size: 13px; }
-th { background: #ededed; padding: 10px; text-align: left;
-     position: sticky; top: 0; }
-td { padding: 9px 10px; border-top: 1px solid #eee; vertical-align: top; }
-.symbol { font-weight: bold; }
-small { color: #777; font-size: 10px; }
-.badge { display: inline-block; padding: 2px 6px; border-radius: 4px;
-         font-size: 10px; font-weight: bold; }
-.badge.pass { background: #dff5e5; color: #08752f; }
-.badge.fail { background: #f8dddd; color: #a52222; }
-.pass { color: #08752f; font-weight: bold; }
-.fail { color: #999; }
-.skip { color: #b07000; }
-.none { color: #777; }
-.footer { margin-top: 25px; color: #777; font-size: 12px; line-height: 1.7; }
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
+
+:root {
+  --bg: #0B0F14;
+  --panel: #131A22;
+  --panel-2: #182029;
+  --border: #232C38;
+  --border-soft: #1B222C;
+  --text: #E7ECF1;
+  --text-dim: #8493A3;
+  --text-faint: #56626F;
+  --long: #34C27D;
+  --long-soft: rgba(52, 194, 125, 0.13);
+  --short: #F0555C;
+  --short-soft: rgba(240, 85, 92, 0.13);
+  --caution: #E7A94A;
+  --caution-soft: rgba(231, 169, 74, 0.13);
+  --sans: 'IBM Plex Sans', ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --mono: 'IBM Plex Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  padding: 40px 28px 64px;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: 15px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+a { color: inherit; }
+
+:focus-visible { outline: 2px solid var(--caution); outline-offset: 2px; }
+
+.container { max-width: 1320px; margin: 0 auto; }
+
+/* ---- header ---- */
+
+header { margin-bottom: 28px; }
+
+h1 {
+  margin: 0 0 4px;
+  font-size: 1.65rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.meta-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, max-content));
+  column-gap: 40px;
+  row-gap: 16px;
+  margin-top: 18px;
+  padding-top: 18px;
+  border-top: 1px solid var(--border-soft);
+}
+
+.meta-item { max-width: 320px; }
+
+.meta-label {
+  color: var(--text-faint);
+  font-size: 0.75rem;
+  margin-bottom: 3px;
+}
+
+.meta-value {
+  color: var(--text);
+  font-size: 0.9rem;
+  font-family: var(--mono);
+}
+
+/* ---- warning ---- */
+
+.warn {
+  background: var(--caution-soft);
+  border: 1px solid rgba(231, 169, 74, 0.35);
+  color: #F0CE93;
+  border-radius: 8px;
+  padding: 13px 16px;
+  margin-bottom: 24px;
+  font-size: 0.875rem;
+  line-height: 1.55;
+}
+
+/* ---- matches (hero) ---- */
+
+.matches-section { margin-bottom: 28px; }
+
+.matches-heading {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--text-dim);
+  margin: 0 0 12px;
+}
+
+.matches-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 12px;
+}
+
+@keyframes rise {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .match-card { animation: none !important; }
+}
+
+.match-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 18px 20px;
+  animation: rise 0.35s ease-out both;
+}
+
+.match-card.long { border-left: 3px solid var(--long); }
+.match-card.short { border-left: 3px solid var(--short); }
+
+.match-top {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.match-symbol {
+  font-family: var(--mono);
+  font-size: 1.35rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.match-dir {
+  font-family: var(--mono);
+  font-size: 0.8rem;
+  font-weight: 600;
+  padding: 3px 9px;
+  border-radius: 5px;
+  white-space: nowrap;
+}
+
+.match-dir.long { background: var(--long-soft); color: var(--long); }
+.match-dir.short { background: var(--short-soft); color: var(--short); }
+
+.match-sub {
+  margin-top: 8px;
+  color: var(--text-dim);
+  font-size: 0.8rem;
+}
+
+.match-verify {
+  display: inline-block;
+  margin-top: 10px;
+  padding: 3px 9px;
+  border-radius: 5px;
+  background: var(--caution-soft);
+  color: var(--caution);
+  font-size: 0.72rem;
+  font-weight: 500;
+}
+
+.empty-state {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 22px 22px;
+  color: var(--text-dim);
+  font-size: 0.9rem;
+  line-height: 1.6;
+}
+
+.empty-state b { color: var(--text); }
+
+/* ---- stats strip ---- */
+
+.stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 28px;
+}
+
+.stat {
+  background: var(--panel);
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+  padding: 11px 16px;
+  min-width: 96px;
+}
+
+.stat-value {
+  font-family: var(--mono);
+  font-size: 1.15rem;
+  font-weight: 600;
+}
+
+.stat-label {
+  color: var(--text-faint);
+  font-size: 0.72rem;
+  margin-top: 2px;
+}
+
+/* ---- table ---- */
+
+.table-wrap {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow: auto;
+  margin-bottom: 32px;
+}
+
+table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
+
+th {
+  background: var(--panel-2);
+  color: var(--text-dim);
+  font-weight: 500;
+  text-align: left;
+  padding: 11px 14px;
+  position: sticky;
+  top: 0;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+th small { display: block; color: var(--text-faint); font-weight: 400; margin-top: 2px; }
+
+td {
+  padding: 11px 14px;
+  border-top: 1px solid var(--border-soft);
+  vertical-align: top;
+  white-space: nowrap;
+}
+
+tbody tr:hover { background: var(--panel); }
+
+.symbol { font-family: var(--mono); font-weight: 600; }
+
+.mono { font-family: var(--mono); }
+
+.dim { color: var(--text-dim); }
+
+/* candle strip */
+
+.candle {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  color: var(--text-faint);
+  margin-right: 8px;
+}
+
+.candle b { font-weight: 600; }
+.candle.up b { color: var(--long); }
+.candle.down b { color: var(--short); }
+.candle.flat b { color: var(--text-faint); }
+.candle-partial { text-decoration: underline dotted var(--caution); }
+
+/* condition + result badges */
+
+.badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 5px;
+  font-size: 0.72rem;
+  font-weight: 500;
+  font-family: var(--mono);
+}
+
+.badge.yes { background: var(--long-soft); color: var(--long); }
+.badge.no { background: var(--short-soft); color: var(--short); }
+.badge.na { background: var(--panel-2); color: var(--text-faint); }
+
+.result {
+  font-size: 0.78rem;
+  font-weight: 600;
+  font-family: var(--mono);
+}
+
+.result.pass { color: var(--long); }
+.result.fail { color: var(--text-faint); }
+.result.other { color: var(--caution); }
+
+.detail-line {
+  margin-top: 4px;
+  color: var(--text-faint);
+  font-size: 0.72rem;
+  white-space: normal;
+}
+
+.verify-tag {
+  display: inline-block;
+  margin-top: 4px;
+  padding: 1px 7px;
+  border-radius: 4px;
+  background: var(--caution-soft);
+  color: var(--caution);
+  font-size: 0.68rem;
+}
+
+/* ---- footer ---- */
+
+footer {
+  border-top: 1px solid var(--border-soft);
+  padding-top: 22px;
+  color: var(--text-dim);
+  font-size: 0.82rem;
+  line-height: 1.7;
+}
+
+footer h2 {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text);
+  margin: 0 0 8px;
+}
+
+footer .section { margin-bottom: 18px; max-width: 720px; }
+footer ol { margin: 6px 0 0; padding-left: 20px; }
+footer ol li { margin-bottom: 4px; }
+
+/* ---- mobile ---- */
+
+@media (max-width: 640px) {
+  body { padding: 24px 16px 48px; }
+  h1 { font-size: 1.3rem; }
+  .matches-grid { grid-template-columns: 1fr; }
+  td, th { padding: 9px 10px; }
+}
 """
 
 
@@ -942,49 +1334,65 @@ def build_table_row(r):
     details = r.get("details")
     status = r.get("status", "UNKNOWN")
 
-    status_class = {"PASS": "pass", "FAIL": "fail"}.get(status, "skip")
+    status_map = {"PASS": "pass", "FAIL": "fail"}
+    status_class = status_map.get(status, "other")
+    status_label = {"NO_DATA": "No data"}.get(status, status.capitalize())
+
+    strip = candle_strip(details, r.get("partial_groups"))
+
+    def yesno(value):
+        if value is None:
+            return '<span class="badge na">&ndash;</span>'
+        return (
+            f'<span class="badge {"yes" if value else "no"}">'
+            f'{"Yes" if value else "No"}</span>'
+        )
 
     if details:
-        t1 = (
-            f"15:24 {trend_name(details['d1524'])} "
-            f"vol {details['15:24_vol']:,.0f} &gt; "
-            f"15:27 vol {details['15:27_vol']:,.0f}"
+        d1524, d1527 = details["d1524"], details["d1527"]
+        detail_1a = (
+            f'{details["1524_vol"]:,.0f} vs {details["1527_vol"]:,.0f}'
         )
-        t2 = (
-            f"15:28 {trend_name(details['d1528'])} "
-            f"vol {details['15:28_vol']:,.0f} &gt; "
-            f"15:29 {trend_name(details['d1529'])} "
-            f"vol {details['15:29_vol']:,.0f}"
-        )
-        t3 = (
-            f"1M 15:28 {trend_name(details['d1528'])} = "
-            f"3M 15:24 {trend_name(details['d1524'])}"
-        )
+        detail_1b = f'{r.get("cond1b_matches", 0)} of 4 candles match'
+        detail_2 = f'09:15 {trend_name(details["d0915"])}, 15:24 {trend_name(d1524)}'
     else:
-        t1 = t2 = t3 = ""
+        detail_1a = detail_1b = detail_2 = ""
 
-    data_text = cell(r.get("data_status"))
+    verify_html = ""
+    if r.get("partial_3m"):
+        groups = ", ".join(CANDLE_LABEL[g] for g in r.get("partial_groups", []))
+        verify_html = f'<div class="verify-tag">Verify &mdash; partial: {esc(groups)}</div>'
+
+    data_status_label = {
+        "OK": "OK", "FALLBACK": "Fallback (7d)", "NO_DATA": "No data",
+        "ERROR": "Error",
+    }.get(r.get("data_status"), r.get("data_status"))
+
+    data_bits = [cell(data_status_label)]
 
     if r.get("missing"):
-        data_text += (
-            "<br><small>missing: "
+        data_bits.append(
+            '<div class="detail-line">missing: '
             + ", ".join(hm_text(h) for h in r["missing"])
-            + "</small>"
+            + "</div>"
         )
 
     if r.get("error"):
-        data_text += f"<br><small>{esc(r['error'][:120])}</small>"
+        data_bits.append(f'<div class="detail-line">{esc(r["error"][:120])}</div>')
+
+    data_text = "".join(data_bits)
 
     return f"""
 <tr>
 <td class="symbol">{esc(r.get('symbol', ''))}</td>
-<td>{cell(r.get('date'))}</td>
-<td>{cell(r.get('direction'))}</td>
-<td>{badge(r.get('cond1'))}<br><small>{t1}</small></td>
-<td>{badge(r.get('cond2'))}<br><small>{t2}</small></td>
-<td>{badge(r.get('cond3'))}<br><small>{t3}</small></td>
-<td class="{status_class}">{esc(status)}</td>
-<td>{data_text}</td>
+<td class="mono dim">{cell(r.get('date'))}</td>
+<td class="mono">{cell(r.get('direction'))}</td>
+<td>{strip}</td>
+<td>{yesno(r.get('cond1a'))}<div class="detail-line">{detail_1a}</div></td>
+<td>{yesno(r.get('cond1b'))}<div class="detail-line">{detail_1b}</div></td>
+<td>{yesno(r.get('cond2'))}<div class="detail-line">{detail_2}</div></td>
+<td><span class="result {status_class}">{esc(status_label)}</span>{verify_html}</td>
+<td class="mono dim">{data_text}</td>
 </tr>
 """
 
@@ -1000,19 +1408,44 @@ def generate_html_report(results, elapsed, universe_source):
 
     matches = [r for r in results if r.get("status") == "PASS"]
 
+    signal_dates = [r["date"] for r in results if r.get("date")]
+    prev_dates = [r["previous_day"] for r in results if r.get("previous_day")]
+    signal_date = Counter(signal_dates).most_common(1)[0][0] if signal_dates else None
+    previous_day = Counter(prev_dates).most_common(1)[0][0] if prev_dates else None
+
+    # ---- matches (hero) ----
+
     if matches:
-        match_html = "".join(
-            '<div class="match">'
-            f'<span class="direction '
-            f'{"long" if r["direction"] == "LONG" else "short"}">'
-            f'{esc(r["direction"])}</span>'
-            f'<b>{esc(r["symbol"])}</b>'
-            f'<span class="date">Signal day: {cell(r.get("date"))}</span>'
-            '</div>'
-            for r in matches
+        cards = []
+        for r in matches:
+            direction = r["direction"]
+            cls = "long" if direction == "LONG" else "short"
+            verify = (
+                '<div class="match-verify">Verify on TradingView &mdash; '
+                'built from a partial 3-min candle</div>'
+                if r.get("partial_3m") else ""
+            )
+            cards.append(f'''
+<div class="match-card {cls}">
+  <div class="match-top">
+    <span class="match-symbol">{esc(r["symbol"])}</span>
+    <span class="match-dir {cls}">{arrow(1 if direction=="LONG" else -1)} {esc(direction)}</span>
+  </div>
+  <div class="match-sub">Signal day {cell(r.get("date"))}</div>
+  {verify}
+</div>''')
+        matches_html = (
+            '<div class="matches-grid">' + "".join(cards) + '</div>'
         )
     else:
-        match_html = '<div class="none">No stocks matched today.</div>'
+        matches_html = f'''
+<div class="empty-state">
+  <b>No symbols matched every condition.</b><br>
+  {len(results):,} scanned against the day-before-previous-day conditions
+  &mdash; none passed both.
+</div>'''
+
+    # ---- table ----
 
     sorted_results = sorted(
         results,
@@ -1025,11 +1458,11 @@ def generate_html_report(results, elapsed, universe_source):
     warning_html = f'<div class="warn">{esc(warning)}</div>' if warning else ""
 
     scan_time = pd.Timestamp.now(tz="Asia/Kolkata").strftime(
-        "%Y-%m-%d %H:%M:%S IST"
+        "%d %b %Y, %H:%M IST"
     )
 
     stats = [
-        (len(results), "Stocks scanned"),
+        (len(results), "Scanned"),
         (len(matches), "Matches"),
         (count("FAIL"), "No match"),
         (count("INCOMPLETE"), "Incomplete"),
@@ -1040,52 +1473,106 @@ def generate_html_report(results, elapsed, universe_source):
     ]
 
     stats_html = "".join(
-        f'<div class="stat"><b>{value}</b>{label}</div>'
+        f'<div class="stat"><div class="stat-value">{value}</div>'
+        f'<div class="stat-label">{label}</div></div>'
         for value, label in stats
     )
 
-    document = (
-        '<!DOCTYPE html>\n<html>\n<head>\n<meta charset="UTF-8">\n'
-        '<meta name="viewport" content="width=device-width, initial-scale=1">\n'
-        '<title>NSE Daily Momentum Scanner</title>\n'
-        f'<style>{CSS}</style>\n</head>\n<body>\n<div class="container">\n'
-        '<h1>NSE Daily Momentum Scanner</h1>\n'
-        f'<div class="subtitle">Generated: {esc(scan_time)}<br>'
-        f'Universe: {esc(universe_source)}<br>'
-        'Yahoo Finance 1-minute data</div>\n'
-        f'{warning_html}\n'
-        f'<div class="stats">{stats_html}</div>\n'
-        f'<div class="match-box"><h2>Matches</h2>{match_html}</div>\n'
-        '<table>\n<thead>\n<tr>'
-        '<th>Symbol</th>'
-        '<th>Signal Day</th>'
-        '<th>Direction</th>'
-        '<th>Cond 1<br><small>3M 15:24 vol &gt; 15:27 vol</small></th>'
-        '<th>Cond 2<br><small>1M 15:28 / 15:29 opposite, '
-        '15:28 vol &gt; 15:29 vol</small></th>'
-        '<th>Cond 3<br><small>1M 15:28 trend = 3M 15:24 trend</small></th>'
-        '<th>Result</th>'
-        '<th>Data</th>'
-        '</tr>\n</thead>\n<tbody>\n'
-        f'{table_rows}\n'
-        '</tbody>\n</table>\n'
-        '<div class="footer">\n<b>CURRENT STRATEGY</b><br>\n'
-        '1. 3-min 15:24 volume must be greater than 15:27 volume.<br>\n'
-        '2. 3-min 15:24 and 15:27 trend relationship is ignored. '
-        'They can be the same or opposite.<br>\n'
-        '3. 1-min 15:28 and 15:29 must be opposite trends.<br>\n'
-        '4. 1-min 15:28 volume must be greater than 15:29 volume.<br>\n'
-        '5. 1-min 15:28 trend must match 3-min 15:24 trend.<br>\n'
-        '6. Final direction = 1-min 15:28.<br>\n'
-        '<b>Entry:</b> Next trading day 09:15 open.<br>\n'
-        '<b>Exit:</b> 15:27.<br><br>\n'
-        '<b>Data notes:</b> Yahoo returns no row for a minute with no trades. '
-        'Such a minute is treated as volume 0 with no trend and is listed '
-        'under "missing" in the Data column. INCOMPLETE = no candle at all in '
-        'the 15:24-15:29 window. STALE = latest data is from a different day '
-        'than most symbols.\n</div>\n'
-        '</div>\n</body>\n</html>\n'
+    meta_items = [
+        ("Generated", scan_time),
+        ("Universe", universe_source),
+        ("Day before previous (signal day)", cell(signal_date)),
+        ("Previous day (latest)", cell(previous_day)),
+        ("Entry", "Next session, 09:15 open"),
+        ("Exit", "Next session, 15:27"),
+    ]
+
+    meta_html = "".join(
+        f'<div class="meta-item"><div class="meta-label">{esc(label)}</div>'
+        f'<div class="meta-value">{value}</div></div>'
+        for label, value in meta_items
     )
+
+    document = f'''<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NSE Momentum Scanner</title>
+<style>{CSS}</style>
+</head>
+<body>
+<div class="container">
+
+<header>
+  <h1>NSE Momentum Scanner</h1>
+  <div class="meta-row">{meta_html}</div>
+</header>
+
+{warning_html}
+
+<section class="matches-section">
+  <h2 class="matches-heading">Matches</h2>
+  {matches_html}
+</section>
+
+<div class="stats">{stats_html}</div>
+
+<div class="table-wrap">
+<table>
+<thead>
+<tr>
+<th>Symbol</th>
+<th>Signal day</th>
+<th>Direction</th>
+<th>Candles <small>09:15 &middot; 15:15 &middot; 15:18 &middot; 15:21 &middot; 15:24 &middot; 15:27</small></th>
+<th>15:24 vol &gt; 15:27 vol</th>
+<th>Trend matches <small>&ge;2 of 4</small></th>
+<th>09:15 = 15:24 trend</th>
+<th>Result</th>
+<th>Data</th>
+</tr>
+</thead>
+<tbody>
+{table_rows}
+</tbody>
+</table>
+</div>
+
+<footer>
+  <div class="section">
+    <h2>How this works</h2>
+    Every condition is checked on the day before previous day &mdash; two
+    trading days before entry &mdash; at the 3-minute timeframe.
+    <ol>
+      <li>The 15:24 candle's volume is greater than the 15:27 candle's
+      volume, and at least two of the four candles at 15:15, 15:18, 15:21
+      and 15:27 share the 15:24 candle's trend.</li>
+      <li>The 9:15 candle's trend matches the 15:24 candle's trend.</li>
+    </ol>
+    Direction follows the 15:24 candle: an up trend means long, a down
+    trend means short. Entry is the next trading session's 09:15 open;
+    exit is that same session's 15:27.
+  </div>
+  <div class="section">
+    <h2>Data notes</h2>
+    Yahoo has no native 3-minute interval, so each 3-minute candle here is
+    built from three 1-minute bars. A minute with no trades simply doesn't
+    appear in Yahoo's data &mdash; it's treated as zero volume with no
+    trend, which is correct when that's genuinely what happened, but Yahoo
+    can't tell that apart from a dropped bar. A "Verify" tag means at
+    least one of the six candles was built from an incomplete set of
+    1-minute bars &mdash; check it on TradingView before acting on it.
+    Incomplete means no data at all in the required window on the signal
+    day. Stale means the resolved signal day doesn't match most other
+    symbols.
+  </div>
+</footer>
+
+</div>
+</body>
+</html>
+'''
 
     with open("index.html", "w", encoding="utf-8") as file:
         file.write(document)
