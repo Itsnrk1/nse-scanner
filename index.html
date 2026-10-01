@@ -22,16 +22,23 @@
   --short-soft: rgba(240, 85, 92, 0.13);
   --caution: #E7A94A;
   --caution-soft: rgba(231, 169, 74, 0.13);
+  --accent: #45D9E8;
+  --accent-soft: rgba(69, 217, 232, 0.13);
   --sans: 'IBM Plex Sans', ui-sans-serif, system-ui, -apple-system, sans-serif;
   --mono: 'IBM Plex Mono', ui-monospace, 'SF Mono', Menlo, monospace;
 }
 
 * { box-sizing: border-box; }
 
+html { background: var(--bg); }
+
 body {
+  position: relative;
   margin: 0;
   padding: 40px 28px 64px;
-  background: var(--bg);
+  background:
+    radial-gradient(ellipse 1100px 520px at 50% -8%, rgba(69, 217, 232, 0.055), transparent 60%),
+    var(--bg);
   color: var(--text);
   font-family: var(--sans);
   font-size: 15px;
@@ -39,11 +46,24 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
+/* faint instrument-panel grid, purely atmospheric */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background-image:
+    linear-gradient(rgba(231, 236, 241, 0.025) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(231, 236, 241, 0.025) 1px, transparent 1px);
+  background-size: 46px 46px;
+  pointer-events: none;
+  z-index: 0;
+}
+
 a { color: inherit; }
 
 :focus-visible { outline: 2px solid var(--caution); outline-offset: 2px; }
 
-.container { max-width: 1320px; margin: 0 auto; }
+.container { position: relative; z-index: 1; max-width: 1320px; margin: 0 auto; }
 
 /* ---- header ---- */
 
@@ -54,6 +74,33 @@ h1 {
   font-size: 1.65rem;
   font-weight: 700;
   letter-spacing: -0.01em;
+}
+
+.status-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 10px;
+  color: var(--text-dim);
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  letter-spacing: 0.02em;
+}
+
+.status-dot {
+  width: 7px;
+  height: 7px;
+  margin-right: 7px;
+  border-radius: 50%;
+  background: var(--long);
+  box-shadow: 0 0 8px 1px var(--long);
+  animation: pulse 2.4s ease-in-out infinite;
+}
+
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .status-dot { animation: none; }
 }
 
 .meta-row {
@@ -71,6 +118,7 @@ h1 {
 .meta-label {
   color: var(--text-faint);
   font-size: 0.75rem;
+  letter-spacing: 0.02em;
   margin-bottom: 3px;
 }
 
@@ -95,14 +143,43 @@ h1 {
 
 /* ---- matches (hero) ---- */
 
-.matches-section { margin-bottom: 28px; }
+.matches-section { position: relative; margin-bottom: 28px; padding-top: 4px; }
+
+.scan-line {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 4px;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, var(--accent), transparent);
+  box-shadow: 0 0 14px 1px var(--accent);
+  animation: sweep 1.5s cubic-bezier(0.4, 0, 0.2, 1) 1 both;
+  pointer-events: none;
+}
+
+@keyframes sweep {
+  0%   { top: 4px; opacity: 0; }
+  8%   { opacity: 1; }
+  85%  { opacity: 1; }
+  100% { top: 100%; opacity: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .scan-line { display: none; }
+}
 
 .matches-heading {
+  display: flex;
+  align-items: center;
+  gap: 7px;
   font-size: 0.95rem;
   font-weight: 600;
   color: var(--text-dim);
+  letter-spacing: 0.02em;
   margin: 0 0 12px;
 }
+
+.matches-heading .glyph { color: var(--accent); font-size: 0.85em; margin-right: 7px; }
 
 .matches-grid {
   display: grid;
@@ -120,15 +197,29 @@ h1 {
 }
 
 .match-card {
+  position: relative;
   background: var(--panel);
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: 10px;
   padding: 18px 20px;
-  animation: rise 0.35s ease-out both;
+  animation: rise 0.4s ease-out both;
 }
 
-.match-card.long { border-left: 3px solid var(--long); }
-.match-card.short { border-left: 3px solid var(--short); }
+.match-card.long { color: var(--long); box-shadow: 0 0 28px -6px var(--long-soft); }
+.match-card.short { color: var(--short); box-shadow: 0 0 28px -6px var(--short-soft); }
+
+/* corner-bracket "target lock" accents, in the card's direction color */
+.match-card::before,
+.match-card::after {
+  content: '';
+  position: absolute;
+  width: 13px;
+  height: 13px;
+  border: 2px solid currentColor;
+  opacity: 0.75;
+}
+.match-card::before { top: -1px; left: -1px; border-right: none; border-bottom: none; border-radius: 3px 0 0 0; }
+.match-card::after { bottom: -1px; right: -1px; border-left: none; border-top: none; border-radius: 0 0 3px 0; }
 
 .match-top {
   display: flex;
@@ -138,6 +229,7 @@ h1 {
 }
 
 .match-symbol {
+  color: var(--text);
   font-family: var(--mono);
   font-size: 1.35rem;
   font-weight: 600;
@@ -153,8 +245,8 @@ h1 {
   white-space: nowrap;
 }
 
-.match-dir.long { background: var(--long-soft); color: var(--long); }
-.match-dir.short { background: var(--short-soft); color: var(--short); }
+.match-dir.long { background: var(--long-soft); color: var(--long); text-shadow: 0 0 12px rgba(52, 194, 125, 0.45); }
+.match-dir.short { background: var(--short-soft); color: var(--short); text-shadow: 0 0 12px rgba(240, 85, 92, 0.45); }
 
 .match-sub {
   margin-top: 8px;
@@ -350,13 +442,15 @@ footer ol li { margin-bottom: 4px; }
 
 <header>
   <h1>NSE Momentum Scanner</h1>
-  <div class="meta-row"><div class="meta-item"><div class="meta-label">Generated</div><div class="meta-value">30 Sep 2026, 21:58 IST</div></div><div class="meta-item"><div class="meta-label">Universe</div><div class="meta-value">Nifty Total Market (Nifty 500 + Microcap 250)</div></div><div class="meta-item"><div class="meta-label">Day before previous (signal day)</div><div class="meta-value">2026-09-29</div></div><div class="meta-item"><div class="meta-label">Previous day (latest)</div><div class="meta-value">2026-09-30</div></div><div class="meta-item"><div class="meta-label">Entry</div><div class="meta-value">Next session, 09:15 open</div></div><div class="meta-item"><div class="meta-label">Exit</div><div class="meta-value">Next session, 15:27</div></div></div>
+  <div class="status-chip"><span class="status-dot"></span>Scan complete</div>
+  <div class="meta-row"><div class="meta-item"><div class="meta-label">Generated</div><div class="meta-value">01 Oct 2026, 07:30 IST</div></div><div class="meta-item"><div class="meta-label">Universe</div><div class="meta-value">Nifty Total Market (Nifty 500 + Microcap 250)</div></div><div class="meta-item"><div class="meta-label">Day before previous (signal day)</div><div class="meta-value">2026-09-29</div></div><div class="meta-item"><div class="meta-label">Previous day</div><div class="meta-value">2026-09-30</div></div><div class="meta-item"><div class="meta-label">Entry</div><div class="meta-value">2026-10-01, 09:15 open</div></div><div class="meta-item"><div class="meta-label">Exit</div><div class="meta-value">2026-10-01, 15:27</div></div></div>
 </header>
 
 
 
 <section class="matches-section">
-  <h2 class="matches-heading">Matches</h2>
+  <div class="scan-line"></div>
+  <h2 class="matches-heading"><span class="glyph">&#9678;</span>Matches</h2>
   <div class="matches-grid">
 <div class="match-card short">
   <div class="match-top">
@@ -1304,7 +1398,7 @@ footer ol li { margin-bottom: 4px; }
 </div></div>
 </section>
 
-<div class="stats"><div class="stat"><div class="stat-value">755</div><div class="stat-label">Scanned</div></div><div class="stat"><div class="stat-value">118</div><div class="stat-label">Matches</div></div><div class="stat"><div class="stat-value">629</div><div class="stat-label">No match</div></div><div class="stat"><div class="stat-value">0</div><div class="stat-label">Incomplete</div></div><div class="stat"><div class="stat-value">0</div><div class="stat-label">Stale</div></div><div class="stat"><div class="stat-value">6</div><div class="stat-label">No data</div></div><div class="stat"><div class="stat-value">2</div><div class="stat-label">Errors</div></div><div class="stat"><div class="stat-value">47.2s</div><div class="stat-label">Scan time</div></div></div>
+<div class="stats"><div class="stat"><div class="stat-value">755</div><div class="stat-label">Scanned</div></div><div class="stat"><div class="stat-value">118</div><div class="stat-label">Matches</div></div><div class="stat"><div class="stat-value">629</div><div class="stat-label">No match</div></div><div class="stat"><div class="stat-value">0</div><div class="stat-label">Incomplete</div></div><div class="stat"><div class="stat-value">0</div><div class="stat-label">Stale</div></div><div class="stat"><div class="stat-value">6</div><div class="stat-label">No data</div></div><div class="stat"><div class="stat-value">2</div><div class="stat-label">Errors</div></div><div class="stat"><div class="stat-value">46.2s</div><div class="stat-label">Scan time</div></div></div>
 
 <div class="table-wrap">
 <table>
