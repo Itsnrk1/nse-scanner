@@ -659,18 +659,27 @@ def evaluate_rows(rows):
     ):
         by_date.setdefault(date, {})[int(hm)] = (float(o), float(c), float(v))
 
-    dates = sorted(by_date)
+    # "Today" is fixed to the real calendar date, not inferred from
+    # whichever date happens to be latest in the fetched data. That
+    # inference broke depending on exactly when the scan was run: if Yahoo
+    # had already returned even a few minutes of today's session, today
+    # got mistaken for "previous day" and the whole mapping shifted back
+    # by a day. Excluding today outright makes the result the same
+    # whether the scan runs before the open or mid-session.
+    today = pd.Timestamp.now(tz="Asia/Kolkata").strftime("%Y-%m-%d")
+    dates = sorted(d for d in by_date if d != today)
 
-    # Need at least 2 distinct trading days: "previous day" (the latest one
-    # present - today if the market is still open, else yesterday) and
-    # "day before previous day" (the one the strategy actually reads).
+    # Need at least 2 distinct trading days strictly before today:
+    # "previous day" (yesterday's session) and "day before previous day"
+    # (the one the strategy actually reads).
     if len(dates) < 2:
         return {
             "status": "INCOMPLETE",
             "date": dates[-1] if dates else None,
             "previous_day": None,
+            "entry_day": today,
             "missing": sorted(NEEDED_HM),
-            "note": "fewer than 2 trading days of data available",
+            "note": "fewer than 2 trading days of data available before today",
         }
 
     previous_day = dates[-1]
@@ -685,6 +694,7 @@ def evaluate_rows(rows):
             "status": "INCOMPLETE",
             "date": signal_date,
             "previous_day": previous_day,
+            "entry_day": today,
             "missing": missing,
         }
 
@@ -744,6 +754,7 @@ def evaluate_rows(rows):
         "status": "PASS" if passed else "FAIL",
         "date": signal_date,
         "previous_day": previous_day,
+        "entry_day": today,
         "direction": direction if passed else None,
         "raw_direction": direction,
         "cond1": cond1,
@@ -959,7 +970,7 @@ CANDLE_LABEL = {
 
 
 def arrow(d):
-    return {1: "\u25b2", -1: "\u25bc"}.get(d, "\u2013")  # â–² â–¼ â€“
+    return {1: "\u25b2", -1: "\u25bc"}.get(d, "\u2013")  # ▲ ▼ –
 
 
 def trend_class(d):
@@ -967,7 +978,7 @@ def trend_class(d):
 
 
 def candle_strip(details, partial_groups):
-    """Compact 6-candle strip shown per row, e.g. 09:15â–² 15:15â–² 15:18â–¼ ..."""
+    """Compact 6-candle strip shown per row, e.g. 09:15▲ 15:15▲ 15:18▼ ..."""
 
     if not details:
         return ""
@@ -1005,16 +1016,23 @@ CSS = """
   --short-soft: rgba(240, 85, 92, 0.13);
   --caution: #E7A94A;
   --caution-soft: rgba(231, 169, 74, 0.13);
+  --accent: #45D9E8;
+  --accent-soft: rgba(69, 217, 232, 0.13);
   --sans: 'IBM Plex Sans', ui-sans-serif, system-ui, -apple-system, sans-serif;
   --mono: 'IBM Plex Mono', ui-monospace, 'SF Mono', Menlo, monospace;
 }
 
 * { box-sizing: border-box; }
 
+html { background: var(--bg); }
+
 body {
+  position: relative;
   margin: 0;
   padding: 40px 28px 64px;
-  background: var(--bg);
+  background:
+    radial-gradient(ellipse 1100px 520px at 50% -8%, rgba(69, 217, 232, 0.055), transparent 60%),
+    var(--bg);
   color: var(--text);
   font-family: var(--sans);
   font-size: 15px;
@@ -1022,11 +1040,24 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
+/* faint instrument-panel grid, purely atmospheric */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background-image:
+    linear-gradient(rgba(231, 236, 241, 0.025) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(231, 236, 241, 0.025) 1px, transparent 1px);
+  background-size: 46px 46px;
+  pointer-events: none;
+  z-index: 0;
+}
+
 a { color: inherit; }
 
 :focus-visible { outline: 2px solid var(--caution); outline-offset: 2px; }
 
-.container { max-width: 1320px; margin: 0 auto; }
+.container { position: relative; z-index: 1; max-width: 1320px; margin: 0 auto; }
 
 /* ---- header ---- */
 
@@ -1037,6 +1068,33 @@ h1 {
   font-size: 1.65rem;
   font-weight: 700;
   letter-spacing: -0.01em;
+}
+
+.status-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 10px;
+  color: var(--text-dim);
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  letter-spacing: 0.02em;
+}
+
+.status-dot {
+  width: 7px;
+  height: 7px;
+  margin-right: 7px;
+  border-radius: 50%;
+  background: var(--long);
+  box-shadow: 0 0 8px 1px var(--long);
+  animation: pulse 2.4s ease-in-out infinite;
+}
+
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .status-dot { animation: none; }
 }
 
 .meta-row {
@@ -1054,6 +1112,7 @@ h1 {
 .meta-label {
   color: var(--text-faint);
   font-size: 0.75rem;
+  letter-spacing: 0.02em;
   margin-bottom: 3px;
 }
 
@@ -1078,14 +1137,43 @@ h1 {
 
 /* ---- matches (hero) ---- */
 
-.matches-section { margin-bottom: 28px; }
+.matches-section { position: relative; margin-bottom: 28px; padding-top: 4px; }
+
+.scan-line {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 4px;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, var(--accent), transparent);
+  box-shadow: 0 0 14px 1px var(--accent);
+  animation: sweep 1.5s cubic-bezier(0.4, 0, 0.2, 1) 1 both;
+  pointer-events: none;
+}
+
+@keyframes sweep {
+  0%   { top: 4px; opacity: 0; }
+  8%   { opacity: 1; }
+  85%  { opacity: 1; }
+  100% { top: 100%; opacity: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .scan-line { display: none; }
+}
 
 .matches-heading {
+  display: flex;
+  align-items: center;
+  gap: 7px;
   font-size: 0.95rem;
   font-weight: 600;
   color: var(--text-dim);
+  letter-spacing: 0.02em;
   margin: 0 0 12px;
 }
+
+.matches-heading .glyph { color: var(--accent); font-size: 0.85em; margin-right: 7px; }
 
 .matches-grid {
   display: grid;
@@ -1103,15 +1191,29 @@ h1 {
 }
 
 .match-card {
+  position: relative;
   background: var(--panel);
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: 10px;
   padding: 18px 20px;
-  animation: rise 0.35s ease-out both;
+  animation: rise 0.4s ease-out both;
 }
 
-.match-card.long { border-left: 3px solid var(--long); }
-.match-card.short { border-left: 3px solid var(--short); }
+.match-card.long { color: var(--long); box-shadow: 0 0 28px -6px var(--long-soft); }
+.match-card.short { color: var(--short); box-shadow: 0 0 28px -6px var(--short-soft); }
+
+/* corner-bracket "target lock" accents, in the card's direction color */
+.match-card::before,
+.match-card::after {
+  content: '';
+  position: absolute;
+  width: 13px;
+  height: 13px;
+  border: 2px solid currentColor;
+  opacity: 0.75;
+}
+.match-card::before { top: -1px; left: -1px; border-right: none; border-bottom: none; border-radius: 3px 0 0 0; }
+.match-card::after { bottom: -1px; right: -1px; border-left: none; border-top: none; border-radius: 0 0 3px 0; }
 
 .match-top {
   display: flex;
@@ -1121,6 +1223,7 @@ h1 {
 }
 
 .match-symbol {
+  color: var(--text);
   font-family: var(--mono);
   font-size: 1.35rem;
   font-weight: 600;
@@ -1136,8 +1239,8 @@ h1 {
   white-space: nowrap;
 }
 
-.match-dir.long { background: var(--long-soft); color: var(--long); }
-.match-dir.short { background: var(--short-soft); color: var(--short); }
+.match-dir.long { background: var(--long-soft); color: var(--long); text-shadow: 0 0 12px rgba(52, 194, 125, 0.45); }
+.match-dir.short { background: var(--short-soft); color: var(--short); text-shadow: 0 0 12px rgba(240, 85, 92, 0.45); }
 
 .match-sub {
   margin-top: 8px;
@@ -1410,8 +1513,13 @@ def generate_html_report(results, elapsed, universe_source):
 
     signal_dates = [r["date"] for r in results if r.get("date")]
     prev_dates = [r["previous_day"] for r in results if r.get("previous_day")]
+    entry_dates = [r["entry_day"] for r in results if r.get("entry_day")]
     signal_date = Counter(signal_dates).most_common(1)[0][0] if signal_dates else None
     previous_day = Counter(prev_dates).most_common(1)[0][0] if prev_dates else None
+    entry_day = (
+        Counter(entry_dates).most_common(1)[0][0] if entry_dates
+        else pd.Timestamp.now(tz="Asia/Kolkata").strftime("%Y-%m-%d")
+    )
 
     # ---- matches (hero) ----
 
@@ -1482,9 +1590,9 @@ def generate_html_report(results, elapsed, universe_source):
         ("Generated", scan_time),
         ("Universe", universe_source),
         ("Day before previous (signal day)", cell(signal_date)),
-        ("Previous day (latest)", cell(previous_day)),
-        ("Entry", "Next session, 09:15 open"),
-        ("Exit", "Next session, 15:27"),
+        ("Previous day", cell(previous_day)),
+        ("Entry", f"{cell(entry_day)}, 09:15 open"),
+        ("Exit", f"{cell(entry_day)}, 15:27"),
     ]
 
     meta_html = "".join(
@@ -1506,13 +1614,15 @@ def generate_html_report(results, elapsed, universe_source):
 
 <header>
   <h1>NSE Momentum Scanner</h1>
+  <div class="status-chip"><span class="status-dot"></span>Scan complete</div>
   <div class="meta-row">{meta_html}</div>
 </header>
 
 {warning_html}
 
 <section class="matches-section">
-  <h2 class="matches-heading">Matches</h2>
+  <div class="scan-line"></div>
+  <h2 class="matches-heading"><span class="glyph">&#9678;</span>Matches</h2>
   {matches_html}
 </section>
 
