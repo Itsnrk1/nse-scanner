@@ -41,6 +41,7 @@
 
 import html
 import logging
+import math
 import random
 import sys
 import time
@@ -464,18 +465,27 @@ def clean_yahoo_data(df):
     if not all(c in df.columns for c in ("Open", "Close", "Volume")):
         return None
 
+    open_ = pd.to_numeric(df["Open"], errors="coerce")
+    close_ = pd.to_numeric(df["Close"], errors="coerce")
+    # High/Low power the candlestick visuals; fall back to open/close for
+    # any feed that happens to omit them so nothing downstream breaks.
+    high_ = pd.to_numeric(df["High"], errors="coerce") if "High" in df.columns else None
+    low_ = pd.to_numeric(df["Low"], errors="coerce") if "Low" in df.columns else None
+
     out = pd.DataFrame({
         "date": ts.dt.strftime("%Y-%m-%d").values,
         "hm": (ts.dt.hour * 100 + ts.dt.minute).values,
-        "open": pd.to_numeric(df["Open"], errors="coerce").values,
-        "close": pd.to_numeric(df["Close"], errors="coerce").values,
+        "open": open_.values,
+        "high": (high_ if high_ is not None else pd.concat([open_, close_], axis=1).max(axis=1)).values,
+        "low": (low_ if low_ is not None else pd.concat([open_, close_], axis=1).min(axis=1)).values,
+        "close": close_.values,
         "volume": pd.to_numeric(df["Volume"], errors="coerce").values,
     })
 
     # Regular NSE session only.
     out = out[out["hm"].between(915, 1529)]
 
-    out = out.dropna(subset=["open", "close", "volume"])
+    out = out.dropna(subset=["open", "high", "low", "close", "volume"])
 
     out = out.drop_duplicates(subset=["date", "hm"], keep="last")
 
@@ -595,11 +605,13 @@ def aggregate_3m(m, minutes):
     """3-minute candle built from whichever of the 3 one-minute candles
     exist. Yahoo has no native 3-minute interval, so this combines three
     1-minute bars: Open = open of the earliest sub-minute that has data,
-    Close = close of the latest sub-minute that has data, Volume = sum of
-    the sub-minutes' volumes. This is the correct construction as long as
-    a missing sub-minute really means "no trades" rather than "Yahoo
+    Close = close of the latest sub-minute that has data, High/Low = the
+    max/min across whichever sub-minutes are present, Volume = sum of the
+    sub-minutes' volumes. This is the correct construction as long as a
+    missing sub-minute really means "no trades" rather than "Yahoo
     dropped a real bar" - the code cannot tell those two apart, which is
     exactly what a manual cross-check (e.g. on TradingView) is good for.
+    m[minute] is a tuple (open, high, low, close, volume).
     """
 
     present = [minute for minute in minutes if minute in m]
@@ -607,8 +619,7 @@ def aggregate_3m(m, minutes):
 
     if not present:
         return {
-            "open": None,
-            "close": None,
+            "open": None, "high": None, "low": None, "close": None,
             "volume": 0,
             "minutes_used": [],
             "minutes_missing": missing,
@@ -619,8 +630,10 @@ def aggregate_3m(m, minutes):
 
     return {
         "open": candles[0][0],
-        "close": candles[-1][1],
-        "volume": sum(int(round(c[2])) for c in candles),
+        "high": max(c[1] for c in candles),
+        "low": min(c[2] for c in candles),
+        "close": candles[-1][3],
+        "volume": sum(int(round(c[4])) for c in candles),
         "minutes_used": present,
         "minutes_missing": missing,
         # True whenever this 3-min candle was not built from all 3
@@ -649,15 +662,18 @@ def evaluate_rows(rows):
         return {"status": "NO_DATA"}
 
     # ---------------------------------------------------------------------
-    # DATE -> {minute: (open, close, volume)}
+    # DATE -> {minute: (open, high, low, close, volume)}
     # ---------------------------------------------------------------------
 
     by_date = {}
 
-    for date, hm, o, c, v in zip(
-        rows["date"], rows["hm"], rows["open"], rows["close"], rows["volume"]
+    for date, hm, o, h, l, c, v in zip(
+        rows["date"], rows["hm"], rows["open"], rows["high"], rows["low"],
+        rows["close"], rows["volume"]
     ):
-        by_date.setdefault(date, {})[int(hm)] = (float(o), float(c), float(v))
+        by_date.setdefault(date, {})[int(hm)] = (
+            float(o), float(h), float(l), float(c), float(v)
+        )
 
     # "Today" is fixed to the real calendar date, not inferred from
     # whichever date happens to be latest in the fetched data. That
@@ -767,6 +783,15 @@ def evaluate_rows(rows):
         "partial_groups": partial_groups,
         "candle_minutes_used": {
             label: c.get("minutes_used", []) for label, c in candles.items()
+        },
+        # Actual OHLC per 3-min candle, for drawing real candlestick charts
+        # in the report (not just up/down arrows).
+        "ohlc": {
+            label: {
+                "open": c["open"], "high": c["high"],
+                "low": c["low"], "close": c["close"],
+            }
+            for label, c in candles.items()
         },
         "details": {
             "d0915": d["0915"],
@@ -998,6 +1023,152 @@ def candle_strip(details, partial_groups):
     return "".join(chips)
 
 
+def build_candlestick_svg(ohlc, size="large"):
+    """Real OHLC candlesticks for the six 3-min candles, not just up/down
+    arrows. ohlc: {label: {open, high, low, close}}, values may be missing
+    for a candle Yahoo had no data for at all."""
+
+    if size == "large":
+        width, height, pad_x, pad_y = 272, 92, 10, 12
+    else:
+        width, height, pad_x, pad_y = 150, 34, 4, 4
+
+    ohlc = ohlc or {}
+    plot_w = width - 2 * pad_x
+    plot_h = height - 2 * pad_y
+    n = len(CANDLE_ORDER)
+    slot_w = plot_w / n
+    body_w = max(2.2, slot_w * 0.46)
+
+    highs = [ohlc[l]["high"] for l in CANDLE_ORDER if ohlc.get(l) and ohlc[l].get("high") is not None]
+    lows = [ohlc[l]["low"] for l in CANDLE_ORDER if ohlc.get(l) and ohlc[l].get("low") is not None]
+
+    if not highs or not lows:
+        return (
+            f'<svg class="candles-svg candles-{size}" viewBox="0 0 {width} {height}" '
+            f'width="{width}" height="{height}" '
+            f'preserveAspectRatio="xMidYMid meet" role="img" aria-label="No candle data"></svg>'
+        )
+
+    hi, lo = max(highs), min(lows)
+    if hi == lo:
+        hi, lo = hi + 0.5, lo - 0.5
+    span = hi - lo
+
+    def y(price):
+        return pad_y + (hi - price) / span * plot_h
+
+    mid_y = pad_y + plot_h / 2
+    parts = [
+        f'<line x1="{pad_x:.1f}" y1="{mid_y:.1f}" x2="{width - pad_x:.1f}" y2="{mid_y:.1f}" '
+        f'stroke="var(--border-soft)" stroke-width="1" stroke-dasharray="2,3"/>'
+    ]
+
+    for i, label in enumerate(CANDLE_ORDER):
+        cx = pad_x + slot_w * i + slot_w / 2
+        c = ohlc.get(label)
+
+        if not c or c.get("open") is None:
+            parts.append(
+                f'<line x1="{cx - body_w/2:.1f}" y1="{mid_y:.1f}" x2="{cx + body_w/2:.1f}" '
+                f'y2="{mid_y:.1f}" stroke="var(--text-faint)" stroke-width="1.5" '
+                f'stroke-dasharray="1.5,2"/>'
+            )
+            continue
+
+        o, h, l, cl = c["open"], c["high"], c["low"], c["close"]
+        color = "var(--long)" if cl >= o else "var(--short)"
+        y_hi, y_lo = y(h), y(l)
+        y_o, y_c = y(o), y(cl)
+        body_top, body_bottom = min(y_o, y_c), max(y_o, y_c)
+        body_h = max(1.6, body_bottom - body_top)
+
+        parts.append(
+            f'<line x1="{cx:.1f}" y1="{y_hi:.1f}" x2="{cx:.1f}" y2="{y_lo:.1f}" '
+            f'stroke="{color}" stroke-width="1.2"/>'
+            f'<rect x="{cx - body_w/2:.1f}" y="{body_top:.1f}" width="{body_w:.1f}" '
+            f'height="{body_h:.1f}" fill="{color}" rx="1"/>'
+        )
+
+    return (
+        f'<svg class="candles-svg candles-{size}" viewBox="0 0 {width} {height}" '
+        f'width="{width}" height="{height}" '
+        f'preserveAspectRatio="xMidYMid meet" role="img" aria-label="6-candle price chart">'
+        + "".join(parts) + '</svg>'
+    )
+
+
+def build_radar_svg(matches):
+    """Circular 'signals detected' overview: every match plotted as a blip
+    around a radar ring, colored and labeled by its own real direction and
+    symbol - a visual index of the matches, not a decorative random
+    scatter. The detailed cards below carry the full numeric data."""
+
+    box = 440
+    cx = cy = box / 2
+    max_r = 122
+    label_r = max_r + 38
+
+    parts = [
+        '<defs><filter id="blipGlow" x="-120%" y="-120%" width="340%" height="340%">'
+        '<feGaussianBlur stdDeviation="3.2" result="b"/>'
+        '<feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>'
+        '</filter></defs>'
+    ]
+
+    for frac in (0.34, 0.67, 1.0):
+        parts.append(
+            f'<circle cx="{cx}" cy="{cy}" r="{max_r*frac:.1f}" fill="none" '
+            f'stroke="var(--border)" stroke-width="1"/>'
+        )
+    for deg in range(0, 360, 45):
+        rad = math.radians(deg)
+        parts.append(
+            f'<line x1="{cx}" y1="{cy}" x2="{cx + max_r*math.cos(rad):.1f}" '
+            f'y2="{cy + max_r*math.sin(rad):.1f}" stroke="var(--border-soft)" stroke-width="1"/>'
+        )
+    parts.append(f'<circle cx="{cx}" cy="{cy}" r="2.5" fill="var(--accent)"/>')
+
+    n = len(matches)
+
+    if n == 0:
+        parts.append(
+            f'<text x="{cx}" y="{cy+5}" text-anchor="middle" class="radar-empty">'
+            f'no contacts</text>'
+        )
+    else:
+        blip_r = max_r * 0.74
+        for i, r in enumerate(matches):
+            angle = -90 + (360 / n) * i
+            rad = math.radians(angle)
+            bx, by = cx + blip_r * math.cos(rad), cy + blip_r * math.sin(rad)
+            lx, ly = cx + label_r * math.cos(rad), cy + label_r * math.sin(rad)
+            color = "var(--long)" if r.get("direction") == "LONG" else "var(--short)"
+
+            anchor = "middle"
+            if lx < cx - 8:
+                anchor = "end"
+            elif lx > cx + 8:
+                anchor = "start"
+
+            parts.append(
+                f'<line x1="{bx:.1f}" y1="{by:.1f}" x2="{lx:.1f}" y2="{ly:.1f}" '
+                f'stroke="{color}" stroke-width="1" opacity="0.4"/>'
+                f'<circle cx="{bx:.1f}" cy="{by:.1f}" r="5.5" fill="{color}" '
+                f'filter="url(#blipGlow)"/>'
+                f'<circle cx="{bx:.1f}" cy="{by:.1f}" r="2" fill="var(--bg)"/>'
+                f'<text x="{lx:.1f}" y="{ly:.1f}" text-anchor="{anchor}" '
+                f'dominant-baseline="middle" class="radar-label" fill="{color}">'
+                f'{esc(r.get("symbol",""))}</text>'
+            )
+
+    return (
+        f'<svg class="radar-svg" viewBox="0 0 {box} {box}" width="{box}" height="{box}" '
+        f'role="img" aria-label="Radar overview of matched signals">'
+        + "".join(parts) + '</svg>'
+    )
+
+
 CSS = """
 @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
 
@@ -1137,30 +1308,7 @@ h1 {
 
 /* ---- matches (hero) ---- */
 
-.matches-section { position: relative; margin-bottom: 28px; padding-top: 4px; }
-
-.scan-line {
-  position: absolute;
-  left: 0;
-  right: 0;
-  top: 4px;
-  height: 2px;
-  background: linear-gradient(90deg, transparent, var(--accent), transparent);
-  box-shadow: 0 0 14px 1px var(--accent);
-  animation: sweep 1.5s cubic-bezier(0.4, 0, 0.2, 1) 1 both;
-  pointer-events: none;
-}
-
-@keyframes sweep {
-  0%   { top: 4px; opacity: 0; }
-  8%   { opacity: 1; }
-  85%  { opacity: 1; }
-  100% { top: 100%; opacity: 0; }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .scan-line { display: none; }
-}
+.matches-section { position: relative; margin-bottom: 8px; padding-top: 4px; }
 
 .matches-heading {
   display: flex;
@@ -1170,16 +1318,71 @@ h1 {
   font-weight: 600;
   color: var(--text-dim);
   letter-spacing: 0.02em;
-  margin: 0 0 12px;
+  margin: 0 0 16px;
 }
 
 .matches-heading .glyph { color: var(--accent); font-size: 0.85em; margin-right: 7px; }
+
+/* ---- radar overview ---- */
+
+.radar-wrap {
+  position: relative;
+  width: 100%;
+  max-width: 400px;
+  margin: 0 auto 28px;
+}
+
+.radar-svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  position: relative;
+  z-index: 1;
+}
+
+.radar-sweep {
+  position: absolute;
+  inset: 11%;
+  border-radius: 50%;
+  background: conic-gradient(from 0deg,
+    transparent 0deg, transparent 300deg,
+    rgba(69, 217, 232, 0.5) 345deg, var(--accent) 358deg, transparent 360deg);
+  animation: radar-spin 7s linear infinite;
+  pointer-events: none;
+  mix-blend-mode: screen;
+  z-index: 0;
+}
+
+@keyframes radar-spin { to { transform: rotate(360deg); } }
+
+@media (prefers-reduced-motion: reduce) {
+  .radar-sweep { animation: none; display: none; }
+}
+
+.radar-label {
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.radar-empty {
+  font-family: var(--mono);
+  font-size: 13px;
+  fill: var(--text-faint);
+  letter-spacing: 0.04em;
+}
 
 .matches-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
   gap: 12px;
 }
+
+/* ---- candlestick charts (match cards + table rows) ---- */
+
+.candles-svg { display: block; }
+.candles-large { width: 100%; height: auto; margin: 12px 0 2px; }
+.candles-small { width: 150px; height: 34px; }
 
 @keyframes rise {
   from { opacity: 0; transform: translateY(6px); }
@@ -1197,6 +1400,8 @@ h1 {
   border-radius: 10px;
   padding: 18px 20px;
   animation: rise 0.4s ease-out both;
+  transform: perspective(700px) rotateX(var(--rx, 0deg)) rotateY(var(--ry, 0deg));
+  transition: transform 0.15s ease-out, box-shadow 0.15s ease-out;
 }
 
 .match-card.long { color: var(--long); box-shadow: 0 0 28px -6px var(--long-soft); }
@@ -1441,7 +1646,13 @@ def build_table_row(r):
     status_class = status_map.get(status, "other")
     status_label = {"NO_DATA": "No data"}.get(status, status.capitalize())
 
-    strip = candle_strip(details, r.get("partial_groups"))
+    # Real candlestick chart when OHLC data is available (PASS/FAIL rows);
+    # fall back to the plain arrow strip for rows that never got that far
+    # (STALE, etc.) so the column still shows something sensible.
+    if r.get("ohlc"):
+        strip = build_candlestick_svg(r["ohlc"], size="small")
+    else:
+        strip = candle_strip(details, r.get("partial_groups"))
 
     def yesno(value):
         if value is None:
@@ -1523,6 +1734,11 @@ def generate_html_report(results, elapsed, universe_source):
 
     # ---- matches (hero) ----
 
+    radar_html = (
+        '<div class="radar-wrap"><div class="radar-sweep"></div>'
+        + build_radar_svg(matches) + '</div>'
+    )
+
     if matches:
         cards = []
         for r in matches:
@@ -1533,20 +1749,22 @@ def generate_html_report(results, elapsed, universe_source):
                 'built from a partial 3-min candle</div>'
                 if r.get("partial_3m") else ""
             )
+            chart = build_candlestick_svg(r.get("ohlc"), size="large")
             cards.append(f'''
 <div class="match-card {cls}">
   <div class="match-top">
     <span class="match-symbol">{esc(r["symbol"])}</span>
     <span class="match-dir {cls}">{arrow(1 if direction=="LONG" else -1)} {esc(direction)}</span>
   </div>
+  {chart}
   <div class="match-sub">Signal day {cell(r.get("date"))}</div>
   {verify}
 </div>''')
         matches_html = (
-            '<div class="matches-grid">' + "".join(cards) + '</div>'
+            radar_html + '<div class="matches-grid">' + "".join(cards) + '</div>'
         )
     else:
-        matches_html = f'''
+        matches_html = radar_html + f'''
 <div class="empty-state">
   <b>No symbols matched every condition.</b><br>
   {len(results):,} scanned against the day-before-previous-day conditions
@@ -1601,6 +1819,29 @@ def generate_html_report(results, elapsed, universe_source):
         for label, value in meta_items
     )
 
+    # Plain string (not an f-string) so the JS braces need no escaping.
+    tilt_script = """<script>
+(function () {
+  if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  var cards = document.querySelectorAll('.match-card');
+  cards.forEach(function (card) {
+    card.addEventListener('mousemove', function (e) {
+      var rect = card.getBoundingClientRect();
+      var px = (e.clientX - rect.left) / rect.width;
+      var py = (e.clientY - rect.top) / rect.height;
+      var rx = (0.5 - py) * 9;
+      var ry = (px - 0.5) * 9;
+      card.style.setProperty('--rx', rx.toFixed(2) + 'deg');
+      card.style.setProperty('--ry', ry.toFixed(2) + 'deg');
+    });
+    card.addEventListener('mouseleave', function () {
+      card.style.setProperty('--rx', '0deg');
+      card.style.setProperty('--ry', '0deg');
+    });
+  });
+})();
+</script>"""
+
     document = f'''<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1621,7 +1862,6 @@ def generate_html_report(results, elapsed, universe_source):
 {warning_html}
 
 <section class="matches-section">
-  <div class="scan-line"></div>
   <h2 class="matches-heading"><span class="glyph">&#9678;</span>Matches</h2>
   {matches_html}
 </section>
@@ -1680,6 +1920,7 @@ def generate_html_report(results, elapsed, universe_source):
 </footer>
 
 </div>
+{tilt_script}
 </body>
 </html>
 '''
