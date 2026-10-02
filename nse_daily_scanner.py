@@ -995,15 +995,31 @@ CANDLE_LABEL = {
 
 
 def arrow(d):
-    return {1: "\u25b2", -1: "\u25bc"}.get(d, "\u2013")  # ▲ ▼ –
+    return {1: "\u25b2", -1: "\u25bc"}.get(d, "\u2013")  # up, down, dash
 
 
 def trend_class(d):
     return {1: "up", -1: "down"}.get(d, "flat")
 
 
+def fmt_day(value, weekday=True):
+    """'2026-09-28' -> 'Mon 28 Sep'."""
+
+    if not value:
+        return "\u2013"
+
+    try:
+        ts = pd.Timestamp(value)
+    except Exception:
+        return str(value)
+
+    base = f"{ts.day} {ts.strftime('%b')}"
+
+    return f"{ts.strftime('%a')} {base}" if weekday else base
+
+
 def candle_strip(details, partial_groups):
-    """Compact 6-candle strip shown per row, e.g. 09:15▲ 15:15▲ 15:18▼ ..."""
+    """Plain arrow strip, used only for rows that have no OHLC data."""
 
     if not details:
         return ""
@@ -1013,42 +1029,50 @@ def candle_strip(details, partial_groups):
 
     for label in CANDLE_ORDER:
         d = details.get(f"d{label}")
-        cls = trend_class(d)
         flag = " candle-partial" if label in partial_groups else ""
         chips.append(
-            f'<span class="candle {cls}{flag}">'
+            f'<span class="candle {trend_class(d)}{flag}">'
             f'{CANDLE_LABEL[label]}<b>{arrow(d)}</b></span>'
         )
 
     return "".join(chips)
 
 
-def build_candlestick_svg(ohlc, size="large"):
-    """Real OHLC candlesticks for the six 3-min candles, not just up/down
-    arrows. ohlc: {label: {open, high, low, close}}, values may be missing
-    for a candle Yahoo had no data for at all."""
+def build_candlestick_svg(ohlc, size="large", volumes=None):
+    """Real OHLC candlesticks for the six 3-min candles. The large version
+    also draws the volume bars underneath (the strategy compares the 15:24
+    and 15:27 volumes), highlights the 15:24 anchor candle and labels every
+    candle with its time."""
 
-    if size == "large":
-        width, height, pad_x, pad_y = 272, 92, 10, 12
+    large = size == "large"
+
+    if large:
+        width, height, pad_x = 320, 162, 14
+        c_top, c_h = 18, 72
+        v_base, v_h = 130, 26
+        label_y = 153
     else:
-        width, height, pad_x, pad_y = 150, 34, 4, 4
+        width, height, pad_x = 150, 34, 4
+        c_top, c_h = 4, 26
+        v_base = v_h = label_y = 0
 
     ohlc = ohlc or {}
-    plot_w = width - 2 * pad_x
-    plot_h = height - 2 * pad_y
     n = len(CANDLE_ORDER)
-    slot_w = plot_w / n
-    body_w = max(2.2, slot_w * 0.46)
+    slot_w = (width - 2 * pad_x) / n
+    body_w = max(2.2, slot_w * (0.42 if large else 0.46))
 
-    highs = [ohlc[l]["high"] for l in CANDLE_ORDER if ohlc.get(l) and ohlc[l].get("high") is not None]
-    lows = [ohlc[l]["low"] for l in CANDLE_ORDER if ohlc.get(l) and ohlc[l].get("low") is not None]
+    highs = [ohlc[l]["high"] for l in CANDLE_ORDER
+             if ohlc.get(l) and ohlc[l].get("high") is not None]
+    lows = [ohlc[l]["low"] for l in CANDLE_ORDER
+            if ohlc.get(l) and ohlc[l].get("low") is not None]
+
+    attrs = (
+        f'class="candles-svg candles-{size}" viewBox="0 0 {width} {height}" '
+        f'width="{width}" height="{height}" preserveAspectRatio="xMidYMid meet" role="img"'
+    )
 
     if not highs or not lows:
-        return (
-            f'<svg class="candles-svg candles-{size}" viewBox="0 0 {width} {height}" '
-            f'width="{width}" height="{height}" '
-            f'preserveAspectRatio="xMidYMid meet" role="img" aria-label="No candle data"></svg>'
-        )
+        return f'<svg {attrs} aria-label="No candle data"></svg>'
 
     hi, lo = max(highs), min(lows)
     if hi == lo:
@@ -1056,84 +1080,140 @@ def build_candlestick_svg(ohlc, size="large"):
     span = hi - lo
 
     def y(price):
-        return pad_y + (hi - price) / span * plot_h
+        return c_top + (hi - price) / span * c_h
 
-    mid_y = pad_y + plot_h / 2
-    parts = [
-        f'<line x1="{pad_x:.1f}" y1="{mid_y:.1f}" x2="{width - pad_x:.1f}" y2="{mid_y:.1f}" '
-        f'stroke="var(--border-soft)" stroke-width="1" stroke-dasharray="2,3"/>'
-    ]
+    parts = []
 
+    if large:
+        # Highlight band behind the 15:24 anchor candle.
+        ax = pad_x + slot_w * CANDLE_ORDER.index("1524")
+        parts.append(
+            f'<rect x="{ax + 2:.1f}" y="5" width="{slot_w - 4:.1f}" '
+            f'height="{label_y - 12:.1f}" rx="8" fill="var(--accent)" '
+            f'fill-opacity="0.07" stroke="var(--accent)" stroke-opacity="0.3" '
+            f'stroke-dasharray="3,3"/>'
+        )
+        for frac in (0, 0.5, 1):
+            gy = c_top + c_h * frac
+            parts.append(
+                f'<line x1="{pad_x}" y1="{gy:.1f}" x2="{width - pad_x}" y2="{gy:.1f}" '
+                f'stroke="var(--line)" stroke-width="1" stroke-dasharray="2,4"/>'
+            )
+    else:
+        mid = c_top + c_h / 2
+        parts.append(
+            f'<line x1="{pad_x}" y1="{mid:.1f}" x2="{width - pad_x}" y2="{mid:.1f}" '
+            f'stroke="var(--line)" stroke-width="1" stroke-dasharray="2,3"/>'
+        )
+
+    # --- candles ---
     for i, label in enumerate(CANDLE_ORDER):
         cx = pad_x + slot_w * i + slot_w / 2
         c = ohlc.get(label)
 
         if not c or c.get("open") is None:
+            ym = c_top + c_h / 2
             parts.append(
-                f'<line x1="{cx - body_w/2:.1f}" y1="{mid_y:.1f}" x2="{cx + body_w/2:.1f}" '
-                f'y2="{mid_y:.1f}" stroke="var(--text-faint)" stroke-width="1.5" '
+                f'<line x1="{cx - body_w/2:.1f}" y1="{ym:.1f}" x2="{cx + body_w/2:.1f}" '
+                f'y2="{ym:.1f}" stroke="var(--text-faint)" stroke-width="1.5" '
                 f'stroke-dasharray="1.5,2"/>'
             )
             continue
 
         o, h, l, cl = c["open"], c["high"], c["low"], c["close"]
         color = "var(--long)" if cl >= o else "var(--short)"
-        y_hi, y_lo = y(h), y(l)
-        y_o, y_c = y(o), y(cl)
-        body_top, body_bottom = min(y_o, y_c), max(y_o, y_c)
-        body_h = max(1.6, body_bottom - body_top)
+        body_top = min(y(o), y(cl))
+        body_h = max(1.6, abs(y(o) - y(cl)))
 
         parts.append(
-            f'<line x1="{cx:.1f}" y1="{y_hi:.1f}" x2="{cx:.1f}" y2="{y_lo:.1f}" '
-            f'stroke="{color}" stroke-width="1.2"/>'
+            f'<line x1="{cx:.1f}" y1="{y(h):.1f}" x2="{cx:.1f}" y2="{y(l):.1f}" '
+            f'stroke="{color}" stroke-width="1.3" stroke-linecap="round"/>'
             f'<rect x="{cx - body_w/2:.1f}" y="{body_top:.1f}" width="{body_w:.1f}" '
-            f'height="{body_h:.1f}" fill="{color}" rx="1"/>'
+            f'height="{body_h:.1f}" fill="{color}" rx="1.5"/>'
         )
 
-    return (
-        f'<svg class="candles-svg candles-{size}" viewBox="0 0 {width} {height}" '
-        f'width="{width}" height="{height}" '
-        f'preserveAspectRatio="xMidYMid meet" role="img" aria-label="6-candle price chart">'
-        + "".join(parts) + '</svg>'
-    )
+    # --- volume bars + time labels (large only) ---
+    if large:
+        vols = {l: (volumes or {}).get(l) for l in CANDLE_ORDER}
+        vmax = max([v for v in vols.values() if v] or [0])
+
+        parts.append(
+            f'<line x1="{pad_x}" y1="{v_base}" x2="{width - pad_x}" y2="{v_base}" '
+            f'stroke="var(--line-strong)" stroke-width="1"/>'
+            f'<text x="{pad_x + 1}" y="{v_base - v_h - 4}" class="axis-label">volume</text>'
+        )
+
+        for i, label in enumerate(CANDLE_ORDER):
+            cx = pad_x + slot_w * i + slot_w / 2
+            v = vols.get(label)
+            c = ohlc.get(label)
+
+            if v and vmax > 0:
+                bar_h = max(1.5, v / vmax * v_h)
+                up = not c or c.get("close") is None or c["close"] >= c["open"]
+                color = "var(--long)" if up else "var(--short)"
+                key = label in ("1524", "1527")
+                parts.append(
+                    f'<rect x="{cx - body_w/2:.1f}" y="{v_base - bar_h:.1f}" '
+                    f'width="{body_w:.1f}" height="{bar_h:.1f}" rx="1.5" fill="{color}" '
+                    f'fill-opacity="{0.95 if key else 0.38}"/>'
+                )
+
+            strong = " axis-strong" if label in ("1524", "1527") else ""
+            parts.append(
+                f'<text x="{cx:.1f}" y="{label_y}" text-anchor="middle" '
+                f'class="axis-label{strong}">{CANDLE_LABEL[label]}</text>'
+            )
+
+    return f'<svg {attrs} aria-label="6-candle price and volume chart">' + "".join(parts) + '</svg>'
 
 
 def build_radar_svg(matches):
-    """Circular 'signals detected' overview: every match plotted as a blip
-    around a radar ring, colored and labeled by its own real direction and
-    symbol - a visual index of the matches, not a decorative random
-    scatter. The detailed cards below carry the full numeric data."""
+    """Circular 'signals detected' overview: every match is a blip on the
+    radar, colored and labeled by its own real direction and symbol. A
+    visual index of the matches; the cards carry the numeric detail."""
 
     box = 440
     cx = cy = box / 2
     max_r = 122
-    label_r = max_r + 38
+    label_r = max_r + 40
+    show_labels = len(matches) <= 12
 
     parts = [
-        '<defs><filter id="blipGlow" x="-120%" y="-120%" width="340%" height="340%">'
-        '<feGaussianBlur stdDeviation="3.2" result="b"/>'
+        '<defs>'
+        '<radialGradient id="radarFill" cx="50%" cy="50%" r="50%">'
+        '<stop offset="0%" stop-color="#4FE0F0" stop-opacity="0.10"/>'
+        '<stop offset="100%" stop-color="#4FE0F0" stop-opacity="0.015"/>'
+        '</radialGradient>'
+        '<filter id="blipGlow" x="-150%" y="-150%" width="400%" height="400%">'
+        '<feGaussianBlur stdDeviation="3.4" result="b"/>'
         '<feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>'
-        '</filter></defs>'
+        '</filter></defs>',
+        f'<circle cx="{cx}" cy="{cy}" r="{max_r}" fill="url(#radarFill)"/>',
     ]
 
     for frac in (0.34, 0.67, 1.0):
         parts.append(
-            f'<circle cx="{cx}" cy="{cy}" r="{max_r*frac:.1f}" fill="none" '
-            f'stroke="var(--border)" stroke-width="1"/>'
+            f'<circle cx="{cx}" cy="{cy}" r="{max_r * frac:.1f}" fill="none" '
+            f'stroke="rgba(79,224,240,0.20)" stroke-width="1"/>'
         )
-    for deg in range(0, 360, 45):
+
+    for deg in range(0, 360, 30):
         rad = math.radians(deg)
+        major = deg % 90 == 0
         parts.append(
             f'<line x1="{cx}" y1="{cy}" x2="{cx + max_r*math.cos(rad):.1f}" '
-            f'y2="{cy + max_r*math.sin(rad):.1f}" stroke="var(--border-soft)" stroke-width="1"/>'
+            f'y2="{cy + max_r*math.sin(rad):.1f}" stroke="rgba(79,224,240,'
+            f'{0.16 if major else 0.07})" stroke-width="1"/>'
         )
-    parts.append(f'<circle cx="{cx}" cy="{cy}" r="2.5" fill="var(--accent)"/>')
+
+    parts.append(f'<circle cx="{cx}" cy="{cy}" r="3" fill="var(--accent)"/>')
 
     n = len(matches)
 
     if n == 0:
         parts.append(
-            f'<text x="{cx}" y="{cy+5}" text-anchor="middle" class="radar-empty">'
+            f'<text x="{cx}" y="{cy + 52}" text-anchor="middle" class="radar-empty">'
             f'no contacts</text>'
         )
     else:
@@ -1143,7 +1223,9 @@ def build_radar_svg(matches):
             rad = math.radians(angle)
             bx, by = cx + blip_r * math.cos(rad), cy + blip_r * math.sin(rad)
             lx, ly = cx + label_r * math.cos(rad), cy + label_r * math.sin(rad)
-            color = "var(--long)" if r.get("direction") == "LONG" else "var(--short)"
+            long_ = r.get("direction") == "LONG"
+            color = "var(--long)" if long_ else "var(--short)"
+            sym = esc(r.get("symbol", ""))
 
             anchor = "middle"
             if lx < cx - 8:
@@ -1152,14 +1234,22 @@ def build_radar_svg(matches):
                 anchor = "start"
 
             parts.append(
-                f'<line x1="{bx:.1f}" y1="{by:.1f}" x2="{lx:.1f}" y2="{ly:.1f}" '
-                f'stroke="{color}" stroke-width="1" opacity="0.4"/>'
-                f'<circle cx="{bx:.1f}" cy="{by:.1f}" r="5.5" fill="{color}" '
-                f'filter="url(#blipGlow)"/>'
+                f'<g><title>{sym} {esc(r.get("direction", ""))}</title>'
+                + (
+                    f'<line x1="{bx:.1f}" y1="{by:.1f}" x2="{lx:.1f}" y2="{ly:.1f}" '
+                    f'stroke="{color}" stroke-width="1" opacity="0.4"/>'
+                    if show_labels else ''
+                )
+                + f'<circle class="ping" cx="{bx:.1f}" cy="{by:.1f}" r="6" fill="none" '
+                f'stroke="{color}" stroke-width="1.4" style="animation-delay:{i * 0.45:.2f}s"/>'
+                f'<circle cx="{bx:.1f}" cy="{by:.1f}" r="5.5" fill="{color}" filter="url(#blipGlow)"/>'
                 f'<circle cx="{bx:.1f}" cy="{by:.1f}" r="2" fill="var(--bg)"/>'
-                f'<text x="{lx:.1f}" y="{ly:.1f}" text-anchor="{anchor}" '
-                f'dominant-baseline="middle" class="radar-label" fill="{color}">'
-                f'{esc(r.get("symbol",""))}</text>'
+                + (
+                    f'<text x="{lx:.1f}" y="{ly:.1f}" text-anchor="{anchor}" '
+                    f'dominant-baseline="middle" class="radar-label" fill="{color}">{sym}</text>'
+                    if show_labels else ''
+                )
+                + '</g>'
             )
 
     return (
@@ -1170,27 +1260,28 @@ def build_radar_svg(matches):
 
 
 CSS = """
-@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
 
 :root {
-  --bg: #0B0F14;
-  --panel: #131A22;
-  --panel-2: #182029;
-  --border: #232C38;
-  --border-soft: #1B222C;
-  --text: #E7ECF1;
-  --text-dim: #8493A3;
-  --text-faint: #56626F;
-  --long: #34C27D;
-  --long-soft: rgba(52, 194, 125, 0.13);
-  --short: #F0555C;
-  --short-soft: rgba(240, 85, 92, 0.13);
-  --caution: #E7A94A;
-  --caution-soft: rgba(231, 169, 74, 0.13);
-  --accent: #45D9E8;
-  --accent-soft: rgba(69, 217, 232, 0.13);
-  --sans: 'IBM Plex Sans', ui-sans-serif, system-ui, -apple-system, sans-serif;
-  --mono: 'IBM Plex Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+  --bg: #06090E;
+  --panel: rgba(15, 22, 31, 0.72);
+  --line: rgba(255, 255, 255, 0.07);
+  --line-strong: rgba(255, 255, 255, 0.13);
+  --border: rgba(255, 255, 255, 0.13);
+  --border-soft: rgba(255, 255, 255, 0.07);
+  --text: #EAF0F6;
+  --text-dim: #93A1B1;
+  --text-faint: #5F6D7D;
+  --long: #34D08A;
+  --long-soft: rgba(52, 208, 138, 0.14);
+  --short: #FF5C66;
+  --short-soft: rgba(255, 92, 102, 0.14);
+  --caution: #F0B050;
+  --caution-soft: rgba(240, 176, 80, 0.14);
+  --accent: #4FE0F0;
+  --accent-soft: rgba(79, 224, 240, 0.13);
+  --sans: 'Sora', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --mono: 'IBM Plex Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
 }
 
 * { box-sizing: border-box; }
@@ -1198,12 +1289,8 @@ CSS = """
 html { background: var(--bg); }
 
 body {
-  position: relative;
   margin: 0;
-  padding: 40px 28px 64px;
-  background:
-    radial-gradient(ellipse 1100px 520px at 50% -8%, rgba(69, 217, 232, 0.055), transparent 60%),
-    var(--bg);
+  background: var(--bg);
   color: var(--text);
   font-family: var(--sans);
   font-size: 15px;
@@ -1211,504 +1298,867 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
-/* faint instrument-panel grid, purely atmospheric */
-body::before {
-  content: '';
-  position: fixed;
-  inset: 0;
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* ---------- atmosphere ---------- */
+
+.aurora, .grid-bg { position: fixed; inset: 0; pointer-events: none; z-index: 0; }
+.aurora { overflow: hidden; }
+
+.aurora i {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(70px);
+  opacity: 0.6;
+}
+
+.aurora .a {
+  width: 640px; height: 640px; left: -140px; top: -200px;
+  background: radial-gradient(circle, rgba(79, 224, 240, 0.30), transparent 65%);
+  animation: drift-a 26s ease-in-out infinite alternate;
+}
+.aurora .b {
+  width: 580px; height: 580px; right: -160px; top: 140px;
+  background: radial-gradient(circle, rgba(52, 208, 138, 0.20), transparent 65%);
+  animation: drift-b 32s ease-in-out infinite alternate;
+}
+.aurora .c {
+  width: 720px; height: 720px; left: 28%; bottom: -380px;
+  background: radial-gradient(circle, rgba(80, 110, 255, 0.17), transparent 65%);
+  animation: drift-a 38s ease-in-out infinite alternate-reverse;
+}
+
+@keyframes drift-a { to { transform: translate3d(90px, 60px, 0) scale(1.1); } }
+@keyframes drift-b { to { transform: translate3d(-80px, 90px, 0) scale(1.08); } }
+
+.grid-bg {
   background-image:
-    linear-gradient(rgba(231, 236, 241, 0.025) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(231, 236, 241, 0.025) 1px, transparent 1px);
-  background-size: 46px 46px;
-  pointer-events: none;
-  z-index: 0;
+    linear-gradient(rgba(255, 255, 255, 0.022) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.022) 1px, transparent 1px);
+  background-size: 48px 48px;
+  -webkit-mask-image: radial-gradient(ellipse at 50% 18%, #000 15%, transparent 72%);
+  mask-image: radial-gradient(ellipse at 50% 18%, #000 15%, transparent 72%);
 }
 
-a { color: inherit; }
-
-:focus-visible { outline: 2px solid var(--caution); outline-offset: 2px; }
-
-.container { position: relative; z-index: 1; max-width: 1320px; margin: 0 auto; }
-
-/* ---- header ---- */
-
-header { margin-bottom: 28px; }
-
-h1 {
-  margin: 0 0 4px;
-  font-size: 1.65rem;
-  font-weight: 700;
-  letter-spacing: -0.01em;
+.wrap {
+  position: relative;
+  z-index: 1;
+  max-width: 1360px;
+  margin: 0 auto;
+  padding: 22px 32px 72px;
 }
 
-.status-chip {
-  display: inline-flex;
+/* ---------- shared surfaces ---------- */
+
+.glass {
+  position: relative;
+  border-radius: 20px;
+  border: 1px solid var(--line);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.01)),
+    var(--panel);
+  -webkit-backdrop-filter: blur(16px) saturate(130%);
+  backdrop-filter: blur(16px) saturate(130%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 28px 60px -30px rgba(0, 0, 0, 0.85);
+}
+
+.sec-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0 0 16px;
+}
+
+.sec-title { margin: 0; font-size: 1.05rem; font-weight: 600; letter-spacing: -0.01em; }
+.sec-note { color: var(--text-faint); font-size: 0.78rem; }
+
+section { margin-bottom: 22px; }
+
+/* ---------- top bar ---------- */
+
+.topbar {
+  display: flex;
   align-items: center;
-  gap: 7px;
-  margin-top: 10px;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 6px 0 26px;
+}
+
+.brand { display: flex; align-items: center; gap: 12px; font-weight: 600; letter-spacing: -0.01em; }
+.brand small { display: block; color: var(--text-faint); font-weight: 400; font-size: 0.72rem; }
+
+.topmeta {
+  display: flex;
+  align-items: center;
+  gap: 16px;
   color: var(--text-dim);
   font-family: var(--mono);
-  font-size: 0.78rem;
-  letter-spacing: 0.02em;
+  font-size: 0.76rem;
 }
 
-.status-dot {
-  width: 7px;
-  height: 7px;
-  margin-right: 7px;
-  border-radius: 50%;
+.live {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  padding: 6px 13px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.live i {
+  width: 7px; height: 7px; border-radius: 50%;
   background: var(--long);
-  box-shadow: 0 0 8px 1px var(--long);
+  box-shadow: 0 0 10px 2px rgba(52, 208, 138, 0.7);
   animation: pulse 2.4s ease-in-out infinite;
 }
 
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
 
-@media (prefers-reduced-motion: reduce) {
-  .status-dot { animation: none; }
-}
-
-.meta-row {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(150px, max-content));
-  column-gap: 40px;
-  row-gap: 16px;
-  margin-top: 18px;
-  padding-top: 18px;
-  border-top: 1px solid var(--border-soft);
-}
-
-.meta-item { max-width: 320px; }
-
-.meta-label {
-  color: var(--text-faint);
-  font-size: 0.75rem;
-  letter-spacing: 0.02em;
-  margin-bottom: 3px;
-}
-
-.meta-value {
-  color: var(--text);
-  font-size: 0.9rem;
-  font-family: var(--mono);
-}
-
-/* ---- warning ---- */
-
 .warn {
   background: var(--caution-soft);
-  border: 1px solid rgba(231, 169, 74, 0.35);
-  color: #F0CE93;
-  border-radius: 8px;
-  padding: 13px 16px;
-  margin-bottom: 24px;
-  font-size: 0.875rem;
-  line-height: 1.55;
+  border: 1px solid rgba(240, 176, 80, 0.38);
+  color: #F5D79F;
+  border-radius: 14px;
+  padding: 13px 18px;
+  margin-bottom: 22px;
+  font-size: 0.84rem;
+  line-height: 1.6;
 }
 
-/* ---- matches (hero) ---- */
+/* ---------- hero ---------- */
 
-.matches-section { position: relative; margin-bottom: 8px; padding-top: 4px; }
-
-.matches-heading {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  font-size: 0.95rem;
-  font-weight: 600;
-  color: var(--text-dim);
-  letter-spacing: 0.02em;
-  margin: 0 0 16px;
+.hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1.12fr) minmax(320px, 0.88fr);
+  gap: 22px;
+  align-items: stretch;
 }
 
-.matches-heading .glyph { color: var(--accent); font-size: 0.85em; margin-right: 7px; }
+.hero-main { padding: 36px 36px 30px; display: flex; flex-direction: column; gap: 26px; }
 
-/* ---- radar overview ---- */
-
-.radar-wrap {
-  position: relative;
-  width: 100%;
-  max-width: 400px;
-  margin: 0 auto 28px;
+h1 {
+  margin: 0;
+  font-size: clamp(2.1rem, 4.2vw, 3.5rem);
+  line-height: 1.05;
+  font-weight: 700;
+  letter-spacing: -0.035em;
 }
 
-.radar-svg {
-  display: block;
-  width: 100%;
-  height: auto;
-  position: relative;
-  z-index: 1;
+.hero-num {
+  background: linear-gradient(135deg, #FFFFFF 10%, var(--accent) 130%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
 }
+
+.hero-sub { margin: 14px 0 0; color: var(--text-dim); font-size: 0.95rem; line-height: 1.7; max-width: 60ch; }
+.hero-sub b { color: var(--text); font-weight: 500; }
+
+/* day-mapping timeline */
+
+.timeline { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(4, 1fr); }
+.tl-step { position: relative; padding-top: 26px; }
+
+.tl-step::before {
+  content: '';
+  position: absolute;
+  top: 5px; left: 16px; right: 0;
+  height: 2px;
+  background: var(--line-strong);
+}
+.tl-step:last-child::before { display: none; }
+.tl-step.done::before { background: var(--text-faint); }
+.tl-step.active::before { background: linear-gradient(90deg, var(--accent), var(--line-strong)); }
+
+.tl-dot {
+  position: absolute;
+  top: 0; left: 0;
+  width: 12px; height: 12px;
+  border-radius: 50%;
+  border: 2px solid var(--text-faint);
+  background: var(--bg);
+}
+.tl-step.done .tl-dot { background: var(--text-faint); }
+.tl-step.active .tl-dot {
+  border-color: var(--accent);
+  background: var(--accent);
+  box-shadow: 0 0 0 5px var(--accent-soft), 0 0 18px 2px rgba(79, 224, 240, 0.7);
+}
+
+.tl-label { color: var(--text-faint); font-size: 0.72rem; }
+.tl-date { font-weight: 600; font-size: 0.92rem; margin-top: 2px; }
+.tl-sub { font-family: var(--mono); color: var(--text-dim); font-size: 0.74rem; margin-top: 2px; }
+
+/* KPI strip */
+
+.kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-top: auto; }
+
+.kpi {
+  padding: 15px 16px;
+  border-radius: 14px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.kpi .n { font-family: var(--mono); font-size: 1.55rem; font-weight: 600; letter-spacing: -0.02em; }
+.kpi .l { color: var(--text-faint); font-size: 0.74rem; margin-top: 2px; }
+.kpi.long .n { color: var(--long); }
+.kpi.short .n { color: var(--short); }
+
+/* radar */
+
+.hero-radar { padding: 22px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; }
+
+.radar-wrap { position: relative; width: 100%; max-width: 440px; aspect-ratio: 1; }
+
+.radar-svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; z-index: 1; }
 
 .radar-sweep {
   position: absolute;
-  inset: 11%;
+  inset: 22.27%;
   border-radius: 50%;
   background: conic-gradient(from 0deg,
-    transparent 0deg, transparent 300deg,
-    rgba(69, 217, 232, 0.5) 345deg, var(--accent) 358deg, transparent 360deg);
-  animation: radar-spin 7s linear infinite;
-  pointer-events: none;
+    transparent 0deg, transparent 285deg,
+    rgba(79, 224, 240, 0.30) 345deg, rgba(79, 224, 240, 0.85) 360deg);
+  animation: spin 6s linear infinite;
   mix-blend-mode: screen;
   z-index: 0;
 }
 
-@keyframes radar-spin { to { transform: rotate(360deg); } }
+@keyframes spin { to { transform: rotate(360deg); } }
 
-@media (prefers-reduced-motion: reduce) {
-  .radar-sweep { animation: none; display: none; }
+.ping {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: ping 2.8s ease-out infinite;
 }
 
-.radar-label {
-  font-family: var(--mono);
-  font-size: 11px;
-  font-weight: 600;
+@keyframes ping { from { transform: scale(1); opacity: 0.7; } to { transform: scale(3.4); opacity: 0; } }
+
+.radar-label { font-family: var(--mono); font-size: 11px; font-weight: 600; }
+.radar-empty { font-family: var(--mono); font-size: 13px; fill: var(--text-faint); letter-spacing: 0.04em; }
+
+.radar-cap { color: var(--text-faint); font-size: 0.74rem; text-align: center; }
+
+/* ---------- scan breakdown ---------- */
+
+.panel { padding: 24px 26px; }
+
+.dist-bar { display: flex; gap: 3px; height: 12px; }
+
+.seg {
+  min-width: 4px;
+  border-radius: 999px;
+  transform-origin: left center;
+  animation: grow 1s cubic-bezier(0.2, 0.8, 0.2, 1) both;
 }
 
-.radar-empty {
-  font-family: var(--mono);
-  font-size: 13px;
-  fill: var(--text-faint);
-  letter-spacing: 0.04em;
-}
+@keyframes grow { from { transform: scaleX(0); opacity: 0; } to { transform: scaleX(1); opacity: 1; } }
 
-.matches-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-  gap: 12px;
-}
+.seg-pass { background: linear-gradient(90deg, var(--long), #86F2C0); box-shadow: 0 0 14px -2px var(--long); }
+.seg-fail { background: #3B4B60; }
+.seg-incomplete { background: var(--caution); }
+.seg-stale { background: #D9822B; }
+.seg-error { background: var(--short); }
+.seg-nodata { background: #263241; }
 
-/* ---- candlestick charts (match cards + table rows) ---- */
+.legend { display: flex; flex-wrap: wrap; gap: 10px 28px; margin-top: 18px; }
+.lg { display: flex; align-items: center; gap: 9px; font-size: 0.8rem; color: var(--text-dim); }
+.lg i { width: 9px; height: 9px; border-radius: 3px; }
+.lg b { font-family: var(--mono); color: var(--text); font-weight: 500; }
+.lg em { font-style: normal; color: var(--text-faint); font-family: var(--mono); font-size: 0.74rem; }
 
-.candles-svg { display: block; }
-.candles-large { width: 100%; height: auto; margin: 12px 0 2px; }
-.candles-small { width: 150px; height: 34px; }
+/* ---------- signal cards ---------- */
 
-@keyframes rise {
-  from { opacity: 0; transform: translateY(6px); }
-  to   { opacity: 1; transform: translateY(0); }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .match-card { animation: none !important; }
-}
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 18px; }
 
 .match-card {
+  --dir: var(--long);
+  --edge: rgba(52, 208, 138, 0.75);
   position: relative;
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 18px 20px;
-  animation: rise 0.4s ease-out both;
-  transform: perspective(700px) rotateX(var(--rx, 0deg)) rotateY(var(--ry, 0deg));
-  transition: transform 0.15s ease-out, box-shadow 0.15s ease-out;
+  padding: 24px 24px 20px;
+  border-radius: 20px;
+  border: 1px solid transparent;
+  background:
+    linear-gradient(180deg, rgba(22, 31, 43, 0.94), rgba(11, 17, 24, 0.96)) padding-box,
+    linear-gradient(150deg, var(--edge), rgba(255, 255, 255, 0.07) 36%, rgba(255, 255, 255, 0.03) 64%, var(--edge)) border-box;
+  box-shadow: 0 34px 70px -40px var(--edge);
+  overflow: hidden;
+  animation: rise 0.55s ease-out both;
+  transform: perspective(900px) rotateX(var(--rx, 0deg)) rotateY(var(--ry, 0deg));
+  transition: transform 0.18s ease-out;
 }
 
-.match-card.long { color: var(--long); box-shadow: 0 0 28px -6px var(--long-soft); }
-.match-card.short { color: var(--short); box-shadow: 0 0 28px -6px var(--short-soft); }
+.match-card.short { --dir: var(--short); --edge: rgba(255, 92, 102, 0.75); }
 
-/* corner-bracket "target lock" accents, in the card's direction color */
-.match-card::before,
-.match-card::after {
+@keyframes rise { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+
+.match-card::before, .match-card::after {
   content: '';
   position: absolute;
-  width: 13px;
-  height: 13px;
-  border: 2px solid currentColor;
-  opacity: 0.75;
+  width: 14px; height: 14px;
+  border: 2px solid var(--dir);
+  opacity: 0.8;
+  pointer-events: none;
 }
-.match-card::before { top: -1px; left: -1px; border-right: none; border-bottom: none; border-radius: 3px 0 0 0; }
-.match-card::after { bottom: -1px; right: -1px; border-left: none; border-top: none; border-radius: 0 0 3px 0; }
+.match-card::before { top: 8px; left: 8px; border-right: none; border-bottom: none; border-radius: 4px 0 0 0; }
+.match-card::after { bottom: 8px; right: 8px; border-left: none; border-top: none; border-radius: 0 0 4px 0; }
 
-.match-top {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 10px;
+.glare {
+  position: absolute; inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.2s;
+  background: radial-gradient(280px circle at var(--mx, 50%) var(--my, 0%), rgba(255, 255, 255, 0.09), transparent 60%);
 }
+.match-card:hover .glare { opacity: 1; }
 
-.match-symbol {
-  color: var(--text);
+.mc-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.mc-sym { font-family: var(--mono); font-size: 1.6rem; font-weight: 600; letter-spacing: -0.02em; }
+
+.mc-dir {
   font-family: var(--mono);
-  font-size: 1.35rem;
+  font-size: 0.78rem;
   font-weight: 600;
-  letter-spacing: -0.01em;
-}
-
-.match-dir {
-  font-family: var(--mono);
-  font-size: 0.8rem;
-  font-weight: 600;
-  padding: 3px 9px;
-  border-radius: 5px;
+  padding: 5px 11px;
+  border-radius: 9px;
+  color: var(--dir);
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--edge);
+  text-shadow: 0 0 14px var(--edge);
   white-space: nowrap;
 }
 
-.match-dir.long { background: var(--long-soft); color: var(--long); text-shadow: 0 0 12px rgba(52, 194, 125, 0.45); }
-.match-dir.short { background: var(--short-soft); color: var(--short); text-shadow: 0 0 12px rgba(240, 85, 92, 0.45); }
+.mc-price { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; margin-top: 6px; }
+.mc-last { font-family: var(--mono); font-size: 1.05rem; }
+.mc-chg { font-family: var(--mono); font-size: 0.78rem; padding: 2px 8px; border-radius: 6px; }
+.mc-chg.up { color: var(--long); background: var(--long-soft); }
+.mc-chg.down { color: var(--short); background: var(--short-soft); }
+.mc-note { color: var(--text-faint); font-size: 0.7rem; }
 
-.match-sub {
-  margin-top: 8px;
-  color: var(--text-dim);
-  font-size: 0.8rem;
+.mc-chart {
+  margin: 16px 0 4px;
+  padding: 12px 8px 6px;
+  border-radius: 14px;
+  background: rgba(0, 0, 0, 0.25);
+  border: 1px solid var(--line);
 }
 
-.match-verify {
+.candles-svg { display: block; }
+.candles-large { width: 100%; height: auto; max-width: 480px; margin: 0 auto; }
+.candles-small { width: 150px; height: 34px; }
+
+.axis-label { font-family: var(--mono); font-size: 9.5px; fill: var(--text-faint); }
+.axis-strong { fill: var(--text-dim); font-weight: 600; }
+
+.checks { list-style: none; margin: 14px 0 0; padding: 0; display: grid; gap: 9px; }
+
+.checks li {
+  display: grid;
+  grid-template-columns: 20px 1fr auto;
+  gap: 10px;
+  align-items: center;
+  font-size: 0.78rem;
+  color: var(--text-dim);
+}
+
+.ck {
+  width: 18px; height: 18px;
+  border-radius: 50%;
+  display: grid; place-items: center;
+  font-size: 0.62rem;
+  color: var(--long);
+  background: var(--long-soft);
+  box-shadow: 0 0 12px -2px var(--long);
+}
+
+.ck-val { font-family: var(--mono); color: var(--text); font-size: 0.74rem; }
+
+.mc-plan {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px dashed var(--line-strong);
+}
+.mc-plan .k { display: block; color: var(--text-faint); font-size: 0.68rem; }
+.mc-plan .v { font-family: var(--mono); font-size: 0.8rem; }
+
+.mc-verify {
   display: inline-block;
-  margin-top: 10px;
-  padding: 3px 9px;
-  border-radius: 5px;
+  margin-top: 12px;
+  padding: 4px 10px;
+  border-radius: 8px;
   background: var(--caution-soft);
   color: var(--caution);
-  font-size: 0.72rem;
-  font-weight: 500;
+  font-size: 0.7rem;
+  line-height: 1.4;
 }
 
 .empty-state {
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  padding: 22px 22px;
+  padding: 34px 28px;
   color: var(--text-dim);
-  font-size: 0.9rem;
-  line-height: 1.6;
+  font-size: 0.92rem;
+  line-height: 1.7;
 }
+.empty-state b { color: var(--text); font-weight: 600; font-size: 1.02rem; }
 
-.empty-state b { color: var(--text); }
+/* ---------- table ---------- */
 
-/* ---- stats strip ---- */
+.table-panel { overflow: hidden; }
 
-.stats {
+.table-head {
   display: flex;
   flex-wrap: wrap;
-  gap: 10px;
-  margin-bottom: 28px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 20px 24px;
+  border-bottom: 1px solid var(--line);
 }
 
-.stat {
-  background: var(--panel);
-  border: 1px solid var(--border-soft);
-  border-radius: 8px;
-  padding: 11px 16px;
-  min-width: 96px;
-}
+.search { position: relative; }
+.search svg { position: absolute; left: 13px; top: 50%; transform: translateY(-50%); color: var(--text-faint); }
 
-.stat-value {
-  font-family: var(--mono);
-  font-size: 1.15rem;
-  font-weight: 600;
-}
-
-.stat-label {
-  color: var(--text-faint);
-  font-size: 0.72rem;
-  margin-top: 2px;
-}
-
-/* ---- table ---- */
-
-.table-wrap {
-  border: 1px solid var(--border);
+.search input {
+  width: 240px;
+  max-width: 100%;
+  padding: 10px 14px 10px 38px;
   border-radius: 12px;
-  overflow: auto;
-  margin-bottom: 32px;
+  border: 1px solid var(--line-strong);
+  background: rgba(0, 0, 0, 0.28);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.84rem;
+  outline: none;
+  transition: border-color 0.15s, box-shadow 0.15s;
 }
+.search input::placeholder { color: var(--text-faint); }
+.search input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+
+.filters { display: flex; flex-wrap: wrap; gap: 8px; }
+
+.chip {
+  appearance: none;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 13px;
+  border-radius: 999px;
+  border: 1px solid var(--line-strong);
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 0.76rem;
+  transition: border-color 0.15s, background 0.15s, color 0.15s;
+}
+.chip b { font-family: var(--mono); font-weight: 500; color: var(--text); }
+.chip:hover { border-color: rgba(79, 224, 240, 0.6); color: var(--text); }
+.chip.active { background: var(--accent-soft); border-color: rgba(79, 224, 240, 0.6); color: var(--text); }
+
+.table-scroll { overflow: auto; max-height: 740px; }
 
 table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
 
 th {
-  background: var(--panel-2);
-  color: var(--text-dim);
-  font-weight: 500;
-  text-align: left;
-  padding: 11px 14px;
   position: sticky;
   top: 0;
-  border-bottom: 1px solid var(--border);
+  z-index: 2;
+  background: rgba(14, 20, 29, 0.96);
+  color: var(--text-faint);
+  font-weight: 500;
+  font-size: 0.72rem;
+  text-align: left;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--line-strong);
   white-space: nowrap;
 }
-
-th small { display: block; color: var(--text-faint); font-weight: 400; margin-top: 2px; }
 
 td {
-  padding: 11px 14px;
-  border-top: 1px solid var(--border-soft);
-  vertical-align: top;
+  padding: 13px 16px;
+  border-top: 1px solid var(--line);
+  vertical-align: middle;
   white-space: nowrap;
 }
 
-tbody tr:hover { background: var(--panel); }
+tbody tr { transition: background 0.12s; }
+tbody tr:hover { background: rgba(79, 224, 240, 0.04); }
+tbody tr[hidden] { display: none; }
+tbody tr[data-status="pass"] td:first-child { box-shadow: inset 3px 0 0 var(--long); }
 
 .symbol { font-family: var(--mono); font-weight: 600; }
-
 .mono { font-family: var(--mono); }
-
 .dim { color: var(--text-dim); }
 
-/* candle strip */
-
-.candle {
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-  font-family: var(--mono);
-  font-size: 0.72rem;
-  color: var(--text-faint);
-  margin-right: 8px;
-}
-
-.candle b { font-weight: 600; }
-.candle.up b { color: var(--long); }
-.candle.down b { color: var(--short); }
-.candle.flat b { color: var(--text-faint); }
-.candle-partial { text-decoration: underline dotted var(--caution); }
-
-/* condition + result badges */
-
-.badge {
-  display: inline-block;
-  padding: 2px 8px;
-  border-radius: 5px;
-  font-size: 0.72rem;
-  font-weight: 500;
-  font-family: var(--mono);
-}
-
-.badge.yes { background: var(--long-soft); color: var(--long); }
-.badge.no { background: var(--short-soft); color: var(--short); }
-.badge.na { background: var(--panel-2); color: var(--text-faint); }
-
-.result {
-  font-size: 0.78rem;
-  font-weight: 600;
-  font-family: var(--mono);
-}
-
-.result.pass { color: var(--long); }
-.result.fail { color: var(--text-faint); }
-.result.other { color: var(--caution); }
-
-.detail-line {
+.sub {
+  display: block;
   margin-top: 4px;
   color: var(--text-faint);
-  font-size: 0.72rem;
+  font-family: var(--mono);
+  font-size: 0.7rem;
   white-space: normal;
+  max-width: 200px;
 }
+
+.dir {
+  font-family: var(--mono);
+  font-size: 0.74rem;
+  font-weight: 600;
+  padding: 4px 10px;
+  border-radius: 8px;
+}
+.dir.long { color: var(--long); background: var(--long-soft); }
+.dir.short { color: var(--short); background: var(--short-soft); }
+
+.chk {
+  display: inline-grid;
+  place-items: center;
+  width: 22px; height: 22px;
+  border-radius: 7px;
+  font-size: 0.7rem;
+}
+.chk.yes { color: var(--long); background: var(--long-soft); }
+.chk.no { color: var(--short); background: var(--short-soft); }
+.chk.na { color: var(--text-faint); background: rgba(255, 255, 255, 0.04); }
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 11px;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 500;
+}
+.pill.pass { color: var(--long); background: var(--long-soft); }
+.pill.fail { color: var(--text-dim); background: rgba(255, 255, 255, 0.05); }
+.pill.incomplete, .pill.stale { color: var(--caution); background: var(--caution-soft); }
+.pill.error { color: var(--short); background: var(--short-soft); }
+.pill.nodata { color: var(--text-faint); background: rgba(255, 255, 255, 0.04); }
 
 .verify-tag {
   display: inline-block;
-  margin-top: 4px;
-  padding: 1px 7px;
-  border-radius: 4px;
+  margin-left: 8px;
+  padding: 2px 8px;
+  border-radius: 6px;
   background: var(--caution-soft);
   color: var(--caution);
   font-size: 0.68rem;
 }
 
-/* ---- footer ---- */
+.candle { display: inline-flex; gap: 3px; font-family: var(--mono); font-size: 0.72rem; color: var(--text-faint); margin-right: 8px; }
+.candle b { font-weight: 600; }
+.candle.up b { color: var(--long); }
+.candle.down b { color: var(--short); }
 
-footer {
-  border-top: 1px solid var(--border-soft);
-  padding-top: 22px;
-  color: var(--text-dim);
-  font-size: 0.82rem;
-  line-height: 1.7;
+.empty-row { display: none; padding: 36px; text-align: center; color: var(--text-faint); font-size: 0.86rem; }
+
+.table-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 24px;
+  border-top: 1px solid var(--line);
+  color: var(--text-faint);
+  font-size: 0.78rem;
 }
 
-footer h2 {
-  font-size: 0.85rem;
-  font-weight: 600;
+.btn {
+  appearance: none;
+  cursor: pointer;
+  padding: 8px 16px;
+  border-radius: 10px;
+  border: 1px solid rgba(79, 224, 240, 0.5);
+  background: var(--accent-soft);
   color: var(--text);
-  margin: 0 0 8px;
+  font: inherit;
+  font-size: 0.78rem;
+  transition: background 0.15s, box-shadow 0.15s;
 }
+.btn:hover { background: rgba(79, 224, 240, 0.22); box-shadow: 0 0 18px -4px var(--accent); }
 
-footer .section { margin-bottom: 18px; max-width: 720px; }
-footer ol { margin: 6px 0 0; padding-left: 20px; }
-footer ol li { margin-bottom: 4px; }
+/* ---------- footer ---------- */
 
-/* ---- mobile ---- */
+.foot-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 18px; }
+.foot-card { padding: 24px 26px; color: var(--text-dim); font-size: 0.82rem; line-height: 1.75; }
+.foot-card h2 { margin: 0 0 8px; font-size: 0.92rem; font-weight: 600; color: var(--text); }
+.foot-card ol { margin: 8px 0; padding-left: 20px; }
+.foot-card li { margin-bottom: 4px; }
+
+/* ---------- responsive ---------- */
+
+@media (max-width: 980px) {
+  .hero { grid-template-columns: 1fr; }
+  .hero-main { padding: 28px 24px 24px; }
+}
 
 @media (max-width: 640px) {
-  body { padding: 24px 16px 48px; }
-  h1 { font-size: 1.3rem; }
-  .matches-grid { grid-template-columns: 1fr; }
-  td, th { padding: 9px 10px; }
+  .wrap { padding: 16px 16px 56px; }
+  .topbar { flex-direction: column; align-items: flex-start; }
+  .kpis { grid-template-columns: repeat(2, 1fr); }
+  .timeline { grid-template-columns: 1fr 1fr; row-gap: 22px; }
+  .tl-step::before { display: none; }
+  .cards { grid-template-columns: 1fr; }
+  .table-head { padding: 16px; }
+  .search input { width: 100%; }
+  .search { width: 100%; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .aurora i, .radar-sweep, .ping, .live i, .seg, .match-card { animation: none !important; }
+  .radar-sweep { display: none; }
 }
 """
+
+
+SCRIPT = """<script>
+(function () {
+  var reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  /* count-up numbers */
+  if (!reduce) {
+    document.querySelectorAll('[data-count]').forEach(function (el) {
+      var target = parseFloat(el.getAttribute('data-count'));
+      var dec = parseInt(el.getAttribute('data-dec') || '0', 10);
+      var suffix = el.getAttribute('data-suffix') || '';
+      var start = null, dur = 900;
+      function step(ts) {
+        if (start === null) start = ts;
+        var p = Math.min(1, (ts - start) / dur);
+        var v = target * (1 - Math.pow(1 - p, 3));
+        el.textContent = (dec ? v.toFixed(dec) : Math.round(v).toLocaleString('en-US')) + suffix;
+        if (p < 1) requestAnimationFrame(step);
+      }
+      requestAnimationFrame(step);
+    });
+  }
+
+  /* 3D tilt + cursor glare on signal cards */
+  if (!reduce) {
+    document.querySelectorAll('.match-card').forEach(function (card) {
+      card.addEventListener('mousemove', function (e) {
+        var r = card.getBoundingClientRect();
+        var px = (e.clientX - r.left) / r.width;
+        var py = (e.clientY - r.top) / r.height;
+        card.style.setProperty('--rx', ((0.5 - py) * 7).toFixed(2) + 'deg');
+        card.style.setProperty('--ry', ((px - 0.5) * 7).toFixed(2) + 'deg');
+        card.style.setProperty('--mx', (px * 100).toFixed(1) + '%');
+        card.style.setProperty('--my', (py * 100).toFixed(1) + '%');
+      });
+      card.addEventListener('mouseleave', function () {
+        card.style.setProperty('--rx', '0deg');
+        card.style.setProperty('--ry', '0deg');
+      });
+    });
+  }
+
+  /* searchable, filterable, paged table */
+  var table = document.getElementById('scan-table');
+  if (table) {
+    var rows = Array.prototype.slice.call(table.tBodies[0].rows);
+    var PAGE = 50;
+    var state = { f: 'all', q: '', limit: PAGE };
+    var more = document.getElementById('more');
+    var label = document.getElementById('shown-label');
+    var empty = document.getElementById('empty-row');
+    var input = document.getElementById('q');
+    var chips = Array.prototype.slice.call(document.querySelectorAll('.chip'));
+
+    function apply() {
+      var matched = 0, shown = 0;
+      rows.forEach(function (r) {
+        var ok = (state.f === 'all' || r.getAttribute('data-status') === state.f) &&
+                 (!state.q || r.getAttribute('data-symbol').indexOf(state.q) !== -1);
+        if (ok) {
+          matched++;
+          if (shown < state.limit) { r.hidden = false; shown++; } else { r.hidden = true; }
+        } else {
+          r.hidden = true;
+        }
+      });
+      label.textContent = 'Showing ' + shown + ' of ' + matched;
+      more.style.display = shown < matched ? '' : 'none';
+      empty.style.display = matched === 0 ? 'block' : 'none';
+    }
+
+    chips.forEach(function (chip) {
+      chip.addEventListener('click', function () {
+        state.f = chip.getAttribute('data-f');
+        state.limit = PAGE;
+        chips.forEach(function (c) { c.classList.toggle('active', c === chip); });
+        apply();
+      });
+    });
+
+    input.addEventListener('input', function () {
+      state.q = input.value.trim().toLowerCase();
+      state.limit = PAGE;
+      apply();
+    });
+
+    more.addEventListener('click', function () {
+      state.limit += PAGE;
+      apply();
+    });
+
+    apply();
+  }
+})();
+</script>"""
+
+
+STATUS_KEY = {
+    "PASS": "pass", "FAIL": "fail", "INCOMPLETE": "incomplete",
+    "STALE": "stale", "NO_DATA": "nodata", "ERROR": "error",
+}
+
+STATUS_LABEL = {
+    "pass": "Match", "fail": "No match", "incomplete": "Incomplete",
+    "stale": "Stale", "nodata": "No data", "error": "Error",
+}
+
+STATUS_RANK = {"pass": 0, "fail": 1, "incomplete": 2, "stale": 3, "error": 4, "nodata": 5}
 
 
 def build_table_row(r):
 
     details = r.get("details")
     status = r.get("status", "UNKNOWN")
+    key = STATUS_KEY.get(status, "nodata")
+    symbol = str(r.get("symbol", ""))
 
-    status_map = {"PASS": "pass", "FAIL": "fail"}
-    status_class = status_map.get(status, "other")
-    status_label = {"NO_DATA": "No data"}.get(status, status.capitalize())
-
-    # Real candlestick chart when OHLC data is available (PASS/FAIL rows);
-    # fall back to the plain arrow strip for rows that never got that far
-    # (STALE, etc.) so the column still shows something sensible.
     if r.get("ohlc"):
-        strip = build_candlestick_svg(r["ohlc"], size="small")
+        chart = build_candlestick_svg(r["ohlc"], size="small")
     else:
-        strip = candle_strip(details, r.get("partial_groups"))
+        chart = candle_strip(details, r.get("partial_groups"))
 
-    def yesno(value):
+    def chk(value, detail):
         if value is None:
-            return '<span class="badge na">&ndash;</span>'
-        return (
-            f'<span class="badge {"yes" if value else "no"}">'
-            f'{"Yes" if value else "No"}</span>'
-        )
+            return '<span class="chk na">&ndash;</span>'
+        glyph = "&#10003;" if value else "&#10005;"
+        cls = "yes" if value else "no"
+        extra = f'<span class="sub">{detail}</span>' if detail else ""
+        return f'<span class="chk {cls}">{glyph}</span>{extra}'
 
     if details:
-        d1524, d1527 = details["d1524"], details["d1527"]
-        detail_1a = (
-            f'{details["1524_vol"]:,.0f} vs {details["1527_vol"]:,.0f}'
-        )
-        detail_1b = f'{r.get("cond1b_matches", 0)} of 4 candles match'
-        detail_2 = f'09:15 {trend_name(details["d0915"])}, 15:24 {trend_name(d1524)}'
+        d1524 = details["d1524"]
+        detail_1a = f'{details["1524_vol"]:,.0f} vs {details["1527_vol"]:,.0f}'
+        detail_1b = f'{r.get("cond1b_matches", 0)} of 4 match'
+        detail_2 = f'{trend_name(details["d0915"])} / {trend_name(d1524)}'
     else:
         detail_1a = detail_1b = detail_2 = ""
+
+    direction = r.get("direction")
+    if direction:
+        dir_html = (
+            f'<span class="dir {"long" if direction == "LONG" else "short"}">'
+            f'{arrow(1 if direction == "LONG" else -1)} {esc(direction)}</span>'
+        )
+    else:
+        dir_html = '<span class="dim">&ndash;</span>'
 
     verify_html = ""
     if r.get("partial_3m"):
         groups = ", ".join(CANDLE_LABEL[g] for g in r.get("partial_groups", []))
-        verify_html = f'<div class="verify-tag">Verify &mdash; partial: {esc(groups)}</div>'
+        verify_html = f'<span class="verify-tag">Verify: partial {esc(groups)}</span>'
 
-    data_status_label = {
-        "OK": "OK", "FALLBACK": "Fallback (7d)", "NO_DATA": "No data",
-        "ERROR": "Error",
+    data_label = {
+        "OK": "OK", "FALLBACK": "Fallback (7d)", "NO_DATA": "No data", "ERROR": "Error",
     }.get(r.get("data_status"), r.get("data_status"))
 
-    data_bits = [cell(data_status_label)]
+    data_bits = [cell(data_label)]
 
     if r.get("missing"):
         data_bits.append(
-            '<div class="detail-line">missing: '
-            + ", ".join(hm_text(h) for h in r["missing"])
-            + "</div>"
+            '<span class="sub">missing: '
+            + ", ".join(hm_text(h) for h in r["missing"]) + "</span>"
         )
-
     if r.get("error"):
-        data_bits.append(f'<div class="detail-line">{esc(r["error"][:120])}</div>')
-
-    data_text = "".join(data_bits)
+        data_bits.append(f'<span class="sub">{esc(r["error"][:120])}</span>')
 
     return f"""
-<tr>
-<td class="symbol">{esc(r.get('symbol', ''))}</td>
-<td class="mono dim">{cell(r.get('date'))}</td>
-<td class="mono">{cell(r.get('direction'))}</td>
-<td>{strip}</td>
-<td>{yesno(r.get('cond1a'))}<div class="detail-line">{detail_1a}</div></td>
-<td>{yesno(r.get('cond1b'))}<div class="detail-line">{detail_1b}</div></td>
-<td>{yesno(r.get('cond2'))}<div class="detail-line">{detail_2}</div></td>
-<td><span class="result {status_class}">{esc(status_label)}</span>{verify_html}</td>
-<td class="mono dim">{data_text}</td>
+<tr data-status="{key}" data-symbol="{esc(symbol.lower())}">
+<td class="symbol">{esc(symbol)}</td>
+<td class="mono dim">{esc(fmt_day(r.get("date"), weekday=False)) if r.get("date") else "&ndash;"}</td>
+<td>{dir_html}</td>
+<td>{chart}</td>
+<td>{chk(r.get("cond1a"), detail_1a)}</td>
+<td>{chk(r.get("cond1b"), detail_1b)}</td>
+<td>{chk(r.get("cond2"), detail_2)}</td>
+<td><span class="pill {key}">{STATUS_LABEL[key]}</span>{verify_html}</td>
+<td class="mono dim">{"".join(data_bits)}</td>
 </tr>
 """
+
+
+def build_match_card(r, entry_day):
+
+    direction = r["direction"]
+    long_ = direction == "LONG"
+    cls = "long" if long_ else "short"
+
+    ohlc = r.get("ohlc") or {}
+    d = r.get("details") or {}
+
+    first_open = (ohlc.get("0915") or {}).get("open")
+    last_close = (ohlc.get("1527") or {}).get("close")
+
+    price_html = ""
+    if first_open and last_close:
+        chg = (last_close / first_open - 1) * 100
+        price_html = (
+            '<div class="mc-price">'
+            f'<span class="mc-last">&#8377;{last_close:,.2f}</span>'
+            f'<span class="mc-chg {"up" if chg >= 0 else "down"}">{chg:+.2f}%</span>'
+            '<span class="mc-note">09:15 open to 15:27 close</span></div>'
+        )
+
+    volumes = {label: d.get(f"{label}_vol") for label in CANDLE_ORDER}
+    chart = build_candlestick_svg(ohlc, size="large", volumes=volumes)
+
+    v24 = d.get("1524_vol", 0) or 0
+    v27 = d.get("1527_vol", 0) or 0
+
+    checks = [
+        ("15:24 volume above 15:27", f"{v24:,.0f} vs {v27:,.0f}"),
+        ("2+ of 4 candles share the 15:24 trend", f'{r.get("cond1b_matches", 0)} of 4'),
+        ("09:15 trend matches 15:24", f'{trend_name(d.get("d0915"))} / {trend_name(d.get("d1524"))}'),
+    ]
+    checks_html = "".join(
+        f'<li><span class="ck">&#10003;</span><span>{esc(t)}</span>'
+        f'<span class="ck-val">{esc(v)}</span></li>'
+        for t, v in checks
+    )
+
+    verify = ""
+    if r.get("partial_3m"):
+        groups = ", ".join(CANDLE_LABEL[g] for g in r.get("partial_groups", []))
+        verify = (
+            f'<div class="mc-verify">Verify on TradingView: {esc(groups)} was built '
+            f'from an incomplete set of 1-minute bars.</div>'
+        )
+
+    return f"""
+<article class="match-card {cls}">
+  <span class="glare"></span>
+  <div class="mc-head">
+    <span class="mc-sym">{esc(r["symbol"])}</span>
+    <span class="mc-dir">{arrow(1 if long_ else -1)} {esc(direction)}</span>
+  </div>
+  {price_html}
+  <div class="mc-chart">{chart}</div>
+  <ul class="checks">{checks_html}</ul>
+  <div class="mc-plan">
+    <div><span class="k">Entry</span><span class="v">{esc(fmt_day(entry_day))}, 09:15 open</span></div>
+    <div><span class="k">Exit</span><span class="v">15:27</span></div>
+  </div>
+  {verify}
+</article>"""
 
 
 # =============================================================================
@@ -1717,130 +2167,146 @@ def build_table_row(r):
 
 def generate_html_report(results, elapsed, universe_source):
 
-    def count(name):
-        return sum(1 for r in results if r.get("status") == name)
+    total = len(results)
+    counts = Counter(STATUS_KEY.get(r.get("status"), "nodata") for r in results)
 
     matches = [r for r in results if r.get("status") == "PASS"]
+    longs = sum(1 for r in matches if r.get("direction") == "LONG")
+    shorts = len(matches) - longs
 
-    signal_dates = [r["date"] for r in results if r.get("date")]
-    prev_dates = [r["previous_day"] for r in results if r.get("previous_day")]
-    entry_dates = [r["entry_day"] for r in results if r.get("entry_day")]
-    signal_date = Counter(signal_dates).most_common(1)[0][0] if signal_dates else None
-    previous_day = Counter(prev_dates).most_common(1)[0][0] if prev_dates else None
+    signal_date = Counter(r["date"] for r in results if r.get("date")).most_common(1)
+    previous_day = Counter(r["previous_day"] for r in results if r.get("previous_day")).most_common(1)
+    entry_dates = Counter(r["entry_day"] for r in results if r.get("entry_day")).most_common(1)
+
+    signal_date = signal_date[0][0] if signal_date else None
+    previous_day = previous_day[0][0] if previous_day else None
     entry_day = (
-        Counter(entry_dates).most_common(1)[0][0] if entry_dates
+        entry_dates[0][0] if entry_dates
         else pd.Timestamp.now(tz="Asia/Kolkata").strftime("%Y-%m-%d")
     )
 
-    # ---- matches (hero) ----
+    scan_time = pd.Timestamp.now(tz="Asia/Kolkata").strftime("%d %b %Y, %H:%M IST")
 
-    radar_html = (
-        '<div class="radar-wrap"><div class="radar-sweep"></div>'
-        + build_radar_svg(matches) + '</div>'
+    warning = session_warning(results)
+    warning_html = f'<div class="warn">{esc(warning)}</div>' if warning else ""
+
+    # ---- hero ----
+
+    n = len(matches)
+
+    if n:
+        headline = (
+            f'<span class="hero-num" data-count="{n}">{n}</span> '
+            f'signal{"s" if n != 1 else ""} detected'
+        )
+        split = f' {longs} long, {shorts} short.' if n else ""
+    else:
+        headline = 'No <span class="hero-num">signals</span> detected'
+        split = ""
+
+    hero_sub = (
+        f'Scanned <b>{total:,}</b> symbols from {esc(universe_source)} against the '
+        f'<b>{esc(fmt_day(signal_date))}</b> session.{split} Trades enter at the '
+        f'<b>{esc(fmt_day(entry_day))}</b> 09:15 open and exit at 15:27.'
     )
 
-    if matches:
-        cards = []
-        for r in matches:
-            direction = r["direction"]
-            cls = "long" if direction == "LONG" else "short"
-            verify = (
-                '<div class="match-verify">Verify on TradingView &mdash; '
-                'built from a partial 3-min candle</div>'
-                if r.get("partial_3m") else ""
-            )
-            chart = build_candlestick_svg(r.get("ohlc"), size="large")
-            cards.append(f'''
-<div class="match-card {cls}">
-  <div class="match-top">
-    <span class="match-symbol">{esc(r["symbol"])}</span>
-    <span class="match-dir {cls}">{arrow(1 if direction=="LONG" else -1)} {esc(direction)}</span>
-  </div>
-  {chart}
-  <div class="match-sub">Signal day {cell(r.get("date"))}</div>
-  {verify}
-</div>''')
-        matches_html = (
-            radar_html + '<div class="matches-grid">' + "".join(cards) + '</div>'
-        )
+    timeline = f"""
+<ol class="timeline">
+  <li class="tl-step done"><span class="tl-dot"></span>
+    <div class="tl-label">Signal day</div><div class="tl-date">{esc(fmt_day(signal_date))}</div>
+    <div class="tl-sub">conditions read</div></li>
+  <li class="tl-step done"><span class="tl-dot"></span>
+    <div class="tl-label">Previous day</div><div class="tl-date">{esc(fmt_day(previous_day))}</div>
+    <div class="tl-sub">latest session</div></li>
+  <li class="tl-step active"><span class="tl-dot"></span>
+    <div class="tl-label">Entry</div><div class="tl-date">{esc(fmt_day(entry_day))}</div>
+    <div class="tl-sub">09:15 open</div></li>
+  <li class="tl-step"><span class="tl-dot"></span>
+    <div class="tl-label">Exit</div><div class="tl-date">{esc(fmt_day(entry_day))}</div>
+    <div class="tl-sub">15:27</div></li>
+</ol>"""
+
+    kpis = f"""
+<div class="kpis">
+  <div class="kpi"><div class="n" data-count="{total}">{total:,}</div><div class="l">Scanned</div></div>
+  <div class="kpi long"><div class="n" data-count="{longs}">{longs}</div><div class="l">Long</div></div>
+  <div class="kpi short"><div class="n" data-count="{shorts}">{shorts}</div><div class="l">Short</div></div>
+  <div class="kpi"><div class="n" data-count="{elapsed:.1f}" data-dec="1" data-suffix="s">{elapsed:.1f}s</div><div class="l">Scan time</div></div>
+</div>"""
+
+    if n == 0:
+        radar_caption = "Nothing to plot. No symbol passed both conditions."
+    elif n > 12:
+        radar_caption = "Each blip is one matched signal. Hover a blip to see its symbol."
     else:
-        matches_html = radar_html + f'''
-<div class="empty-state">
-  <b>No symbols matched every condition.</b><br>
-  {len(results):,} scanned against the day-before-previous-day conditions
-  &mdash; none passed both.
-</div>'''
+        radar_caption = "Each blip is one matched signal."
+
+    radar = (
+        '<div class="radar-wrap"><div class="radar-sweep"></div>'
+        + build_radar_svg(matches) + '</div>'
+        f'<div class="radar-cap">{radar_caption}</div>'
+    )
+
+    # ---- scan breakdown ----
+
+    order = ["pass", "fail", "incomplete", "stale", "nodata", "error"]
+
+    segs = "".join(
+        f'<span class="seg seg-{k}" style="flex:{counts[k]};animation-delay:{i * 0.08:.2f}s" '
+        f'title="{STATUS_LABEL[k]}: {counts[k]:,}"></span>'
+        for i, k in enumerate(order) if counts[k]
+    )
+
+    legend = "".join(
+        f'<div class="lg"><i class="seg-{k}"></i>{STATUS_LABEL[k]} '
+        f'<b>{counts[k]:,}</b><em>{(counts[k] / total if total else 0):.1%}</em></div>'
+        for k in order if counts[k]
+    )
+
+    # ---- signals ----
+
+    if matches:
+        cards = "".join(build_match_card(r, entry_day) for r in matches)
+        signals_html = f'<div class="cards">{cards}</div>'
+    else:
+        signals_html = f"""
+<div class="glass empty-state">
+  <b>No symbol matched every condition.</b><br>
+  {total:,} symbols were checked against the {esc(fmt_day(signal_date))} session and none passed
+  both conditions. That is a normal outcome for a strategy this selective.
+</div>"""
 
     # ---- table ----
 
     sorted_results = sorted(
         results,
-        key=lambda x: (x.get("status") != "PASS", x.get("symbol", "")),
+        key=lambda x: (
+            STATUS_RANK.get(STATUS_KEY.get(x.get("status"), "nodata"), 9),
+            x.get("symbol", ""),
+        ),
     )
 
     table_rows = "".join(build_table_row(r) for r in sorted_results)
 
-    warning = session_warning(results)
-    warning_html = f'<div class="warn">{esc(warning)}</div>' if warning else ""
-
-    scan_time = pd.Timestamp.now(tz="Asia/Kolkata").strftime(
-        "%d %b %Y, %H:%M IST"
-    )
-
-    stats = [
-        (len(results), "Scanned"),
-        (len(matches), "Matches"),
-        (count("FAIL"), "No match"),
-        (count("INCOMPLETE"), "Incomplete"),
-        (count("STALE"), "Stale"),
-        (count("NO_DATA"), "No data"),
-        (count("ERROR"), "Errors"),
-        (f"{elapsed:.1f}s", "Scan time"),
+    chips = [f'<button class="chip active" data-f="all">All <b>{total:,}</b></button>']
+    chips += [
+        f'<button class="chip" data-f="{k}">{STATUS_LABEL[k]} <b>{counts[k]:,}</b></button>'
+        for k in order if counts[k]
     ]
 
-    stats_html = "".join(
-        f'<div class="stat"><div class="stat-value">{value}</div>'
-        f'<div class="stat-label">{label}</div></div>'
-        for value, label in stats
+    search_icon = (
+        '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+        'stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/>'
+        '<path d="M21 21l-4.3-4.3"/></svg>'
     )
 
-    meta_items = [
-        ("Generated", scan_time),
-        ("Universe", universe_source),
-        ("Day before previous (signal day)", cell(signal_date)),
-        ("Previous day", cell(previous_day)),
-        ("Entry", f"{cell(entry_day)}, 09:15 open"),
-        ("Exit", f"{cell(entry_day)}, 15:27"),
-    ]
-
-    meta_html = "".join(
-        f'<div class="meta-item"><div class="meta-label">{esc(label)}</div>'
-        f'<div class="meta-value">{value}</div></div>'
-        for label, value in meta_items
+    logo = (
+        '<svg width="32" height="32" viewBox="0 0 32 32" aria-hidden="true">'
+        '<circle cx="16" cy="16" r="13" fill="none" stroke="#4FE0F0" stroke-opacity=".55" stroke-width="1.5"/>'
+        '<circle cx="16" cy="16" r="7" fill="none" stroke="#4FE0F0" stroke-opacity=".35" stroke-width="1.5"/>'
+        '<path d="M16 16 L26.5 8.5" stroke="#4FE0F0" stroke-width="2.2" stroke-linecap="round"/>'
+        '<circle cx="16" cy="16" r="2.4" fill="#4FE0F0"/></svg>'
     )
-
-    # Plain string (not an f-string) so the JS braces need no escaping.
-    tilt_script = """<script>
-(function () {
-  if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
-  var cards = document.querySelectorAll('.match-card');
-  cards.forEach(function (card) {
-    card.addEventListener('mousemove', function (e) {
-      var rect = card.getBoundingClientRect();
-      var px = (e.clientX - rect.left) / rect.width;
-      var py = (e.clientY - rect.top) / rect.height;
-      var rx = (0.5 - py) * 9;
-      var ry = (px - 0.5) * 9;
-      card.style.setProperty('--rx', rx.toFixed(2) + 'deg');
-      card.style.setProperty('--ry', ry.toFixed(2) + 'deg');
-    });
-    card.addEventListener('mouseleave', function () {
-      card.style.setProperty('--rx', '0deg');
-      card.style.setProperty('--ry', '0deg');
-    });
-  });
-})();
-</script>"""
 
     document = f'''<!DOCTYPE html>
 <html lang="en">
@@ -1851,76 +2317,86 @@ def generate_html_report(results, elapsed, universe_source):
 <style>{CSS}</style>
 </head>
 <body>
-<div class="container">
+<div class="aurora"><i class="a"></i><i class="b"></i><i class="c"></i></div>
+<div class="grid-bg"></div>
 
-<header>
-  <h1>NSE Momentum Scanner</h1>
-  <div class="status-chip"><span class="status-dot"></span>Scan complete</div>
-  <div class="meta-row">{meta_html}</div>
+<div class="wrap">
+
+<header class="topbar">
+  <div class="brand">{logo}<div>NSE Momentum Scanner<small>3-minute closing-window strategy</small></div></div>
+  <div class="topmeta"><span class="live"><i></i>Scan complete</span><span>{esc(scan_time)}</span></div>
 </header>
 
 {warning_html}
 
-<section class="matches-section">
-  <h2 class="matches-heading"><span class="glyph">&#9678;</span>Matches</h2>
-  {matches_html}
+<section class="hero">
+  <div class="glass hero-main">
+    <div>
+      <h1>{headline}</h1>
+      <p class="hero-sub">{hero_sub}</p>
+    </div>
+    {timeline}
+    {kpis}
+  </div>
+  <div class="glass hero-radar">{radar}</div>
 </section>
 
-<div class="stats">{stats_html}</div>
+<section class="glass panel">
+  <div class="sec-head"><h2 class="sec-title">Scan breakdown</h2><span class="sec-note">{total:,} symbols</span></div>
+  <div class="dist-bar">{segs}</div>
+  <div class="legend">{legend}</div>
+</section>
 
-<div class="table-wrap">
-<table>
-<thead>
-<tr>
-<th>Symbol</th>
-<th>Signal day</th>
-<th>Direction</th>
-<th>Candles <small>09:15 &middot; 15:15 &middot; 15:18 &middot; 15:21 &middot; 15:24 &middot; 15:27</small></th>
-<th>15:24 vol &gt; 15:27 vol</th>
-<th>Trend matches <small>&ge;2 of 4</small></th>
-<th>09:15 = 15:24 trend</th>
-<th>Result</th>
-<th>Data</th>
-</tr>
-</thead>
-<tbody>
-{table_rows}
-</tbody>
-</table>
-</div>
+<section>
+  <div class="sec-head"><h2 class="sec-title">Signals</h2><span class="sec-note">{n} matched</span></div>
+  {signals_html}
+</section>
 
-<footer>
-  <div class="section">
-    <h2>How this works</h2>
-    Every condition is checked on the day before previous day &mdash; two
-    trading days before entry &mdash; at the 3-minute timeframe.
+<section class="glass table-panel">
+  <div class="table-head">
+    <div class="search">{search_icon}<input id="q" type="search" placeholder="Search symbol" autocomplete="off" aria-label="Search symbol"></div>
+    <div class="filters">{"".join(chips)}</div>
+  </div>
+  <div class="table-scroll">
+  <table id="scan-table">
+    <thead><tr>
+      <th>Symbol</th><th>Signal day</th><th>Direction</th><th>Candles</th>
+      <th>15:24 vol &gt; 15:27</th><th>Trend match (2+ of 4)</th><th>09:15 = 15:24</th>
+      <th>Result</th><th>Data</th>
+    </tr></thead>
+    <tbody>{table_rows}</tbody>
+  </table>
+  <div class="empty-row" id="empty-row">No symbols match this search.</div>
+  </div>
+  <div class="table-foot"><span id="shown-label"></span><button class="btn" id="more" type="button">Show 50 more</button></div>
+</section>
+
+<div class="foot-grid">
+  <div class="glass foot-card">
+    <h2>How the signal works</h2>
+    Every condition is read on the signal day, two trading days before entry, on
+    3-minute candles.
     <ol>
-      <li>The 15:24 candle's volume is greater than the 15:27 candle's
-      volume, and at least two of the four candles at 15:15, 15:18, 15:21
-      and 15:27 share the 15:24 candle's trend.</li>
-      <li>The 9:15 candle's trend matches the 15:24 candle's trend.</li>
+      <li>The 15:24 candle's volume is higher than the 15:27 candle's, and at least two of
+      the candles at 15:15, 15:18, 15:21 and 15:27 share the 15:24 candle's trend.</li>
+      <li>The 09:15 candle's trend matches the 15:24 candle's trend.</li>
     </ol>
-    Direction follows the 15:24 candle: an up trend means long, a down
-    trend means short. Entry is the next trading session's 09:15 open;
-    exit is that same session's 15:27.
+    Direction follows the 15:24 candle: up is long, down is short. Entry is the 09:15 open
+    on entry day; exit is 15:27 the same day.
   </div>
-  <div class="section">
+  <div class="glass foot-card">
     <h2>Data notes</h2>
-    Yahoo has no native 3-minute interval, so each 3-minute candle here is
-    built from three 1-minute bars. A minute with no trades simply doesn't
-    appear in Yahoo's data &mdash; it's treated as zero volume with no
-    trend, which is correct when that's genuinely what happened, but Yahoo
-    can't tell that apart from a dropped bar. A "Verify" tag means at
-    least one of the six candles was built from an incomplete set of
-    1-minute bars &mdash; check it on TradingView before acting on it.
-    Incomplete means no data at all in the required window on the signal
-    day. Stale means the resolved signal day doesn't match most other
-    symbols.
+    Yahoo has no native 3-minute interval, so each 3-minute candle is built from three
+    1-minute bars. A minute with no trades is absent from Yahoo's data and is treated as
+    zero volume with no trend, which is correct when that is what happened, but Yahoo
+    cannot tell it apart from a dropped bar. A "Verify" tag means a candle was built from
+    an incomplete set of bars, so check it on TradingView before acting. Incomplete means no
+    data in the required window; stale means the signal day differs from most symbols.
   </div>
-</footer>
+</div>
 
 </div>
-{tilt_script}
+{SCRIPT}
 </body>
 </html>
 '''
