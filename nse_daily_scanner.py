@@ -2,37 +2,37 @@
 # NSE DAILY MOMENTUM SCANNER - FIXED VERSION
 # =============================================================================
 #
-# Uses Yahoo Finance 1-minute data. No Parquet, no nselib.
+# Uses Yahoo Finance NATIVE 5-minute candles (no aggregation from 1-minute
+# bars). No Parquet, no nselib.
 # Universe: Nifty 500 CSV -> NSE equity list -> built-in fallback.
 # Output: index.html
 #
 # =============================================================================
-# STRATEGY
+# STRATEGY  (5-minute timeframe)
 # =============================================================================
 #
-# "Previous day" = the latest trading day present in the data.
-# "Day before previous day" (signal day) = the day right before that - every
-#   condition below is evaluated on THIS day, at the 3-minute timeframe.
-# "Next day" = the day the trade is entered (the session after "previous
-#   day").
+# "Previous day"  (P) = the most recent COMPLETED trading session (today is
+#                       never used - today is the entry day).
+# "Day before previous day" (B) = the completed session right before P.
+# "Next day"      = entry day = today.
 #
-# 1) 15:24 volume > 15:27 volume, AND at least 2 of the four candles at
-#    15:15, 15:18, 15:21 and 15:27 share the 15:24 candle's trend.
+# NSE 5-minute candles are labelled by their start time: 09:15 ... 15:25.
+# 15:25 is the LAST candle of the session, 15:20 the second-to-last.
 #
-# 2) The 9:15 candle's trend matches the 15:24 candle's trend.
+# 1) On P:  the 15:20 candle's trend is DIFFERENT from the 15:25 candle's
+#    trend, AND at least 2 of the candles 15:05, 15:10, 15:15 share the
+#    15:20 candle's trend.
 #
-# FINAL DIRECTION: 15:24 candle's trend (up = LONG, down = SHORT).
+# 2) On B:  the 15:20 candle's trend MATCHES P's 15:20 trend, AND B's 15:20
+#    volume is greater than B's 15:25 volume.
 #
-# TRADE: Entry = next trading session's 09:15 OPEN, Exit = that session's
-#        15:27.
+# DIRECTION: set by DIRECTION_RULE below (default: follow the 15:20 trend).
+# TRADE:     Entry = today's 09:15 OPEN, Exit = EXIT_TIME_LABEL.
 #
-# Yahoo has no native 3-minute interval, so every 3-minute candle here is
-# built from three 1-minute bars (Open = open of the earliest sub-minute
-# with data, Close = close of the latest, Volume = sum). A missing
-# sub-minute is treated as "no trade" (0 volume, no trend); when that
-# makes a 3-min candle less than fully complete, it's flagged for manual
-# verification rather than silently trusted (see "partial_3m" / "Verify"
-# tags).
+# A candle with no trades is simply absent from Yahoo's data. It is treated
+# as "no trend" (so it can never satisfy a trend condition). The one case
+# where that could create a false signal is B's 15:25 candle (its volume
+# would read as zero), so that case is flagged "Verify".
 #
 # INSTALL:
 #   python -m pip install yfinance pandas requests curl_cffi
@@ -40,6 +40,7 @@
 # =============================================================================
 
 import html
+import json
 import logging
 import math
 import random
@@ -80,19 +81,31 @@ MAX_WORKERS = 8
 # Attempts per request (only rate limits / network errors are retried).
 MAX_RETRIES = 3
 
+# Native 5-minute candles. Yahoo keeps about 60 days of 5-minute history,
+# so a month-long fallback is safely inside the limit.
+INTERVAL = "5m"
+
 INITIAL_PERIOD = "5d"
 
-# Yahoo keeps roughly 7-8 days of 1-minute data in total, so this is close
-# to the practical maximum.
-FALLBACK_PERIOD = "7d"
+FALLBACK_PERIOD = "1mo"
 
 REQUEST_TIMEOUT = 20
 
-# If fewer than this share of symbols have all 18 required one-minute bars
-# on the signal day, the report shows a "data looks incomplete" warning.
-# Kept low because illiquid stocks often have a few no-trade minutes; when
-# Yahoo's data is genuinely broken the share is close to 0%.
+# If fewer than this share of scanned symbols have all 7 required 5-minute
+# candles, the report shows a "data looks incomplete" warning. Kept low
+# because illiquid stocks often have a no-trade candle; when Yahoo's data
+# is genuinely broken the share is close to 0%.
 SESSION_COMPLETE_SHARE = 0.20
+
+# Which way to trade when a signal fires. The strategy text defines the
+# conditions but not the direction, so this is a one-line switch:
+#   "FOLLOW_1520" -> trade in the direction of the 15:20 trend (default)
+#   "FOLLOW_1525" -> trade in the direction of the 15:25 trend, i.e. against
+#                    the 15:20 trend (the signal requires them to differ)
+DIRECTION_RULE = "FOLLOW_1520"
+
+# Exit time shown in the report (the strategy text did not change this).
+EXIT_TIME_LABEL = "15:27"
 
 
 # =============================================================================
@@ -146,21 +159,19 @@ NSE_EQUITY_URL = (
 
 
 # =============================================================================
-# REQUIRED 1-MINUTE CANDLES
+# REQUIRED 5-MINUTE CANDLES
 # =============================================================================
 
-# The six 3-minute candles the strategy needs, each built from three
-# 1-minute bars. All are read from "day before previous day" (signal day).
-CANDLE_GROUPS_3M = {
-    "0915": [915, 916, 917],
-    "1515": [1515, 1516, 1517],
-    "1518": [1518, 1519, 1520],
-    "1521": [1521, 1522, 1523],
-    "1524": [1524, 1525, 1526],
-    "1527": [1527, 1528, 1529],
-}
+# The seven native 5-minute candles the strategy reads.
+#   P = previous day (latest completed session)
+#   B = day before previous day
+# Slot keys are "<day><hhmm>", e.g. "P1520" = previous day's 15:20 candle.
+SLOTS = [
+    ("B", 1520), ("B", 1525),
+    ("P", 1505), ("P", 1510), ("P", 1515), ("P", 1520), ("P", 1525),
+]
 
-NEEDED_HM = {hm for group in CANDLE_GROUPS_3M.values() for hm in group}
+SLOT_KEYS = [f"{day}{hm:04d}" for day, hm in SLOTS]
 
 
 # =============================================================================
@@ -524,7 +535,7 @@ def yahoo_download(symbol, period):
         try:
             df = yf.Ticker(ticker).history(
                 period=period,
-                interval="1m",
+                interval=INTERVAL,
                 auto_adjust=False,
                 actions=False,
                 prepost=False,
@@ -560,6 +571,14 @@ def yahoo_download(symbol, period):
     return None, last_error
 
 
+def completed_day_count(rows):
+    """Number of distinct trading sessions strictly before today."""
+
+    today = pd.Timestamp.now(tz="Asia/Kolkata").strftime("%Y-%m-%d")
+
+    return len({d for d in rows["date"].unique() if d != today})
+
+
 def fetch_symbol_rows(symbol):
     """Returns (rows, info). If rows is None, info is "NO_DATA" or an
     error message. Otherwise info is "OK" or "FALLBACK"."""
@@ -569,15 +588,21 @@ def fetch_symbol_rows(symbol):
 
     rows, error = yahoo_download(symbol, INITIAL_PERIOD)
 
-    if rows is not None:
+    # The strategy reads two completed sessions, so a short window (long
+    # weekend / holidays) gets one longer retry. A rate-limit error does
+    # not: a longer request would only be throttled again.
+    if rows is not None and completed_day_count(rows) >= 2:
         return rows, "OK"
 
-    # Only one extra request, and only if Yahoo simply returned nothing.
-    # (No point retrying with a longer period after a rate-limit error.)
-    if error == "NO_DATA":
+    if rows is not None or error == "NO_DATA":
         rows2, error2 = yahoo_download(symbol, FALLBACK_PERIOD)
+
         if rows2 is not None:
             return rows2, "FALLBACK"
+
+        if rows is not None:
+            return rows, "OK"   # evaluate_rows will report INCOMPLETE
+
         return None, error2
 
     return None, error
@@ -601,61 +626,22 @@ def candle_direction(open_price, close_price):
     return 0
 
 
-def aggregate_3m(m, minutes):
-    """3-minute candle built from whichever of the 3 one-minute candles
-    exist. Yahoo has no native 3-minute interval, so this combines three
-    1-minute bars: Open = open of the earliest sub-minute that has data,
-    Close = close of the latest sub-minute that has data, High/Low = the
-    max/min across whichever sub-minutes are present, Volume = sum of the
-    sub-minutes' volumes. This is the correct construction as long as a
-    missing sub-minute really means "no trades" rather than "Yahoo
-    dropped a real bar" - the code cannot tell those two apart, which is
-    exactly what a manual cross-check (e.g. on TradingView) is good for.
-    m[minute] is a tuple (open, high, low, close, volume).
-    """
+def slot_label(key):
+    """'P1520' -> 'P 15:20' (used in missing/verify notes)."""
 
-    present = [minute for minute in minutes if minute in m]
-    missing = [minute for minute in minutes if minute not in m]
+    return f"{key[0]} {hm_text(int(key[1:]))}"
 
-    if not present:
-        return {
-            "open": None, "high": None, "low": None, "close": None,
-            "volume": 0,
-            "minutes_used": [],
-            "minutes_missing": missing,
-            "partial": True,
-        }
-
-    candles = [m[minute] for minute in present]
-
-    return {
-        "open": candles[0][0],
-        "high": max(c[1] for c in candles),
-        "low": min(c[2] for c in candles),
-        "close": candles[-1][3],
-        "volume": sum(int(round(c[4])) for c in candles),
-        "minutes_used": present,
-        "minutes_missing": missing,
-        # True whenever this 3-min candle was not built from all 3
-        # sub-minutes - the ambiguous case worth double-checking manually.
-        "partial": len(present) < len(minutes),
-    }
-
-
-# =============================================================================
-# EVALUATE STRATEGY
-# =============================================================================
 
 def evaluate_rows(rows):
-    """Strategy (all on "day before previous day" - two trading days before
-    entry - at the 3-minute timeframe):
+    """Native 5-minute strategy.
 
-    1) 15:24 volume > 15:27 volume, AND at least 2 of {15:15, 15:18, 15:21,
-       15:27} share 15:24's trend.
-    2) The 9:15 candle's trend matches 15:24's trend.
+    P = previous day (latest completed session), B = the session before it.
+    Entry day = today.
 
-    Direction = LONG if 15:24 trended up, SHORT if down. Entry = next
-    trading session's 09:15 open. Exit = that same session's 15:27.
+    1) On P: the 15:20 candle's trend differs from the 15:25 candle's, and
+       at least 2 of the candles 15:05, 15:10, 15:15 share 15:20's trend.
+    2) On B: the 15:20 trend matches P's 15:20 trend, and B's 15:20 volume
+       is greater than B's 15:25 volume.
     """
 
     if rows is None or rows.empty:
@@ -675,101 +661,133 @@ def evaluate_rows(rows):
             float(o), float(h), float(l), float(c), float(v)
         )
 
-    # "Today" is fixed to the real calendar date, not inferred from
-    # whichever date happens to be latest in the fetched data. That
-    # inference broke depending on exactly when the scan was run: if Yahoo
-    # had already returned even a few minutes of today's session, today
-    # got mistaken for "previous day" and the whole mapping shifted back
-    # by a day. Excluding today outright makes the result the same
-    # whether the scan runs before the open or mid-session.
+    # "Today" is the real calendar date and is never a candidate: it is the
+    # entry day. Using the real date (not "latest date in the data") keeps
+    # the mapping identical whether the scan runs before the open or
+    # mid-session.
     today = pd.Timestamp.now(tz="Asia/Kolkata").strftime("%Y-%m-%d")
     dates = sorted(d for d in by_date if d != today)
 
-    # Need at least 2 distinct trading days strictly before today:
-    # "previous day" (yesterday's session) and "day before previous day"
-    # (the one the strategy actually reads).
     if len(dates) < 2:
         return {
             "status": "INCOMPLETE",
             "date": dates[-1] if dates else None,
-            "previous_day": None,
+            "previous_day": dates[-1] if dates else None,
+            "day_before": None,
             "entry_day": today,
-            "missing": sorted(NEEDED_HM),
-            "note": "fewer than 2 trading days of data available before today",
+            "missing": [slot_label(k) for k in SLOT_KEYS],
+            "note": "fewer than 2 completed trading days of data before today",
         }
 
-    previous_day = dates[-1]
-    signal_date = dates[-2]
+    previous_day = dates[-1]       # P
+    day_before = dates[-2]         # B
+    day_data = {"P": by_date[previous_day], "B": by_date[day_before]}
 
-    m = by_date[signal_date]
+    # ---------------------------------------------------------------------
+    # THE SEVEN CANDLES
+    # ---------------------------------------------------------------------
 
-    missing = [hm for hm in sorted(NEEDED_HM) if hm not in m]
+    candles = {}
+    missing = []
 
-    if len(missing) == len(NEEDED_HM):
+    for day, hm in SLOTS:
+        key = f"{day}{hm:04d}"
+        bar = day_data[day].get(hm)
+
+        if bar is None:
+            candles[key] = None
+            missing.append(slot_label(key))
+        else:
+            o, h, l, c, v = bar
+            candles[key] = {"open": o, "high": h, "low": l, "close": c, "volume": int(round(v))}
+
+    if len(missing) == len(SLOTS):
         return {
             "status": "INCOMPLETE",
-            "date": signal_date,
+            "date": previous_day,
             "previous_day": previous_day,
+            "day_before": day_before,
             "entry_day": today,
             "missing": missing,
         }
 
-    # ---------------------------------------------------------------------
-    # THE SIX 3-MINUTE CANDLES
-    # ---------------------------------------------------------------------
+    def trend(key):
+        c = candles.get(key)
+        return candle_direction(c["open"], c["close"]) if c else 0
 
-    candles = {
-        label: aggregate_3m(m, minutes)
-        for label, minutes in CANDLE_GROUPS_3M.items()
-    }
+    def volume(key):
+        c = candles.get(key)
+        return c["volume"] if c else 0
 
-    d = {
-        label: candle_direction(c["open"], c["close"])
-        for label, c in candles.items()
-    }
+    d = {key: trend(key) for key in SLOT_KEYS}
 
-    v1524 = candles["1524"]["volume"]
-    v1527 = candles["1527"]["volume"]
+    p1520, p1525 = d["P1520"], d["P1525"]
 
-    # True whenever any of the six 3-min candles was built from fewer than
-    # all 3 of its sub-minutes - i.e. "missing minute" is ambiguous between
-    # "no trades" and "Yahoo dropped a bar", so the result is worth a
-    # manual check rather than fully trusting as-is.
-    partial_groups = sorted(
-        label for label, c in candles.items() if c.get("partial")
-    )
-    partial_3m = len(partial_groups) > 0
+    # CONDITION 1a (P): 15:20 and 15:25 trends differ (both must be defined).
+    cond1a = p1520 != 0 and p1525 != 0 and p1520 != p1525
 
-    d1524 = d["1524"]
-
-    # CONDITION 1a: 15:24 volume > 15:27 volume
-    cond1a = d1524 != 0 and v1524 > v1527
-
-    # CONDITION 1b: at least 2 of {15:15, 15:18, 15:21, 15:27} share
-    # 15:24's trend.
-    compare_labels = ["1515", "1518", "1521", "1527"]
-    matches = sum(1 for label in compare_labels if d1524 != 0 and d[label] == d1524)
+    # CONDITION 1b (P): at least 2 of 15:05 / 15:10 / 15:15 share 15:20's trend.
+    earlier = ["P1505", "P1510", "P1515"]
+    matches = sum(1 for k in earlier if p1520 != 0 and d[k] == p1520)
     cond1b = matches >= 2
 
+    # CONDITION 2a (B): B's 15:20 trend matches P's 15:20 trend.
+    cond2a = p1520 != 0 and d["B1520"] == p1520
+
+    # CONDITION 2b (B): B's 15:20 volume is greater than B's 15:25 volume.
+    v_b1520, v_b1525 = volume("B1520"), volume("B1525")
+    cond2b = candles["B1520"] is not None and v_b1520 > v_b1525
+
     cond1 = cond1a and cond1b
-
-    # CONDITION 2: 9:15 trend == 15:24 trend.
-    cond2 = d1524 != 0 and d["0915"] != 0 and d["0915"] == d1524
-
+    cond2 = cond2a and cond2b
     passed = cond1 and cond2
 
-    # FINAL DIRECTION = 15:24 trend
-    if d1524 == 1:
-        direction = "LONG"
-    elif d1524 == -1:
-        direction = "SHORT"
+    # DIRECTION
+    anchor = p1520 if DIRECTION_RULE == "FOLLOW_1520" else p1525
+    direction = "LONG" if anchor == 1 else "SHORT" if anchor == -1 else None
+
+    # A missing B 15:25 candle makes its volume read as zero, which can turn
+    # cond2b into a false pass. That is the only missing-data case that can
+    # manufacture a signal, so it is the one flagged for manual verification.
+    verify_notes = []
+    if candles["B1525"] is None:
+        verify_notes.append("B 15:25 has no data, so its volume was read as zero")
+
+    # ---- coordinates for the 3D overview in the report ----
+    # stage: how many conditions the stock cleared IN ORDER (1a, 1b, 2a, 2b).
+    #        Where it stops is where it "fell out of the funnel".
+    # score: how many of the four it passed in total.
+    # x:     day-before volume ratio on a log scale. Right of centre means
+    #        B's 15:20 volume beat its 15:25 volume (condition 2b).
+    # y:     previous-day reversal: how far the 15:25 candle moved AGAINST
+    #        the 15:20 trend. Above centre means the trends differ (1a).
+    stage = 0
+    if cond1a:
+        stage = 1
+        if cond1b:
+            stage = 2
+            if cond2a:
+                stage = 3
+                if cond2b:
+                    stage = 4
+
+    score = sum([cond1a, cond1b, cond2a, cond2b])
+
+    ratio = (v_b1520 / v_b1525) if v_b1525 > 0 else (8.0 if v_b1520 > 0 else 0.125)
+    vol_log2 = max(-3.0, min(3.0, math.log2(max(ratio, 0.125))))
+
+    c25 = candles["P1525"]
+    if c25 and c25["open"] and p1520 != 0:
+        reversal = -p1520 * ((c25["close"] / c25["open"] - 1) * 100)
     else:
-        direction = None
+        reversal = 0.0
+    reversal = max(-0.8, min(0.8, reversal))
 
     return {
         "status": "PASS" if passed else "FAIL",
-        "date": signal_date,
+        "date": previous_day,
         "previous_day": previous_day,
+        "day_before": day_before,
         "entry_day": today,
         "direction": direction if passed else None,
         "raw_direction": direction,
@@ -778,34 +796,21 @@ def evaluate_rows(rows):
         "cond1b": cond1b,
         "cond1b_matches": matches,
         "cond2": cond2,
+        "cond2a": cond2a,
+        "cond2b": cond2b,
         "missing": missing,
-        "partial_3m": partial_3m,
-        "partial_groups": partial_groups,
-        "candle_minutes_used": {
-            label: c.get("minutes_used", []) for label, c in candles.items()
+        "verify_notes": verify_notes,
+        "needs_verify": bool(verify_notes),
+        "scene": {
+            "stage": stage,
+            "score": score,
+            "x": round(vol_log2 / 3.0, 3),
+            "y": round(reversal / 0.8, 3),
         },
-        # Actual OHLC per 3-min candle, for drawing real candlestick charts
-        # in the report (not just up/down arrows).
-        "ohlc": {
-            label: {
-                "open": c["open"], "high": c["high"],
-                "low": c["low"], "close": c["close"],
-            }
-            for label, c in candles.items()
-        },
+        "ohlc": {k: v for k, v in candles.items()},
         "details": {
-            "d0915": d["0915"],
-            "d1515": d["1515"],
-            "d1518": d["1518"],
-            "d1521": d["1521"],
-            "d1524": d["1524"],
-            "d1527": d["1527"],
-            "0915_vol": candles["0915"]["volume"],
-            "1515_vol": candles["1515"]["volume"],
-            "1518_vol": candles["1518"]["volume"],
-            "1521_vol": candles["1521"]["volume"],
-            "1524_vol": v1524,
-            "1527_vol": v1527,
+            **{f"d{k}": d[k] for k in SLOT_KEYS},
+            **{f"{k}_vol": volume(k) for k in SLOT_KEYS},
         },
     }
 
@@ -908,28 +913,33 @@ def scan_all_symbols(symbols):
 # =============================================================================
 
 def mark_stale(results):
-    """Symbols whose latest usable day differs from the day most symbols
-    used cannot be traded off today's close, so they are marked STALE."""
+    """The strategy reads TWO sessions (previous day and the day before).
+    A symbol whose pair of sessions differs from the pair most symbols used
+    (a suspended stock, a missing day) cannot be compared fairly, so it is
+    marked STALE instead of producing a signal. Returns the reference
+    previous day."""
 
-    dates = [r["date"] for r in results if r.get("date")]
+    evaluated = [r for r in results if r.get("status") in ("PASS", "FAIL")]
+    pairs = [(r.get("previous_day"), r.get("day_before")) for r in evaluated
+             if r.get("previous_day") and r.get("day_before")]
 
-    if not dates:
+    if not pairs:
         return None
 
-    reference = Counter(dates).most_common(1)[0][0]
+    reference = Counter(pairs).most_common(1)[0][0]
 
-    for r in results:
-        if r.get("date") and r["date"] != reference:
+    for r in evaluated:
+        if (r.get("previous_day"), r.get("day_before")) != reference:
             r["status"] = "STALE"
             r["direction"] = None
 
-    return reference
+    return reference[0]
 
 
 def session_warning(results):
-    """Warn when a large share of symbols are missing part of the required
-    18 one-minute bars on the signal day - a sign of a broad Yahoo
-    data-quality issue for that day, not just isolated thin trading."""
+    """Warn when a large share of symbols are missing some of the 7 required
+    5-minute candles - a sign of a broad Yahoo data-quality issue, not just
+    isolated thin trading."""
 
     evaluated = [r for r in results if r.get("status") in ("PASS", "FAIL")]
 
@@ -941,10 +951,10 @@ def session_warning(results):
 
     if share < SESSION_COMPLETE_SHARE:
         return (
-            f"Only {share:.0%} of scanned symbols have all 18 required "
-            f"one-minute bars on the signal day (day before previous day). "
-            f"Yahoo's data for that day may be unusually incomplete - "
-            f"treat matches with extra caution and verify on TradingView."
+            f"Only {share:.0%} of scanned symbols have all 7 required "
+            f"5-minute candles across the previous day and the day before. "
+            f"Yahoo's data may be unusually incomplete - treat matches with "
+            f"extra caution and verify on TradingView."
         )
 
     return None
@@ -986,20 +996,18 @@ def hm_text(hm):
     return f"{hm // 100:02d}:{hm % 100:02d}"
 
 
-# Order the six 3-minute candles are shown in, throughout the report.
-CANDLE_ORDER = ["0915", "1515", "1518", "1521", "1524", "1527"]
-CANDLE_LABEL = {
-    "0915": "09:15", "1515": "15:15", "1518": "15:18",
-    "1521": "15:21", "1524": "15:24", "1527": "15:27",
-}
-
-
 def arrow(d):
     return {1: "\u25b2", -1: "\u25bc"}.get(d, "\u2013")  # up, down, dash
 
 
 def trend_class(d):
     return {1: "up", -1: "down"}.get(d, "flat")
+
+
+def slot_time(key):
+    """'P1520' -> '15:20'."""
+
+    return hm_text(int(key[1:]))
 
 
 def fmt_day(value, weekday=True):
@@ -1018,63 +1026,46 @@ def fmt_day(value, weekday=True):
     return f"{ts.strftime('%a')} {base}" if weekday else base
 
 
-def candle_strip(details, partial_groups):
-    """Plain arrow strip, used only for rows that have no OHLC data."""
-
-    if not details:
-        return ""
-
-    partial_groups = set(partial_groups or [])
-    chips = []
-
-    for label in CANDLE_ORDER:
-        d = details.get(f"d{label}")
-        flag = " candle-partial" if label in partial_groups else ""
-        chips.append(
-            f'<span class="candle {trend_class(d)}{flag}">'
-            f'{CANDLE_LABEL[label]}<b>{arrow(d)}</b></span>'
-        )
-
-    return "".join(chips)
+# The four candles whose trend/volume the strategy actually compares.
+KEY_SLOTS = ("B1520", "B1525", "P1520", "P1525")
 
 
 def build_candlestick_svg(ohlc, size="large", volumes=None):
-    """Real OHLC candlesticks for the six 3-min candles. The large version
-    also draws the volume bars underneath (the strategy compares the 15:24
-    and 15:27 volumes), highlights the 15:24 anchor candle and labels every
-    candle with its time."""
+    """Real OHLC candlesticks for the seven 5-minute candles the strategy
+    reads: the day before previous (15:20, 15:25) then the previous day
+    (15:05 to 15:25). The large version also draws volume bars (the day-
+    before 15:20 vs 15:25 volumes are what condition 2 compares), highlights
+    both 15:20 anchor candles, and captions each day."""
 
     large = size == "large"
 
     if large:
-        width, height, pad_x = 320, 162, 14
+        width, height, pad_x = 340, 186, 12
         c_top, c_h = 18, 72
-        v_base, v_h = 130, 26
-        label_y = 153
+        v_base, v_h = 132, 26
+        label_y, bracket_y, day_y = 152, 160, 174
     else:
         width, height, pad_x = 150, 34, 4
         c_top, c_h = 4, 26
-        v_base = v_h = label_y = 0
+        v_base = v_h = label_y = bracket_y = day_y = 0
 
     ohlc = ohlc or {}
-    n = len(CANDLE_ORDER)
+    n = len(SLOT_KEYS)
     slot_w = (width - 2 * pad_x) / n
-    body_w = max(2.2, slot_w * (0.42 if large else 0.46))
+    body_w = max(2.2, slot_w * (0.40 if large else 0.46))
 
-    highs = [ohlc[l]["high"] for l in CANDLE_ORDER
-             if ohlc.get(l) and ohlc[l].get("high") is not None]
-    lows = [ohlc[l]["low"] for l in CANDLE_ORDER
-            if ohlc.get(l) and ohlc[l].get("low") is not None]
+    present = [ohlc[k] for k in SLOT_KEYS if ohlc.get(k)]
 
     attrs = (
         f'class="candles-svg candles-{size}" viewBox="0 0 {width} {height}" '
         f'width="{width}" height="{height}" preserveAspectRatio="xMidYMid meet" role="img"'
     )
 
-    if not highs or not lows:
+    if not present:
         return f'<svg {attrs} aria-label="No candle data"></svg>'
 
-    hi, lo = max(highs), min(lows)
+    hi = max(c["high"] for c in present)
+    lo = min(c["low"] for c in present)
     if hi == lo:
         hi, lo = hi + 0.5, lo - 0.5
     span = hi - lo
@@ -1082,17 +1073,29 @@ def build_candlestick_svg(ohlc, size="large", volumes=None):
     def y(price):
         return c_top + (hi - price) / span * c_h
 
+    def cx_of(i):
+        return pad_x + slot_w * i + slot_w / 2
+
     parts = []
 
+    # Divider between the two days.
+    div_x = pad_x + slot_w * 2
+    parts.append(
+        f'<line x1="{div_x:.1f}" y1="{3 if large else 2}" x2="{div_x:.1f}" '
+        f'y2="{(bracket_y - 4) if large else height - 2}" stroke="var(--line-strong)" '
+        f'stroke-width="1" stroke-dasharray="2,3"/>'
+    )
+
     if large:
-        # Highlight band behind the 15:24 anchor candle.
-        ax = pad_x + slot_w * CANDLE_ORDER.index("1524")
-        parts.append(
-            f'<rect x="{ax + 2:.1f}" y="5" width="{slot_w - 4:.1f}" '
-            f'height="{label_y - 12:.1f}" rx="8" fill="var(--accent)" '
-            f'fill-opacity="0.07" stroke="var(--accent)" stroke-opacity="0.3" '
-            f'stroke-dasharray="3,3"/>'
-        )
+        # Highlight bands behind the two 15:20 anchor candles.
+        for k in ("B1520", "P1520"):
+            ax = pad_x + slot_w * SLOT_KEYS.index(k)
+            parts.append(
+                f'<rect x="{ax + 2:.1f}" y="5" width="{slot_w - 4:.1f}" '
+                f'height="{label_y - 12:.1f}" rx="8" fill="var(--accent)" '
+                f'fill-opacity="0.07" stroke="var(--accent)" stroke-opacity="0.3" '
+                f'stroke-dasharray="3,3"/>'
+            )
         for frac in (0, 0.5, 1):
             gy = c_top + c_h * frac
             parts.append(
@@ -1107,11 +1110,11 @@ def build_candlestick_svg(ohlc, size="large", volumes=None):
         )
 
     # --- candles ---
-    for i, label in enumerate(CANDLE_ORDER):
-        cx = pad_x + slot_w * i + slot_w / 2
-        c = ohlc.get(label)
+    for i, key in enumerate(SLOT_KEYS):
+        cx = cx_of(i)
+        c = ohlc.get(key)
 
-        if not c or c.get("open") is None:
+        if not c:
             ym = c_top + c_h / 2
             parts.append(
                 f'<line x1="{cx - body_w/2:.1f}" y1="{ym:.1f}" x2="{cx + body_w/2:.1f}" '
@@ -1120,21 +1123,20 @@ def build_candlestick_svg(ohlc, size="large", volumes=None):
             )
             continue
 
-        o, h, l, cl = c["open"], c["high"], c["low"], c["close"]
-        color = "var(--long)" if cl >= o else "var(--short)"
-        body_top = min(y(o), y(cl))
-        body_h = max(1.6, abs(y(o) - y(cl)))
+        color = "var(--long)" if c["close"] >= c["open"] else "var(--short)"
+        body_top = min(y(c["open"]), y(c["close"]))
+        body_h = max(1.6, abs(y(c["open"]) - y(c["close"])))
 
         parts.append(
-            f'<line x1="{cx:.1f}" y1="{y(h):.1f}" x2="{cx:.1f}" y2="{y(l):.1f}" '
+            f'<line x1="{cx:.1f}" y1="{y(c["high"]):.1f}" x2="{cx:.1f}" y2="{y(c["low"]):.1f}" '
             f'stroke="{color}" stroke-width="1.3" stroke-linecap="round"/>'
             f'<rect x="{cx - body_w/2:.1f}" y="{body_top:.1f}" width="{body_w:.1f}" '
             f'height="{body_h:.1f}" fill="{color}" rx="1.5"/>'
         )
 
-    # --- volume bars + time labels (large only) ---
+    # --- volume bars, time labels, day captions (large only) ---
     if large:
-        vols = {l: (volumes or {}).get(l) for l in CANDLE_ORDER}
+        vols = {k: (volumes or {}).get(k) for k in SLOT_KEYS}
         vmax = max([v for v in vols.values() if v] or [0])
 
         parts.append(
@@ -1143,150 +1145,73 @@ def build_candlestick_svg(ohlc, size="large", volumes=None):
             f'<text x="{pad_x + 1}" y="{v_base - v_h - 4}" class="axis-label">volume</text>'
         )
 
-        for i, label in enumerate(CANDLE_ORDER):
-            cx = pad_x + slot_w * i + slot_w / 2
-            v = vols.get(label)
-            c = ohlc.get(label)
+        for i, key in enumerate(SLOT_KEYS):
+            cx = cx_of(i)
+            v = vols.get(key)
+            c = ohlc.get(key)
 
             if v and vmax > 0:
                 bar_h = max(1.5, v / vmax * v_h)
-                up = not c or c.get("close") is None or c["close"] >= c["open"]
-                color = "var(--long)" if up else "var(--short)"
-                key = label in ("1524", "1527")
+                color = "var(--long)" if (not c or c["close"] >= c["open"]) else "var(--short)"
+                emphasised = key in ("B1520", "B1525")
                 parts.append(
                     f'<rect x="{cx - body_w/2:.1f}" y="{v_base - bar_h:.1f}" '
                     f'width="{body_w:.1f}" height="{bar_h:.1f}" rx="1.5" fill="{color}" '
-                    f'fill-opacity="{0.95 if key else 0.38}"/>'
+                    f'fill-opacity="{0.95 if emphasised else 0.38}"/>'
                 )
 
-            strong = " axis-strong" if label in ("1524", "1527") else ""
+            strong = " axis-strong" if key in KEY_SLOTS else ""
             parts.append(
                 f'<text x="{cx:.1f}" y="{label_y}" text-anchor="middle" '
-                f'class="axis-label{strong}">{CANDLE_LABEL[label]}</text>'
+                f'class="axis-label{strong}">{slot_time(key)}</text>'
             )
 
-    return f'<svg {attrs} aria-label="6-candle price and volume chart">' + "".join(parts) + '</svg>'
-
-
-def build_radar_svg(matches):
-    """Circular 'signals detected' overview: every match is a blip on the
-    radar, colored and labeled by its own real direction and symbol. A
-    visual index of the matches; the cards carry the numeric detail."""
-
-    box = 440
-    cx = cy = box / 2
-    max_r = 122
-    label_r = max_r + 40
-    show_labels = len(matches) <= 12
-
-    parts = [
-        '<defs>'
-        '<radialGradient id="radarFill" cx="50%" cy="50%" r="50%">'
-        '<stop offset="0%" stop-color="#4FE0F0" stop-opacity="0.10"/>'
-        '<stop offset="100%" stop-color="#4FE0F0" stop-opacity="0.015"/>'
-        '</radialGradient>'
-        '<filter id="blipGlow" x="-150%" y="-150%" width="400%" height="400%">'
-        '<feGaussianBlur stdDeviation="3.4" result="b"/>'
-        '<feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>'
-        '</filter></defs>',
-        f'<circle cx="{cx}" cy="{cy}" r="{max_r}" fill="url(#radarFill)"/>',
-    ]
-
-    for frac in (0.34, 0.67, 1.0):
-        parts.append(
-            f'<circle cx="{cx}" cy="{cy}" r="{max_r * frac:.1f}" fill="none" '
-            f'stroke="rgba(79,224,240,0.20)" stroke-width="1"/>'
-        )
-
-    for deg in range(0, 360, 30):
-        rad = math.radians(deg)
-        major = deg % 90 == 0
-        parts.append(
-            f'<line x1="{cx}" y1="{cy}" x2="{cx + max_r*math.cos(rad):.1f}" '
-            f'y2="{cy + max_r*math.sin(rad):.1f}" stroke="rgba(79,224,240,'
-            f'{0.16 if major else 0.07})" stroke-width="1"/>'
-        )
-
-    parts.append(f'<circle cx="{cx}" cy="{cy}" r="3" fill="var(--accent)"/>')
-
-    n = len(matches)
-
-    if n == 0:
-        parts.append(
-            f'<text x="{cx}" y="{cy + 52}" text-anchor="middle" class="radar-empty">'
-            f'no contacts</text>'
-        )
-    else:
-        blip_r = max_r * 0.74
-        for i, r in enumerate(matches):
-            angle = -90 + (360 / n) * i
-            rad = math.radians(angle)
-            bx, by = cx + blip_r * math.cos(rad), cy + blip_r * math.sin(rad)
-            lx, ly = cx + label_r * math.cos(rad), cy + label_r * math.sin(rad)
-            long_ = r.get("direction") == "LONG"
-            color = "var(--long)" if long_ else "var(--short)"
-            sym = esc(r.get("symbol", ""))
-
-            anchor = "middle"
-            if lx < cx - 8:
-                anchor = "end"
-            elif lx > cx + 8:
-                anchor = "start"
-
+        # Day brackets + captions.
+        for first, last, caption in ((0, 1, "Day before"), (2, 6, "Previous day")):
+            x1 = pad_x + slot_w * first + 4
+            x2 = pad_x + slot_w * (last + 1) - 4
             parts.append(
-                f'<g><title>{sym} {esc(r.get("direction", ""))}</title>'
-                + (
-                    f'<line x1="{bx:.1f}" y1="{by:.1f}" x2="{lx:.1f}" y2="{ly:.1f}" '
-                    f'stroke="{color}" stroke-width="1" opacity="0.4"/>'
-                    if show_labels else ''
-                )
-                + f'<circle class="ping" cx="{bx:.1f}" cy="{by:.1f}" r="6" fill="none" '
-                f'stroke="{color}" stroke-width="1.4" style="animation-delay:{i * 0.45:.2f}s"/>'
-                f'<circle cx="{bx:.1f}" cy="{by:.1f}" r="5.5" fill="{color}" filter="url(#blipGlow)"/>'
-                f'<circle cx="{bx:.1f}" cy="{by:.1f}" r="2" fill="var(--bg)"/>'
-                + (
-                    f'<text x="{lx:.1f}" y="{ly:.1f}" text-anchor="{anchor}" '
-                    f'dominant-baseline="middle" class="radar-label" fill="{color}">{sym}</text>'
-                    if show_labels else ''
-                )
-                + '</g>'
+                f'<path d="M{x1:.1f} {bracket_y - 3} V{bracket_y} H{x2:.1f} V{bracket_y - 3}" '
+                f'fill="none" stroke="var(--line-strong)" stroke-width="1"/>'
+                f'<text x="{(x1 + x2) / 2:.1f}" y="{day_y}" text-anchor="middle" '
+                f'class="axis-label axis-day">{caption}</text>'
             )
 
-    return (
-        f'<svg class="radar-svg" viewBox="0 0 {box} {box}" width="{box}" height="{box}" '
-        f'role="img" aria-label="Radar overview of matched signals">'
-        + "".join(parts) + '</svg>'
-    )
+    return f'<svg {attrs} aria-label="Seven 5-minute candles across two sessions">' + "".join(parts) + '</svg>'
 
 
 CSS = """
 @import url('https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
 
 :root {
-  --bg: #06090E;
-  --panel: rgba(15, 22, 31, 0.72);
-  --line: rgba(255, 255, 255, 0.07);
-  --line-strong: rgba(255, 255, 255, 0.13);
-  --border: rgba(255, 255, 255, 0.13);
-  --border-soft: rgba(255, 255, 255, 0.07);
-  --text: #EAF0F6;
-  --text-dim: #93A1B1;
-  --text-faint: #5F6D7D;
-  --long: #34D08A;
-  --long-soft: rgba(52, 208, 138, 0.14);
-  --short: #FF5C66;
-  --short-soft: rgba(255, 92, 102, 0.14);
-  --caution: #F0B050;
-  --caution-soft: rgba(240, 176, 80, 0.14);
-  --accent: #4FE0F0;
-  --accent-soft: rgba(79, 224, 240, 0.13);
+  --bg: #07061B;
+  --panel: rgba(18, 16, 42, 0.62);
+  --line: rgba(190, 180, 255, 0.09);
+  --line-strong: rgba(190, 180, 255, 0.17);
+  --border: rgba(190, 180, 255, 0.17);
+  --border-soft: rgba(190, 180, 255, 0.09);
+  --text: #EEEDFB;
+  --text-dim: #A7A4CC;
+  --text-faint: #6E6C98;
+  --long: #3DDC97;
+  --long-soft: rgba(61, 220, 151, 0.14);
+  --short: #FF6B7F;
+  --short-soft: rgba(255, 107, 127, 0.14);
+  --caution: #FFB257;
+  --caution-soft: rgba(255, 178, 87, 0.14);
+  --accent: #A99BFF;
+  --accent-soft: rgba(169, 155, 255, 0.15);
   --sans: 'Sora', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
   --mono: 'IBM Plex Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
 }
 
 * { box-sizing: border-box; }
 
-html { background: var(--bg); }
+html {
+  background: var(--bg);
+  scroll-behavior: smooth;
+  scrollbar-color: rgba(169, 155, 255, 0.35) transparent;
+}
 
 body {
   margin: 0;
@@ -1298,34 +1223,31 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
+::selection { background: rgba(169, 155, 255, 0.35); }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+a { color: inherit; }
 
 /* ---------- atmosphere ---------- */
 
 .aurora, .grid-bg { position: fixed; inset: 0; pointer-events: none; z-index: 0; }
 .aurora { overflow: hidden; }
 
-.aurora i {
-  position: absolute;
-  border-radius: 50%;
-  filter: blur(70px);
-  opacity: 0.6;
-}
+.aurora i { position: absolute; border-radius: 50%; filter: blur(80px); opacity: 0.65; }
 
 .aurora .a {
-  width: 640px; height: 640px; left: -140px; top: -200px;
-  background: radial-gradient(circle, rgba(79, 224, 240, 0.30), transparent 65%);
-  animation: drift-a 26s ease-in-out infinite alternate;
+  width: 700px; height: 700px; left: -180px; top: -240px;
+  background: radial-gradient(circle, rgba(124, 92, 255, 0.34), transparent 65%);
+  animation: drift-a 28s ease-in-out infinite alternate;
 }
 .aurora .b {
-  width: 580px; height: 580px; right: -160px; top: 140px;
-  background: radial-gradient(circle, rgba(52, 208, 138, 0.20), transparent 65%);
-  animation: drift-b 32s ease-in-out infinite alternate;
+  width: 620px; height: 620px; right: -180px; top: 20%;
+  background: radial-gradient(circle, rgba(214, 92, 200, 0.16), transparent 65%);
+  animation: drift-b 34s ease-in-out infinite alternate;
 }
 .aurora .c {
-  width: 720px; height: 720px; left: 28%; bottom: -380px;
-  background: radial-gradient(circle, rgba(80, 110, 255, 0.17), transparent 65%);
-  animation: drift-a 38s ease-in-out infinite alternate-reverse;
+  width: 820px; height: 520px; left: 22%; bottom: -300px;
+  background: radial-gradient(circle, rgba(255, 150, 60, 0.20), transparent 65%);
+  animation: drift-a 40s ease-in-out infinite alternate-reverse;
 }
 
 @keyframes drift-a { to { transform: translate3d(90px, 60px, 0) scale(1.1); } }
@@ -1333,20 +1255,283 @@ body {
 
 .grid-bg {
   background-image:
-    linear-gradient(rgba(255, 255, 255, 0.022) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(255, 255, 255, 0.022) 1px, transparent 1px);
-  background-size: 48px 48px;
-  -webkit-mask-image: radial-gradient(ellipse at 50% 18%, #000 15%, transparent 72%);
-  mask-image: radial-gradient(ellipse at 50% 18%, #000 15%, transparent 72%);
+    linear-gradient(rgba(190, 180, 255, 0.025) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(190, 180, 255, 0.025) 1px, transparent 1px);
+  background-size: 52px 52px;
+  -webkit-mask-image: radial-gradient(ellipse at 50% 12%, #000 10%, transparent 70%);
+  mask-image: radial-gradient(ellipse at 50% 12%, #000 10%, transparent 70%);
 }
 
-.wrap {
-  position: relative;
-  z-index: 1;
-  max-width: 1360px;
-  margin: 0 auto;
-  padding: 22px 32px 72px;
+.cursor-glow {
+  position: fixed; left: 0; top: 0;
+  width: 640px; height: 640px;
+  margin: -320px 0 0 -320px;
+  border-radius: 50%;
+  pointer-events: none;
+  z-index: 2;
+  background: radial-gradient(circle, rgba(169, 155, 255, 0.10), transparent 62%);
+  mix-blend-mode: screen;
+  opacity: 0;
+  transition: opacity 0.6s;
 }
+.cursor-glow.on { opacity: 1; }
+
+/* ---------- top bar ---------- */
+
+.topbar {
+  position: fixed;
+  top: 0; left: 0; right: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 18px clamp(18px, 4vw, 48px);
+  border-bottom: 1px solid transparent;
+  transition: background 0.3s, border-color 0.3s;
+}
+
+.topbar.scrolled {
+  background: rgba(7, 6, 27, 0.68);
+  -webkit-backdrop-filter: blur(16px);
+  backdrop-filter: blur(16px);
+  border-bottom-color: var(--line);
+}
+
+.brand { display: flex; align-items: center; gap: 12px; font-weight: 600; letter-spacing: -0.01em; }
+.brand small { display: block; color: var(--text-faint); font-weight: 400; font-size: 0.72rem; }
+
+.topmeta {
+  display: flex; align-items: center; gap: 16px;
+  color: var(--text-dim);
+  font-family: var(--mono);
+  font-size: 0.76rem;
+}
+
+.live {
+  display: inline-flex; align-items: center; gap: 9px;
+  padding: 6px 13px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.live i {
+  width: 7px; height: 7px; border-radius: 50%;
+  background: var(--long);
+  box-shadow: 0 0 10px 2px rgba(61, 220, 151, 0.7);
+  animation: pulse 2.4s ease-in-out infinite;
+}
+
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+
+/* ---------- cinematic stage ---------- */
+
+.stage { position: relative; z-index: 1; height: 100vh; height: 100svh; }
+.js .stage { height: 360vh; }
+
+.stage-pin { position: sticky; top: 0; height: 100vh; height: 100svh; overflow: hidden; }
+
+.horizon {
+  position: absolute; inset: 0;
+  background:
+    radial-gradient(ellipse 85% 42% at 50% 112%, rgba(255, 170, 80, 0.34), transparent 70%),
+    radial-gradient(ellipse 70% 50% at 50% -6%, rgba(124, 92, 255, 0.24), transparent 72%);
+}
+
+#scene { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+
+.caps {
+  position: absolute;
+  left: clamp(22px, 6vw, 96px);
+  bottom: clamp(60px, 13vh, 150px);
+  width: min(700px, 88vw);
+  height: 360px;
+  pointer-events: none;
+}
+
+.cap { position: absolute; left: 0; right: 0; bottom: 0; opacity: 0; visibility: hidden; will-change: opacity, transform; }
+.cap:first-child { opacity: 1; visibility: visible; }
+
+.cap h1, .cap h2 {
+  margin: 0;
+  font-size: clamp(2.5rem, 6.3vw, 5.6rem);
+  line-height: 1;
+  font-weight: 700;
+  letter-spacing: -0.045em;
+  text-shadow: 0 6px 40px rgba(7, 6, 27, 0.9);
+}
+
+.cap p {
+  margin: 20px 0 0;
+  max-width: 50ch;
+  color: var(--text-dim);
+  font-size: clamp(0.95rem, 1.25vw, 1.1rem);
+  line-height: 1.7;
+  text-shadow: 0 2px 20px rgba(7, 6, 27, 0.95);
+}
+
+.hl { color: #FFD3A0; }
+
+.w {
+  display: inline-block;
+  margin-right: 0.2em;
+  opacity: 0;
+  transform: translateY(0.55em);
+  filter: blur(10px);
+  animation: wordIn 1s cubic-bezier(0.2, 0.8, 0.2, 1) forwards;
+  animation-delay: calc(0.25s + var(--i) * 0.09s);
+}
+@keyframes wordIn { to { opacity: 1; transform: none; filter: none; } }
+
+.ticker { display: flex; align-items: baseline; gap: 18px; margin-top: 24px; }
+.tk-num {
+  font-family: var(--mono);
+  font-size: clamp(2.4rem, 5vw, 4.1rem);
+  font-weight: 600;
+  letter-spacing: -0.03em;
+  color: #fff;
+  text-shadow: 0 0 40px rgba(169, 155, 255, 0.6);
+  min-width: 3.4ch;
+}
+.tk-label { color: var(--text-dim); font-size: 0.95rem; max-width: 26ch; line-height: 1.35; }
+
+.cta {
+  display: inline-flex; align-items: center; gap: 10px;
+  margin-top: 26px;
+  padding: 13px 22px;
+  border-radius: 999px;
+  border: 1px solid rgba(169, 155, 255, 0.6);
+  background: rgba(169, 155, 255, 0.14);
+  color: #fff;
+  font-size: 0.88rem;
+  text-decoration: none;
+  pointer-events: auto;
+  transition: background 0.2s, box-shadow 0.2s, transform 0.2s;
+}
+.cta:hover { background: rgba(169, 155, 255, 0.26); box-shadow: 0 0 30px -4px var(--accent); transform: translateY(-1px); }
+
+.rail {
+  position: absolute;
+  right: clamp(14px, 2.6vw, 36px);
+  top: 50%;
+  transform: translateY(-50%);
+  display: grid; gap: 20px;
+  z-index: 3;
+}
+.rail button {
+  all: unset;
+  cursor: pointer;
+  display: flex; align-items: center; justify-content: flex-end; gap: 12px;
+  color: var(--text-faint);
+  font-size: 0.72rem;
+  transition: color 0.25s;
+}
+.rail button i {
+  width: 9px; height: 9px; border-radius: 50%;
+  border: 1.5px solid currentColor;
+  transition: all 0.3s;
+}
+.rail button:hover { color: var(--text); }
+.rail button.on { color: #fff; }
+.rail button.on i { background: var(--accent); border-color: var(--accent); box-shadow: 0 0 0 5px var(--accent-soft), 0 0 16px var(--accent); }
+.rail button:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; border-radius: 6px; }
+
+.scroll-hint {
+  position: absolute; left: 50%; bottom: 20px;
+  transform: translateX(-50%);
+  display: flex; flex-direction: column; align-items: center; gap: 8px;
+  color: var(--text-faint);
+  font-size: 0.72rem;
+  letter-spacing: 0.04em;
+  pointer-events: none;
+}
+.scroll-hint i {
+  width: 1px; height: 36px;
+  background: linear-gradient(var(--accent), transparent);
+  transform-origin: top;
+  animation: drip 2s ease-in-out infinite;
+}
+@keyframes drip { 0% { transform: scaleY(0); } 55% { transform: scaleY(1); opacity: 1; } 100% { transform: scaleY(1); opacity: 0; } }
+
+.tip {
+  position: absolute; left: 0; top: 0;
+  z-index: 4;
+  pointer-events: none;
+  opacity: 0;
+  padding: 10px 14px;
+  border-radius: 12px;
+  background: rgba(12, 10, 34, 0.94);
+  border: 1px solid var(--line-strong);
+  box-shadow: 0 18px 40px -16px rgba(0, 0, 0, 0.85);
+  font-size: 0.76rem;
+  line-height: 1.55;
+  color: var(--text-dim);
+  white-space: nowrap;
+  transition: opacity 0.12s;
+}
+.tip b { display: block; font-family: var(--mono); font-size: 0.9rem; color: #fff; }
+.tip .tg { color: var(--long); }
+.tip .ts { color: var(--short); }
+.tip .tn { color: var(--caution); }
+
+[id] { scroll-margin-top: 90px; }
+
+.wrap { position: relative; z-index: 1; max-width: 1360px; margin: 0 auto; padding: 36px 32px 80px; }
+
+.warn {
+  background: var(--caution-soft);
+  border: 1px solid rgba(255, 178, 87, 0.4);
+  color: #FFD9A8;
+  border-radius: 14px;
+  padding: 13px 18px;
+  margin-bottom: 22px;
+  font-size: 0.84rem;
+  line-height: 1.6;
+}
+
+/* scroll reveal */
+.js .reveal {
+  opacity: 0;
+  transform: translateY(30px);
+  transition: opacity 0.9s cubic-bezier(0.2, 0.8, 0.2, 1), transform 0.9s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.js .reveal.in { opacity: 1; transform: none; }
+
+/* ---------- briefing band ---------- */
+
+.briefing {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr);
+  gap: 34px 48px;
+  padding: 38px 40px 34px;
+}
+
+.briefing h2 { margin: 0 0 12px; font-size: clamp(1.5rem, 2.6vw, 2.2rem); line-height: 1.1; letter-spacing: -0.03em; }
+.hero-sub { margin: 0; color: var(--text-dim); font-size: 0.95rem; line-height: 1.75; max-width: 62ch; }
+.hero-sub b { color: var(--text); font-weight: 500; }
+
+.briefing .timeline { grid-column: 1 / -1; }
+
+.timeline { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(4, 1fr); }
+.tl-step { position: relative; padding-top: 26px; }
+.tl-step::before { content: ''; position: absolute; top: 5px; left: 16px; right: 0; height: 2px; background: var(--line-strong); }
+.tl-step:last-child::before { display: none; }
+.tl-step.done::before { background: var(--text-faint); }
+.tl-step.active::before { background: linear-gradient(90deg, var(--accent), var(--line-strong)); }
+.tl-dot { position: absolute; top: 0; left: 0; width: 12px; height: 12px; border-radius: 50%; border: 2px solid var(--text-faint); background: var(--bg); }
+.tl-step.done .tl-dot { background: var(--text-faint); }
+.tl-step.active .tl-dot { border-color: var(--accent); background: var(--accent); box-shadow: 0 0 0 5px var(--accent-soft), 0 0 18px 2px rgba(169, 155, 255, 0.7); }
+.tl-label { color: var(--text-faint); font-size: 0.72rem; }
+.tl-date { font-weight: 600; font-size: 0.92rem; margin-top: 2px; }
+.tl-sub { font-family: var(--mono); color: var(--text-dim); font-size: 0.74rem; margin-top: 2px; }
+
+.kpis { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; align-self: start; }
+.kpi { padding: 16px 18px; border-radius: 16px; border: 1px solid var(--line); background: rgba(255, 255, 255, 0.025); }
+.kpi .n { font-family: var(--mono); font-size: 1.7rem; font-weight: 600; letter-spacing: -0.02em; }
+.kpi .l { color: var(--text-faint); font-size: 0.74rem; margin-top: 2px; }
+.kpi.long .n { color: var(--long); }
+.kpi.short .n { color: var(--short); }
 
 /* ---------- shared surfaces ---------- */
 
@@ -1374,173 +1559,6 @@ body {
 .sec-note { color: var(--text-faint); font-size: 0.78rem; }
 
 section { margin-bottom: 22px; }
-
-/* ---------- top bar ---------- */
-
-.topbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 6px 0 26px;
-}
-
-.brand { display: flex; align-items: center; gap: 12px; font-weight: 600; letter-spacing: -0.01em; }
-.brand small { display: block; color: var(--text-faint); font-weight: 400; font-size: 0.72rem; }
-
-.topmeta {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  color: var(--text-dim);
-  font-family: var(--mono);
-  font-size: 0.76rem;
-}
-
-.live {
-  display: inline-flex;
-  align-items: center;
-  gap: 9px;
-  padding: 6px 13px;
-  border-radius: 999px;
-  border: 1px solid var(--line);
-  background: rgba(255, 255, 255, 0.03);
-}
-
-.live i {
-  width: 7px; height: 7px; border-radius: 50%;
-  background: var(--long);
-  box-shadow: 0 0 10px 2px rgba(52, 208, 138, 0.7);
-  animation: pulse 2.4s ease-in-out infinite;
-}
-
-@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
-
-.warn {
-  background: var(--caution-soft);
-  border: 1px solid rgba(240, 176, 80, 0.38);
-  color: #F5D79F;
-  border-radius: 14px;
-  padding: 13px 18px;
-  margin-bottom: 22px;
-  font-size: 0.84rem;
-  line-height: 1.6;
-}
-
-/* ---------- hero ---------- */
-
-.hero {
-  display: grid;
-  grid-template-columns: minmax(0, 1.12fr) minmax(320px, 0.88fr);
-  gap: 22px;
-  align-items: stretch;
-}
-
-.hero-main { padding: 36px 36px 30px; display: flex; flex-direction: column; gap: 26px; }
-
-h1 {
-  margin: 0;
-  font-size: clamp(2.1rem, 4.2vw, 3.5rem);
-  line-height: 1.05;
-  font-weight: 700;
-  letter-spacing: -0.035em;
-}
-
-.hero-num {
-  background: linear-gradient(135deg, #FFFFFF 10%, var(--accent) 130%);
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
-}
-
-.hero-sub { margin: 14px 0 0; color: var(--text-dim); font-size: 0.95rem; line-height: 1.7; max-width: 60ch; }
-.hero-sub b { color: var(--text); font-weight: 500; }
-
-/* day-mapping timeline */
-
-.timeline { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(4, 1fr); }
-.tl-step { position: relative; padding-top: 26px; }
-
-.tl-step::before {
-  content: '';
-  position: absolute;
-  top: 5px; left: 16px; right: 0;
-  height: 2px;
-  background: var(--line-strong);
-}
-.tl-step:last-child::before { display: none; }
-.tl-step.done::before { background: var(--text-faint); }
-.tl-step.active::before { background: linear-gradient(90deg, var(--accent), var(--line-strong)); }
-
-.tl-dot {
-  position: absolute;
-  top: 0; left: 0;
-  width: 12px; height: 12px;
-  border-radius: 50%;
-  border: 2px solid var(--text-faint);
-  background: var(--bg);
-}
-.tl-step.done .tl-dot { background: var(--text-faint); }
-.tl-step.active .tl-dot {
-  border-color: var(--accent);
-  background: var(--accent);
-  box-shadow: 0 0 0 5px var(--accent-soft), 0 0 18px 2px rgba(79, 224, 240, 0.7);
-}
-
-.tl-label { color: var(--text-faint); font-size: 0.72rem; }
-.tl-date { font-weight: 600; font-size: 0.92rem; margin-top: 2px; }
-.tl-sub { font-family: var(--mono); color: var(--text-dim); font-size: 0.74rem; margin-top: 2px; }
-
-/* KPI strip */
-
-.kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-top: auto; }
-
-.kpi {
-  padding: 15px 16px;
-  border-radius: 14px;
-  border: 1px solid var(--line);
-  background: rgba(255, 255, 255, 0.025);
-}
-
-.kpi .n { font-family: var(--mono); font-size: 1.55rem; font-weight: 600; letter-spacing: -0.02em; }
-.kpi .l { color: var(--text-faint); font-size: 0.74rem; margin-top: 2px; }
-.kpi.long .n { color: var(--long); }
-.kpi.short .n { color: var(--short); }
-
-/* radar */
-
-.hero-radar { padding: 22px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; }
-
-.radar-wrap { position: relative; width: 100%; max-width: 440px; aspect-ratio: 1; }
-
-.radar-svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; z-index: 1; }
-
-.radar-sweep {
-  position: absolute;
-  inset: 22.27%;
-  border-radius: 50%;
-  background: conic-gradient(from 0deg,
-    transparent 0deg, transparent 285deg,
-    rgba(79, 224, 240, 0.30) 345deg, rgba(79, 224, 240, 0.85) 360deg);
-  animation: spin 6s linear infinite;
-  mix-blend-mode: screen;
-  z-index: 0;
-}
-
-@keyframes spin { to { transform: rotate(360deg); } }
-
-.ping {
-  transform-box: fill-box;
-  transform-origin: center;
-  animation: ping 2.8s ease-out infinite;
-}
-
-@keyframes ping { from { transform: scale(1); opacity: 0.7; } to { transform: scale(3.4); opacity: 0; } }
-
-.radar-label { font-family: var(--mono); font-size: 11px; font-weight: 600; }
-.radar-empty { font-family: var(--mono); font-size: 13px; fill: var(--text-faint); letter-spacing: 0.04em; }
-
-.radar-cap { color: var(--text-faint); font-size: 0.74rem; text-align: center; }
 
 /* ---------- scan breakdown ---------- */
 
@@ -1653,6 +1671,7 @@ h1 {
 
 .axis-label { font-family: var(--mono); font-size: 9.5px; fill: var(--text-faint); }
 .axis-strong { fill: var(--text-dim); font-weight: 600; }
+.axis-day { fill: var(--text-faint); font-size: 9px; letter-spacing: 0.02em; }
 
 .checks { list-style: none; margin: 14px 0 0; padding: 0; display: grid; gap: 9px; }
 
@@ -1758,8 +1777,8 @@ h1 {
   transition: border-color 0.15s, background 0.15s, color 0.15s;
 }
 .chip b { font-family: var(--mono); font-weight: 500; color: var(--text); }
-.chip:hover { border-color: rgba(79, 224, 240, 0.6); color: var(--text); }
-.chip.active { background: var(--accent-soft); border-color: rgba(79, 224, 240, 0.6); color: var(--text); }
+.chip:hover { border-color: rgba(169, 155, 255, 0.6); color: var(--text); }
+.chip.active { background: var(--accent-soft); border-color: rgba(169, 155, 255, 0.6); color: var(--text); }
 
 .table-scroll { overflow: auto; max-height: 740px; }
 
@@ -1787,7 +1806,7 @@ td {
 }
 
 tbody tr { transition: background 0.12s; }
-tbody tr:hover { background: rgba(79, 224, 240, 0.04); }
+tbody tr:hover { background: rgba(169, 155, 255, 0.04); }
 tbody tr[hidden] { display: none; }
 tbody tr[data-status="pass"] td:first-child { box-shadow: inset 3px 0 0 var(--long); }
 
@@ -1873,14 +1892,14 @@ tbody tr[data-status="pass"] td:first-child { box-shadow: inset 3px 0 0 var(--lo
   cursor: pointer;
   padding: 8px 16px;
   border-radius: 10px;
-  border: 1px solid rgba(79, 224, 240, 0.5);
+  border: 1px solid rgba(169, 155, 255, 0.5);
   background: var(--accent-soft);
   color: var(--text);
   font: inherit;
   font-size: 0.78rem;
   transition: background 0.15s, box-shadow 0.15s;
 }
-.btn:hover { background: rgba(79, 224, 240, 0.22); box-shadow: 0 0 18px -4px var(--accent); }
+.btn:hover { background: rgba(169, 155, 255, 0.22); box-shadow: 0 0 18px -4px var(--accent); }
 
 /* ---------- footer ---------- */
 
@@ -1890,61 +1909,114 @@ tbody tr[data-status="pass"] td:first-child { box-shadow: inset 3px 0 0 var(--lo
 .foot-card ol { margin: 8px 0; padding-left: 20px; }
 .foot-card li { margin-bottom: 4px; }
 
+
+
 /* ---------- responsive ---------- */
 
 @media (max-width: 980px) {
-  .hero { grid-template-columns: 1fr; }
-  .hero-main { padding: 28px 24px 24px; }
+  .briefing { grid-template-columns: 1fr; padding: 28px 24px; }
+  .rail button span { display: none; }
 }
 
 @media (max-width: 640px) {
-  .wrap { padding: 16px 16px 56px; }
-  .topbar { flex-direction: column; align-items: flex-start; }
-  .kpis { grid-template-columns: repeat(2, 1fr); }
+  .wrap { padding: 28px 16px 56px; }
+  .topbar { padding: 12px 16px; }
+  .topmeta > span:last-child { display: none; }
+  .brand small { display: none; }
+  .caps { bottom: 90px; height: 330px; }
   .timeline { grid-template-columns: 1fr 1fr; row-gap: 22px; }
   .tl-step::before { display: none; }
   .cards { grid-template-columns: 1fr; }
   .table-head { padding: 16px; }
   .search input { width: 100%; }
   .search { width: 100%; }
+  .tk-label { font-size: 0.82rem; }
 }
 
+@media (pointer: coarse) { .cursor-glow { display: none; } }
+
 @media (prefers-reduced-motion: reduce) {
-  .aurora i, .radar-sweep, .ping, .live i, .seg, .match-card { animation: none !important; }
-  .radar-sweep { display: none; }
+  html { scroll-behavior: auto; }
+  .aurora i, .live i, .seg, .match-card, .scroll-hint i, .w { animation: none !important; }
+  .w { opacity: 1; transform: none; filter: none; }
+  .js .reveal { opacity: 1; transform: none; transition: none; }
 }
 """
 
 
 SCRIPT = """<script>
 (function () {
-  var reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  'use strict';
 
-  /* count-up numbers */
+  var reduce = !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+  var coarse = !!(window.matchMedia && window.matchMedia('(pointer: coarse)').matches);
+
+  function clamp(v, a, b) { return v < a ? a : v > b ? b : v; }
+  function lerp(a, b, t) { return a + (b - a) * t; }
+  function smooth(a, b, v) { var t = clamp((v - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); }
+
+  /* ---------- top bar ---------- */
+  var topbar = document.getElementById('topbar');
+  function onScroll() { if (topbar) topbar.classList.toggle('scrolled', window.scrollY > 40); }
+  window.addEventListener('scroll', onScroll, { passive: true });
+  onScroll();
+
+  /* ---------- reveal on scroll ---------- */
+  var reveals = document.querySelectorAll('.reveal');
+  if ('IntersectionObserver' in window) {
+    var io = new IntersectionObserver(function (entries) {
+      entries.forEach(function (e) {
+        if (e.isIntersecting) { e.target.classList.add('in'); io.unobserve(e.target); }
+      });
+    }, { threshold: 0.1 });
+    reveals.forEach(function (el) { io.observe(el); });
+  } else {
+    reveals.forEach(function (el) { el.classList.add('in'); });
+  }
+
+  /* ---------- cursor glow ---------- */
+  var glow = document.getElementById('cg');
+  if (glow && !coarse && !reduce) {
+    var gx = window.innerWidth / 2, gy = window.innerHeight / 2, tx = gx, ty = gy;
+    window.addEventListener('mousemove', function (e) { tx = e.clientX; ty = e.clientY; glow.classList.add('on'); }, { passive: true });
+    (function glowLoop() {
+      gx += (tx - gx) * 0.12; gy += (ty - gy) * 0.12;
+      glow.style.transform = 'translate3d(' + gx.toFixed(1) + 'px,' + gy.toFixed(1) + 'px,0)';
+      requestAnimationFrame(glowLoop);
+    })();
+  }
+
+  /* ---------- count-up numbers ---------- */
   if (!reduce) {
     document.querySelectorAll('[data-count]').forEach(function (el) {
       var target = parseFloat(el.getAttribute('data-count'));
       var dec = parseInt(el.getAttribute('data-dec') || '0', 10);
       var suffix = el.getAttribute('data-suffix') || '';
-      var start = null, dur = 900;
-      function step(ts) {
-        if (start === null) start = ts;
-        var p = Math.min(1, (ts - start) / dur);
-        var v = target * (1 - Math.pow(1 - p, 3));
-        el.textContent = (dec ? v.toFixed(dec) : Math.round(v).toLocaleString('en-US')) + suffix;
-        if (p < 1) requestAnimationFrame(step);
+      var started = false;
+      function run() {
+        if (started) return; started = true;
+        var start = null, dur = 1100;
+        (function step(ts) {
+          if (start === null) start = ts;
+          var p = Math.min(1, (ts - start) / dur);
+          var v = target * (1 - Math.pow(1 - p, 3));
+          el.textContent = (dec ? v.toFixed(dec) : Math.round(v).toLocaleString('en-US')) + suffix;
+          if (p < 1) requestAnimationFrame(step);
+        })(performance.now());
       }
-      requestAnimationFrame(step);
+      if ('IntersectionObserver' in window) {
+        var o = new IntersectionObserver(function (es) { if (es[0].isIntersecting) { run(); o.disconnect(); } }, { threshold: 0.4 });
+        o.observe(el);
+      } else { run(); }
     });
   }
 
-  /* 3D tilt + cursor glare on signal cards */
-  if (!reduce) {
+  /* ---------- 3D tilt + glare on signal cards ---------- */
+  if (!reduce && !coarse) {
     document.querySelectorAll('.match-card').forEach(function (card) {
       card.addEventListener('mousemove', function (e) {
         var r = card.getBoundingClientRect();
-        var px = (e.clientX - r.left) / r.width;
-        var py = (e.clientY - r.top) / r.height;
+        var px = (e.clientX - r.left) / r.width, py = (e.clientY - r.top) / r.height;
         card.style.setProperty('--rx', ((0.5 - py) * 7).toFixed(2) + 'deg');
         card.style.setProperty('--ry', ((px - 0.5) * 7).toFixed(2) + 'deg');
         card.style.setProperty('--mx', (px * 100).toFixed(1) + '%');
@@ -1957,16 +2029,13 @@ SCRIPT = """<script>
     });
   }
 
-  /* searchable, filterable, paged table */
+  /* ---------- searchable, filterable, paged table ---------- */
   var table = document.getElementById('scan-table');
   if (table) {
     var rows = Array.prototype.slice.call(table.tBodies[0].rows);
-    var PAGE = 50;
-    var state = { f: 'all', q: '', limit: PAGE };
-    var more = document.getElementById('more');
-    var label = document.getElementById('shown-label');
-    var empty = document.getElementById('empty-row');
-    var input = document.getElementById('q');
+    var PAGE = 50, state = { f: 'all', q: '', limit: PAGE };
+    var more = document.getElementById('more'), label = document.getElementById('shown-label');
+    var empty = document.getElementById('empty-row'), input = document.getElementById('q');
     var chips = Array.prototype.slice.call(document.querySelectorAll('.chip'));
 
     function apply() {
@@ -1974,40 +2043,397 @@ SCRIPT = """<script>
       rows.forEach(function (r) {
         var ok = (state.f === 'all' || r.getAttribute('data-status') === state.f) &&
                  (!state.q || r.getAttribute('data-symbol').indexOf(state.q) !== -1);
-        if (ok) {
-          matched++;
-          if (shown < state.limit) { r.hidden = false; shown++; } else { r.hidden = true; }
-        } else {
-          r.hidden = true;
-        }
+        if (ok) { matched++; if (shown < state.limit) { r.hidden = false; shown++; } else { r.hidden = true; } }
+        else { r.hidden = true; }
       });
       label.textContent = 'Showing ' + shown + ' of ' + matched;
       more.style.display = shown < matched ? '' : 'none';
       empty.style.display = matched === 0 ? 'block' : 'none';
     }
-
     chips.forEach(function (chip) {
       chip.addEventListener('click', function () {
-        state.f = chip.getAttribute('data-f');
-        state.limit = PAGE;
+        state.f = chip.getAttribute('data-f'); state.limit = PAGE;
         chips.forEach(function (c) { c.classList.toggle('active', c === chip); });
         apply();
       });
     });
-
-    input.addEventListener('input', function () {
-      state.q = input.value.trim().toLowerCase();
-      state.limit = PAGE;
-      apply();
-    });
-
-    more.addEventListener('click', function () {
-      state.limit += PAGE;
-      apply();
-    });
-
+    input.addEventListener('input', function () { state.q = input.value.trim().toLowerCase(); state.limit = PAGE; apply(); });
+    more.addEventListener('click', function () { state.limit += PAGE; apply(); });
     apply();
   }
+
+  /* =====================================================================
+     THE OBSERVATORY: a scroll-driven 3D scene drawn on a 2D canvas.
+     Every evaluated stock is a point. Three layouts are blended by scroll:
+       1  universe  x = day-before volume ratio, y = previous-day reversal,
+                    depth = how many conditions the stock passed
+       2  funnel    one ring per condition; the camera flies through
+       3  signals   the survivors, in front, everything else fades to dust
+     ===================================================================== */
+  (function initScene() {
+    var dataEl = document.getElementById('scene-data');
+    var canvas = document.getElementById('scene');
+    var stage = document.getElementById('stage');
+    if (!dataEl || !canvas || !stage || !canvas.getContext) return;
+
+    var pin = stage.querySelector('.stage-pin');
+    var tip = document.getElementById('tip');
+    var D = JSON.parse(dataEl.textContent);
+    var rows = D.rows, N = rows.length, counts = D.counts, nSig = 0;
+    var ctx = canvas.getContext('2d');
+    var caps = stage.querySelectorAll('.cap');
+    var tkNum = document.getElementById('tk-num'), tkLabel = document.getElementById('tk-label');
+    var railBtns = stage.querySelectorAll('.rail button');
+    var hint = stage.querySelector('.scroll-hint');
+
+    var STAGE_LABEL = [
+      'stocks evaluated',
+      'left after 15:20 and 15:25 differ',
+      'left after 2+ of 3 earlier candles agree',
+      'left after the day-before trend matches',
+      'left after the day-before volume check'
+    ];
+    var FAIL_LABEL = [
+      '15:20 and 15:25 did not differ',
+      'fewer than 2 earlier candles agreed',
+      'day-before trend did not match',
+      'day-before volume was not higher'
+    ];
+
+    function hash(str) {
+      var h = 2166136261;
+      for (var i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 16777619); }
+      return h >>> 0;
+    }
+    function rng(seed) {
+      var a = seed >>> 0;
+      return function () {
+        a = (a + 0x6D2B79F5) >>> 0;
+        var t = a;
+        t = Math.imul(t ^ (t >>> 15), t | 1);
+        t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+      };
+    }
+    function sh(v) { return (v < 0 ? -1 : 1) * Math.pow(Math.abs(v), 0.72); }
+
+    /* ---- build the three layouts once ---- */
+    var L1 = new Float32Array(N * 3), L2 = new Float32Array(N * 3), L3 = new Float32Array(N * 3);
+    var S0 = new Float32Array(N * 3), DLY = new Float32Array(N), SZ = new Float32Array(N);
+    var SC = new Uint8Array(N), STG = new Uint8Array(N), DIR = new Int8Array(N);
+    var R_ST = [2.0, 1.62, 1.24, 0.86, 0.48], Z_ST = [2.2, 0.85, -0.5, -1.85, -3.2];
+    var sigIdx = [];
+
+    for (var i = 0; i < N; i++) {
+      var r = rows[i], rnd = rng(hash(r[0]));
+      var stg = r[1], sc = r[2], o = i * 3;
+      STG[i] = stg; SC[i] = sc; DIR[i] = r[5];
+      if (stg === 4) sigIdx.push(i);
+
+      L1[o] = sh(r[3]) * 1.55 + (rnd() - 0.5) * 0.07;
+      L1[o + 1] = sh(r[4]) * 0.95 + (rnd() - 0.5) * 0.07;
+      L1[o + 2] = (sc - 2) * 0.55 + (rnd() - 0.5) * 0.36;
+
+      var ang = rnd() * 6.2832;
+      var rr = R_ST[stg] * (rnd() < 0.25 ? Math.sqrt(rnd()) : 0.82 + 0.18 * rnd());
+      L2[o] = Math.cos(ang) * rr;
+      L2[o + 1] = Math.sin(ang) * rr;
+      L2[o + 2] = Z_ST[stg] + (rnd() - 0.5) * 0.4;
+
+      S0[o] = (rnd() - 0.5) * 13;
+      S0[o + 1] = (rnd() - 0.5) * 8;
+      S0[o + 2] = (rnd() - 0.5) * 13;
+      DLY[i] = rnd();
+      SZ[i] = 0.8 + rnd() * 0.9;
+    }
+
+    nSig = sigIdx.length;
+    sigIdx.forEach(function (idx, k) {
+      var o = idx * 3, a = (k / nSig) * 6.2832 - 1.5708;
+      L2[o] = Math.cos(a) * 0.48; L2[o + 1] = Math.sin(a) * 0.48; L2[o + 2] = -3.2;
+      var perRow = Math.min(nSig, 8), row = Math.floor(k / perRow), col = k % perRow;
+      var inRow = Math.min(perRow, nSig - row * perRow);
+      var spacing = Math.min(0.95, 3.4 / Math.max(inRow, 1));
+      L3[o] = (col - (inRow - 1) / 2) * spacing;
+      L3[o + 1] = 0.12 - row * 0.72 + Math.sin(col * 0.9) * 0.06;
+      L3[o + 2] = -3.4;
+    });
+    for (var j = 0; j < N; j++) {
+      if (STG[j] === 4) continue;
+      var q = j * 3;
+      L3[q] = L2[q] * 2.3; L3[q + 1] = L2[q + 1] * 2.3; L3[q + 2] = L2[q + 2];
+    }
+
+    /* ---- glow sprites ---- */
+    function sprite(rgb) {
+      var c = document.createElement('canvas'); c.width = c.height = 64;
+      var g = c.getContext('2d'), gr = g.createRadialGradient(32, 32, 0, 32, 32, 32);
+      gr.addColorStop(0, 'rgba(255,255,255,1)');
+      gr.addColorStop(0.16, 'rgba(' + rgb + ',0.95)');
+      gr.addColorStop(0.5, 'rgba(' + rgb + ',0.26)');
+      gr.addColorStop(1, 'rgba(' + rgb + ',0)');
+      g.fillStyle = gr; g.fillRect(0, 0, 64, 64);
+      return c;
+    }
+    var SPR = [sprite('118,124,214'), sprite('140,146,236'), sprite('178,162,246'),
+               sprite('255,178,87'), sprite('61,220,151'), sprite('255,107,127')];
+    var KIND_ALPHA = [0.5, 0.62, 0.74, 0.95, 1, 1];
+    var RGB = ['118,124,214', '140,146,236', '178,162,246', '255,178,87', '61,220,151', '255,107,127'];
+    function kindOf(i) { return SC[i] === 4 ? (DIR[i] === -1 ? 5 : 4) : SC[i]; }
+
+    var stars = [], sr = rng(99);
+    for (var s = 0; s < 150; s++) stars.push([sr(), sr(), 0.4 + sr() * 1.1, sr() * 6.28, 0.35 + sr() * 0.65]);
+
+    /* ---- sizing ---- */
+    var W = 0, H = 0, DPR = 1, F = 1;
+    function resize() {
+      var rc = pin.getBoundingClientRect();
+      DPR = Math.min(window.devicePixelRatio || 1, 2);
+      W = rc.width; H = rc.height;
+      canvas.width = Math.round(W * DPR); canvas.height = Math.round(H * DPR);
+      ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+      F = Math.min(W, H * 1.2) * 0.84;
+    }
+    resize();
+    var rt; window.addEventListener('resize', function () { clearTimeout(rt); rt = setTimeout(resize, 120); });
+
+    /* ---- input ---- */
+    var mouse = { x: 0.5, y: 0.5, px: -999, py: -999, inside: false }, look = { x: 0, y: 0 };
+    if (!coarse) {
+      pin.addEventListener('mousemove', function (e) {
+        var rc = pin.getBoundingClientRect();
+        mouse.px = e.clientX - rc.left; mouse.py = e.clientY - rc.top;
+        mouse.x = mouse.px / rc.width; mouse.y = mouse.py / rc.height; mouse.inside = true;
+      });
+      pin.addEventListener('mouseleave', function () { mouse.inside = false; });
+    }
+
+    function stageTop() { return window.scrollY + stage.getBoundingClientRect().top; }
+    function scrollToP(pp) {
+      var total = stage.offsetHeight - H;
+      window.scrollTo({ top: stageTop() + total * pp, behavior: reduce ? 'auto' : 'smooth' });
+    }
+    railBtns.forEach(function (b) { b.addEventListener('click', function () { scrollToP(parseFloat(b.getAttribute('data-p'))); }); });
+
+    /* ---- projection ---- */
+    var PX = 0, PY = 0, PZ = 1;
+    var ca = 1, sa = 0, camY = 0, camZ = 4.2, cpi = 1, spi = 0, cly = 1, sly = 0;
+    function proj(x, y, z) {
+      var px = x * ca + z * sa, pz = -x * sa + z * ca;
+      var cx = px, cy = y - camY, cz = camZ - pz;
+      var y2 = cy * cpi + cz * spi, z2 = -cy * spi + cz * cpi;
+      var x3 = cx * cly + z2 * sly, z3 = -cx * sly + z2 * cly;
+      PZ = z3;
+      PX = W / 2 + F * x3 / z3;
+      PY = H / 2 - F * y2 / z3;
+    }
+    function line3(x1, y1, z1, x2, y2, z2) {
+      proj(x1, y1, z1); var ax = PX, ay = PY, az = PZ;
+      proj(x2, y2, z2);
+      if (az < 0.4 || PZ < 0.4) return;
+      ctx.moveTo(ax, ay); ctx.lineTo(PX, PY);
+    }
+
+    var SX = new Float32Array(N), SY = new Float32Array(N), SA = new Float32Array(N), SR = new Float32Array(N);
+    var p = 0, pT = 0, last = performance.now(), t0 = last, tkVal = counts[0], hoverIdx = -1, lastStageShown = -1;
+
+    function setCap(el, enter, exit) {
+      var a = enter * exit;
+      el.style.opacity = a.toFixed(3);
+      el.style.transform = 'translateY(' + (((1 - enter) * 28) - ((1 - exit) * 28)).toFixed(1) + 'px)';
+      el.style.visibility = a < 0.02 ? 'hidden' : 'visible';
+    }
+
+    function frame(now) {
+      requestAnimationFrame(frame);
+      if (document.hidden) return;
+      var rect = stage.getBoundingClientRect();
+      if (rect.bottom < -60 || rect.top > window.innerHeight + 60) return;
+
+      var dt = Math.min(0.05, (now - last) / 1000); last = now;
+      var t = (now - t0) / 1000;
+      var total = rect.height - H;
+      pT = total > 0 ? clamp(-rect.top / total, 0, 1) : 0;
+      p = reduce ? pT : p + (pT - p) * (1 - Math.exp(-dt * 5.5));
+
+      var w1 = smooth(0.20, 0.36, p), w2 = smooth(0.70, 0.84, p);
+      camZ = lerp(4.2, -0.8, smooth(0.34, 0.70, p));
+      camY = 0.45 * (1 - w1);
+
+      if (!coarse && !reduce) { look.x += ((mouse.x - 0.5) - look.x) * 0.05; look.y += ((mouse.y - 0.5) - look.y) * 0.05; }
+      var yo = reduce ? 0.3 : (0.3 + Math.sin(t * 0.07) * 0.3 + look.x * 0.9) * (1 - w1);
+      ca = Math.cos(yo); sa = Math.sin(yo);
+      var pitch = 0.107 * (1 - w1) + look.y * 0.12, yaw = look.x * 0.16;
+      cpi = Math.cos(pitch); spi = Math.sin(pitch); cly = Math.cos(yaw); sly = Math.sin(yaw);
+
+      ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+      ctx.clearRect(0, 0, W, H);
+
+      /* far stars */
+      ctx.globalCompositeOperation = 'source-over';
+      for (var s = 0; s < stars.length; s++) {
+        var st = stars[s], tw = reduce ? 1 : 0.6 + 0.4 * Math.sin(t * st[4] * 1.6 + st[3]);
+        ctx.globalAlpha = 0.5 * tw * st[4];
+        ctx.fillStyle = '#DCD6FF';
+        var sx = st[0] * W - look.x * 26 * st[2], sy = st[1] * H - look.y * 16 * st[2];
+        ctx.fillRect(sx, sy, st[2], st[2]);
+      }
+
+      /* floor grid, target zone and axis hints: only in the universe view */
+      var uv = 1 - w1;
+      if (uv > 0.02) {
+        ctx.globalAlpha = 0.20 * uv; ctx.strokeStyle = 'rgb(169,155,255)'; ctx.lineWidth = 1;
+        ctx.beginPath();
+        for (var g = -6; g <= 6; g++) {
+          line3(g * 0.32, -1.2, -1.9, g * 0.32, -1.2, 1.9);
+          line3(-1.9, -1.2, g * 0.32, 1.9, -1.2, g * 0.32);
+        }
+        ctx.stroke();
+
+        proj(0, 0, 1.15); var q0x = PX, q0y = PY, q0z = PZ;
+        proj(1.6, 0, 1.15); var q1x = PX, q1y = PY;
+        proj(1.6, 1, 1.15); var q2x = PX, q2y = PY;
+        proj(0, 1, 1.15); var q3x = PX, q3y = PY;
+        if (q0z > 0.4) {
+          ctx.globalAlpha = 0.07 * uv; ctx.fillStyle = 'rgb(255,178,87)';
+          ctx.beginPath(); ctx.moveTo(q0x, q0y); ctx.lineTo(q1x, q1y); ctx.lineTo(q2x, q2y); ctx.lineTo(q3x, q3y); ctx.closePath(); ctx.fill();
+          ctx.globalAlpha = 0.5 * uv; ctx.strokeStyle = 'rgb(255,178,87)'; ctx.setLineDash([5, 5]); ctx.stroke(); ctx.setLineDash([]);
+          ctx.font = '500 11px "IBM Plex Mono", monospace'; ctx.fillStyle = 'rgb(255,200,140)';
+          ctx.globalAlpha = 0.75 * uv; ctx.fillText('target zone', q3x + 8, q3y + 16);
+        }
+        ctx.font = '500 11px "IBM Plex Mono", monospace'; ctx.fillStyle = 'rgb(190,182,255)'; ctx.globalAlpha = 0.5 * uv;
+        proj(0.1, -1.2, 1.95); ctx.fillText('day-before volume ratio \\u2192', PX, PY + 14);
+        proj(-1.75, 0.15, 1.15); ctx.fillText('previous-day reversal \\u2191', PX - 10, PY);
+      }
+
+      /* ---- points ---- */
+      ctx.globalCompositeOperation = 'lighter';
+      var intro = !reduce, ign = reduce ? 1 : smooth(2.2, 3.2, t);
+      var wallClock = t;
+
+      for (var i = 0; i < N; i++) {
+        var o = i * 3;
+        var ip = intro ? clamp((wallClock - 0.1 - DLY[i] * 1.2) / 1.4, 0, 1) : 1;
+        if (ip <= 0) { SA[i] = 0; continue; }
+        ip = 1 - Math.pow(1 - ip, 3);
+
+        var x = lerp(lerp(L1[o], L2[o], w1), L3[o], w2);
+        var y = lerp(lerp(L1[o + 1], L2[o + 1], w1), L3[o + 1], w2);
+        var z = lerp(lerp(L1[o + 2], L2[o + 2], w1), L3[o + 2], w2);
+        if (ip < 1) { x = lerp(S0[o], x, ip); y = lerp(S0[o + 1], y, ip); z = lerp(S0[o + 2], z, ip); }
+
+        proj(x, y, z);
+        if (PZ < 0.35) { SA[i] = 0; continue; }
+
+        var isSig = STG[i] === 4, kind = kindOf(i);
+        var sc = F / PZ;
+        var rad = (isSig ? 0.05 : 0.0125 * SZ[i] + (SC[i] === 3 ? 0.007 : 0)) * sc;
+        rad = clamp(rad, 0.7, isSig ? 46 : 15);
+        var df = clamp(1.3 - (PZ - 2.5) / 9, 0.12, 1);
+        var dust = isSig ? 1 : 1 - 0.9 * w2;
+        var a = KIND_ALPHA[kind] * df * ip * dust;
+
+        SX[i] = PX; SY[i] = PY; SA[i] = a; SR[i] = rad;
+        ctx.globalAlpha = clamp(a, 0, 1);
+        ctx.drawImage(SPR[kind], PX - rad * 2.2, PY - rad * 2.2, rad * 4.4, rad * 4.4);
+      }
+
+      /* stems from the best points down to the floor (universe view) */
+      if (uv > 0.02) {
+        ctx.globalCompositeOperation = 'lighter'; ctx.lineWidth = 1;
+        for (var k = 0; k < N; k++) {
+          if (SC[k] < 3 || SA[k] < 0.05) continue;
+          var ko = k * 3; var kx = L1[ko], ky = L1[ko + 1], kz = L1[ko + 2];
+          proj(kx, -1.2, kz); var fx = PX, fy = PY, fz = PZ;
+          if (fz < 0.4) continue;
+          ctx.globalAlpha = (SC[k] === 4 ? 0.28 : 0.12) * uv * SA[k];
+          ctx.strokeStyle = 'rgb(' + RGB[kindOf(k)] + ')';
+          ctx.beginPath(); ctx.moveTo(SX[k], SY[k]); ctx.lineTo(fx, fy); ctx.stroke();
+        }
+      }
+
+      /* pulse rings + labels for signals */
+      ctx.lineWidth = 1.2;
+      var labelA = clamp((1 - w1) + w2, 0, 1);
+      var showAll = nSig <= 12;
+      for (var m = 0; m < sigIdx.length; m++) {
+        var si = sigIdx[m];
+        if (SA[si] < 0.05) continue;
+        var kd = kindOf(si), col = 'rgb(' + RGB[kd] + ')';
+        var ph = reduce ? 0.4 : ((t * 0.55 + m * 0.21) % 1);
+        ctx.globalCompositeOperation = 'lighter';
+        ctx.globalAlpha = (1 - ph) * 0.55 * ign * SA[si];
+        ctx.strokeStyle = col;
+        ctx.beginPath(); ctx.arc(SX[si], SY[si], SR[si] * (1.2 + ph * 3.0), 0, 6.2832); ctx.stroke();
+
+        if ((showAll || hoverIdx === si) && labelA > 0.05) {
+          ctx.globalCompositeOperation = 'source-over';
+          ctx.globalAlpha = labelA * clamp(ign, 0, 1);
+          ctx.font = '600 12px "IBM Plex Mono", monospace';
+          ctx.fillStyle = col;
+          ctx.shadowColor = 'rgba(7,6,27,0.95)'; ctx.shadowBlur = 8;
+          ctx.fillText(rows[si][0], SX[si] + SR[si] * 1.5 + 6, SY[si] - SR[si] * 1.1 - 4);
+          ctx.shadowBlur = 0;
+        }
+      }
+      ctx.globalCompositeOperation = 'source-over';
+      ctx.globalAlpha = 1;
+
+      /* ---- hover ---- */
+      var best = -1, bd = 1e9;
+      if (mouse.inside && !coarse) {
+        for (var h = 0; h < N; h++) {
+          if (SA[h] < 0.2) continue;
+          var dx = SX[h] - mouse.px, dy = SY[h] - mouse.py;
+          var lim = Math.max(11, SR[h] * 2.0), dd = (dx * dx + dy * dy) * (STG[h] === 4 ? 0.4 : 1);
+          if (dd < lim * lim && dd < bd) { bd = dd; best = h; }
+        }
+      }
+      if (best !== hoverIdx) {
+        hoverIdx = best;
+        if (best >= 0) {
+          var rw = rows[best], line;
+          if (rw[1] === 4) {
+            line = '<span class="' + (rw[5] === -1 ? 'ts' : 'tg') + '">Signal, ' + (rw[5] === -1 ? 'short' : 'long') + '</span><br>Click to open its card';
+          } else {
+            line = 'Passed ' + rw[2] + ' of 4 conditions<br><span class="tn">Stopped at: ' + FAIL_LABEL[rw[1]] + '</span>';
+          }
+          tip.innerHTML = '<b></b>' + line;
+          tip.firstChild.textContent = rw[0];
+          tip.style.opacity = 1;
+        } else { tip.style.opacity = 0; }
+        canvas.style.cursor = (best >= 0 && rows[best][1] === 4) ? 'pointer' : 'default';
+      }
+      if (best >= 0) {
+        var tx = clamp(SX[best] + 18, 8, W - tip.offsetWidth - 8), ty = clamp(SY[best] + 18, 70, H - tip.offsetHeight - 8);
+        tip.style.transform = 'translate(' + tx.toFixed(0) + 'px,' + ty.toFixed(0) + 'px)';
+      }
+
+      /* ---- captions, ticker, rail ---- */
+      setCap(caps[0], 1, 1 - smooth(0.12, 0.22, p));
+      setCap(caps[1], smooth(0.27, 0.35, p), 1 - smooth(0.66, 0.74, p));
+      setCap(caps[2], smooth(0.76, 0.86, p), 1);
+
+      var u = clamp((p - 0.34) / 0.36, 0, 1);
+      var shown = Math.min(4, Math.floor(u * 5 - 1e-6));
+      if (shown < 0) shown = 0;
+      tkVal += (counts[shown] - tkVal) * (1 - Math.exp(-dt * 9));
+      tkNum.textContent = Math.round(tkVal).toLocaleString('en-US');
+      if (shown !== lastStageShown) { tkLabel.textContent = STAGE_LABEL[shown]; lastStageShown = shown; }
+
+      var act = p < 0.27 ? 0 : (p < 0.75 ? 1 : 2);
+      railBtns.forEach(function (b, bi) { b.classList.toggle('on', bi === act); });
+      if (hint) hint.style.opacity = (1 - smooth(0, 0.04, p)).toFixed(2);
+    }
+    requestAnimationFrame(frame);
+
+    canvas.addEventListener('click', function () {
+      if (hoverIdx >= 0 && rows[hoverIdx][1] === 4) {
+        var card = document.getElementById('sig-' + rows[hoverIdx][0]);
+        if (card) card.scrollIntoView({ behavior: reduce ? 'auto' : 'smooth', block: 'center' });
+      }
+    });
+  })();
 })();
 </script>"""
 
@@ -2035,7 +2461,7 @@ def build_table_row(r):
     if r.get("ohlc"):
         chart = build_candlestick_svg(r["ohlc"], size="small")
     else:
-        chart = candle_strip(details, r.get("partial_groups"))
+        chart = '<span class="dim">&ndash;</span>'
 
     def chk(value, detail):
         if value is None:
@@ -2046,12 +2472,14 @@ def build_table_row(r):
         return f'<span class="chk {cls}">{glyph}</span>{extra}'
 
     if details:
-        d1524 = details["d1524"]
-        detail_1a = f'{details["1524_vol"]:,.0f} vs {details["1527_vol"]:,.0f}'
-        detail_1b = f'{r.get("cond1b_matches", 0)} of 4 match'
-        detail_2 = f'{trend_name(details["d0915"])} / {trend_name(d1524)}'
+        p20, p25 = details["dP1520"], details["dP1525"]
+        b20 = details["dB1520"]
+        detail_1a = f'{trend_name(p20)} vs {trend_name(p25)}'
+        detail_1b = f'{r.get("cond1b_matches", 0)} of 3 match'
+        detail_2a = f'B {trend_name(b20)} / P {trend_name(p20)}'
+        detail_2b = f'{details["B1520_vol"]:,.0f} vs {details["B1525_vol"]:,.0f}'
     else:
-        detail_1a = detail_1b = detail_2 = ""
+        detail_1a = detail_1b = detail_2a = detail_2b = ""
 
     direction = r.get("direction")
     if direction:
@@ -2063,12 +2491,11 @@ def build_table_row(r):
         dir_html = '<span class="dim">&ndash;</span>'
 
     verify_html = ""
-    if r.get("partial_3m"):
-        groups = ", ".join(CANDLE_LABEL[g] for g in r.get("partial_groups", []))
-        verify_html = f'<span class="verify-tag">Verify: partial {esc(groups)}</span>'
+    if r.get("needs_verify"):
+        verify_html = '<span class="verify-tag">Verify: B 15:25 missing</span>'
 
     data_label = {
-        "OK": "OK", "FALLBACK": "Fallback (7d)", "NO_DATA": "No data", "ERROR": "Error",
+        "OK": "OK", "FALLBACK": "Fallback (1mo)", "NO_DATA": "No data", "ERROR": "Error",
     }.get(r.get("data_status"), r.get("data_status"))
 
     data_bits = [cell(data_label)]
@@ -2076,20 +2503,23 @@ def build_table_row(r):
     if r.get("missing"):
         data_bits.append(
             '<span class="sub">missing: '
-            + ", ".join(hm_text(h) for h in r["missing"]) + "</span>"
+            + ", ".join(esc(m) for m in r["missing"]) + "</span>"
         )
     if r.get("error"):
         data_bits.append(f'<span class="sub">{esc(r["error"][:120])}</span>')
 
+    prev = r.get("previous_day")
+
     return f"""
 <tr data-status="{key}" data-symbol="{esc(symbol.lower())}">
 <td class="symbol">{esc(symbol)}</td>
-<td class="mono dim">{esc(fmt_day(r.get("date"), weekday=False)) if r.get("date") else "&ndash;"}</td>
+<td class="mono dim">{esc(fmt_day(prev, weekday=False)) if prev else "&ndash;"}</td>
 <td>{dir_html}</td>
 <td>{chart}</td>
 <td>{chk(r.get("cond1a"), detail_1a)}</td>
 <td>{chk(r.get("cond1b"), detail_1b)}</td>
-<td>{chk(r.get("cond2"), detail_2)}</td>
+<td>{chk(r.get("cond2a"), detail_2a)}</td>
+<td>{chk(r.get("cond2b"), detail_2b)}</td>
 <td><span class="pill {key}">{STATUS_LABEL[key]}</span>{verify_html}</td>
 <td class="mono dim">{"".join(data_bits)}</td>
 </tr>
@@ -2105,8 +2535,8 @@ def build_match_card(r, entry_day):
     ohlc = r.get("ohlc") or {}
     d = r.get("details") or {}
 
-    first_open = (ohlc.get("0915") or {}).get("open")
-    last_close = (ohlc.get("1527") or {}).get("close")
+    first_open = (ohlc.get("P1505") or {}).get("open")
+    last_close = (ohlc.get("P1525") or {}).get("close")
 
     price_html = ""
     if first_open and last_close:
@@ -2115,19 +2545,24 @@ def build_match_card(r, entry_day):
             '<div class="mc-price">'
             f'<span class="mc-last">&#8377;{last_close:,.2f}</span>'
             f'<span class="mc-chg {"up" if chg >= 0 else "down"}">{chg:+.2f}%</span>'
-            '<span class="mc-note">09:15 open to 15:27 close</span></div>'
+            '<span class="mc-note">previous day, 15:05 to close</span></div>'
         )
 
-    volumes = {label: d.get(f"{label}_vol") for label in CANDLE_ORDER}
+    volumes = {k: d.get(f"{k}_vol") for k in SLOT_KEYS}
     chart = build_candlestick_svg(ohlc, size="large", volumes=volumes)
 
-    v24 = d.get("1524_vol", 0) or 0
-    v27 = d.get("1527_vol", 0) or 0
+    v20 = d.get("B1520_vol", 0) or 0
+    v25 = d.get("B1525_vol", 0) or 0
 
     checks = [
-        ("15:24 volume above 15:27", f"{v24:,.0f} vs {v27:,.0f}"),
-        ("2+ of 4 candles share the 15:24 trend", f'{r.get("cond1b_matches", 0)} of 4'),
-        ("09:15 trend matches 15:24", f'{trend_name(d.get("d0915"))} / {trend_name(d.get("d1524"))}'),
+        ("Previous day: 15:20 and 15:25 trends differ",
+         f'{trend_name(d.get("dP1520"))} vs {trend_name(d.get("dP1525"))}'),
+        ("Previous day: 2+ of 15:05, 15:10, 15:15 match 15:20",
+         f'{r.get("cond1b_matches", 0)} of 3'),
+        ("Day before: 15:20 trend matches previous day's",
+         f'{trend_name(d.get("dB1520"))} / {trend_name(d.get("dP1520"))}'),
+        ("Day before: 15:20 volume above 15:25",
+         f"{v20:,.0f} vs {v25:,.0f}"),
     ]
     checks_html = "".join(
         f'<li><span class="ck">&#10003;</span><span>{esc(t)}</span>'
@@ -2136,15 +2571,14 @@ def build_match_card(r, entry_day):
     )
 
     verify = ""
-    if r.get("partial_3m"):
-        groups = ", ".join(CANDLE_LABEL[g] for g in r.get("partial_groups", []))
+    if r.get("needs_verify"):
         verify = (
-            f'<div class="mc-verify">Verify on TradingView: {esc(groups)} was built '
-            f'from an incomplete set of 1-minute bars.</div>'
+            '<div class="mc-verify">Verify on TradingView: the day-before 15:25 candle '
+            'has no data here, so its volume was read as zero.</div>'
         )
 
     return f"""
-<article class="match-card {cls}">
+<article class="match-card {cls}" id="sig-{esc(r["symbol"])}">
   <span class="glare"></span>
   <div class="mc-head">
     <span class="mc-sym">{esc(r["symbol"])}</span>
@@ -2155,7 +2589,7 @@ def build_match_card(r, entry_day):
   <ul class="checks">{checks_html}</ul>
   <div class="mc-plan">
     <div><span class="k">Entry</span><span class="v">{esc(fmt_day(entry_day))}, 09:15 open</span></div>
-    <div><span class="k">Exit</span><span class="v">15:27</span></div>
+    <div><span class="k">Exit</span><span class="v">{esc(EXIT_TIME_LABEL)}</span></div>
   </div>
   {verify}
 </article>"""
@@ -2173,79 +2607,117 @@ def generate_html_report(results, elapsed, universe_source):
     matches = [r for r in results if r.get("status") == "PASS"]
     longs = sum(1 for r in matches if r.get("direction") == "LONG")
     shorts = len(matches) - longs
+    n = len(matches)
 
-    signal_date = Counter(r["date"] for r in results if r.get("date")).most_common(1)
-    previous_day = Counter(r["previous_day"] for r in results if r.get("previous_day")).most_common(1)
-    entry_dates = Counter(r["entry_day"] for r in results if r.get("entry_day")).most_common(1)
+    def most_common(field):
+        c = Counter(r[field] for r in results if r.get(field)).most_common(1)
+        return c[0][0] if c else None
 
-    signal_date = signal_date[0][0] if signal_date else None
-    previous_day = previous_day[0][0] if previous_day else None
-    entry_day = (
-        entry_dates[0][0] if entry_dates
-        else pd.Timestamp.now(tz="Asia/Kolkata").strftime("%Y-%m-%d")
-    )
+    previous_day = most_common("previous_day")
+    day_before = most_common("day_before")
+    entry_day = most_common("entry_day") or pd.Timestamp.now(tz="Asia/Kolkata").strftime("%Y-%m-%d")
 
     scan_time = pd.Timestamp.now(tz="Asia/Kolkata").strftime("%d %b %Y, %H:%M IST")
 
     warning = session_warning(results)
     warning_html = f'<div class="warn">{esc(warning)}</div>' if warning else ""
 
-    # ---- hero ----
+    # ---- data for the 3D scene ----
 
-    n = len(matches)
+    scene_rows = []
+    for r in results:
+        sc = r.get("scene")
+        if r.get("status") in ("PASS", "FAIL") and sc:
+            d = 1 if r.get("direction") == "LONG" else -1 if r.get("direction") == "SHORT" else 0
+            scene_rows.append([str(r["symbol"]), sc["stage"], sc["score"], sc["x"], sc["y"], d])
+
+    stage_counts = [sum(1 for row in scene_rows if row[1] >= k) for k in range(5)]
+    ev = stage_counts[0]
+
+    scene_json = json.dumps(
+        {"rows": scene_rows, "counts": stage_counts, "signals": n},
+        separators=(",", ":"),
+    ).replace("</", "<\\/")
+
+    # ---- stage captions ----
+
+    def words(parts, start=0, hl=False):
+        return "".join(
+            f'<span class="w{" hl" if hl else ""}" style="--i:{start + i}">{esc(w)}</span>'
+            for i, w in enumerate(parts)
+        )
+
+    cap0 = f"""
+    <div class="cap">
+      <h1>{words([f"{ev:,}", "stocks."])}<br>{words(["One", "closing", "bell."], start=2, hl=True)}</h1>
+      <p>Every point is a stock, placed by what happened in the last 25 minutes of two
+      sessions. The higher it sits in the glow, the more of the four conditions it passed.</p>
+    </div>"""
+
+    cap1 = """
+    <div class="cap">
+      <h2>Four conditions.<br><span class="hl">Most fall away.</span></h2>
+      <p>Keep scrolling to fly through the funnel. Each ring is one condition, and every stock
+      stops at the first one it fails.</p>
+      <div class="ticker"><span class="tk-num" id="tk-num">0</span><span class="tk-label" id="tk-label">stocks evaluated</span></div>
+    </div>"""
 
     if n:
-        headline = (
-            f'<span class="hero-num" data-count="{n}">{n}</span> '
-            f'signal{"s" if n != 1 else ""} detected'
-        )
-        split = f' {longs} long, {shorts} short.' if n else ""
+        cap2 = f"""
+    <div class="cap">
+      <h2><span class="hl">{n}</span> remain.</h2>
+      <p>{longs} long, {shorts} short. Entry at the {esc(fmt_day(entry_day))} 09:15 open,
+      exit at {esc(EXIT_TIME_LABEL)}.</p>
+      <a class="cta" href="#signals">See the signals</a>
+    </div>"""
     else:
-        headline = 'No <span class="hero-num">signals</span> detected'
+        cap2 = f"""
+    <div class="cap">
+      <h2>Nothing <span class="hl">survived.</span></h2>
+      <p>No stock passed all four conditions on the {esc(fmt_day(previous_day))} and
+      {esc(fmt_day(day_before))} sessions. That is a normal outcome for a strategy this selective.</p>
+      <a class="cta" href="#scan">See the full scan</a>
+    </div>"""
+
+    # ---- briefing band ----
+
+    if n:
+        brief_title = f'{n} signal{"s" if n != 1 else ""} for {esc(fmt_day(entry_day))}'
+        split = f' {longs} long, {shorts} short.'
+    else:
+        brief_title = f'No signals for {esc(fmt_day(entry_day))}'
         split = ""
 
     hero_sub = (
         f'Scanned <b>{total:,}</b> symbols from {esc(universe_source)} against the '
-        f'<b>{esc(fmt_day(signal_date))}</b> session.{split} Trades enter at the '
-        f'<b>{esc(fmt_day(entry_day))}</b> 09:15 open and exit at 15:27.'
+        f'<b>{esc(fmt_day(previous_day))}</b> and <b>{esc(fmt_day(day_before))}</b> sessions.{split} '
+        f'Trades enter at the <b>{esc(fmt_day(entry_day))}</b> 09:15 open and exit at '
+        f'{esc(EXIT_TIME_LABEL)}.'
     )
 
     timeline = f"""
 <ol class="timeline">
   <li class="tl-step done"><span class="tl-dot"></span>
-    <div class="tl-label">Signal day</div><div class="tl-date">{esc(fmt_day(signal_date))}</div>
-    <div class="tl-sub">conditions read</div></li>
+    <div class="tl-label">Day before previous</div><div class="tl-date">{esc(fmt_day(day_before))}</div>
+    <div class="tl-sub">trend and volume</div></li>
   <li class="tl-step done"><span class="tl-dot"></span>
     <div class="tl-label">Previous day</div><div class="tl-date">{esc(fmt_day(previous_day))}</div>
-    <div class="tl-sub">latest session</div></li>
+    <div class="tl-sub">reversal at the close</div></li>
   <li class="tl-step active"><span class="tl-dot"></span>
     <div class="tl-label">Entry</div><div class="tl-date">{esc(fmt_day(entry_day))}</div>
     <div class="tl-sub">09:15 open</div></li>
   <li class="tl-step"><span class="tl-dot"></span>
     <div class="tl-label">Exit</div><div class="tl-date">{esc(fmt_day(entry_day))}</div>
-    <div class="tl-sub">15:27</div></li>
+    <div class="tl-sub">{esc(EXIT_TIME_LABEL)}</div></li>
 </ol>"""
 
     kpis = f"""
 <div class="kpis">
   <div class="kpi"><div class="n" data-count="{total}">{total:,}</div><div class="l">Scanned</div></div>
+  <div class="kpi"><div class="n" data-count="{elapsed:.1f}" data-dec="1" data-suffix="s">{elapsed:.1f}s</div><div class="l">Scan time</div></div>
   <div class="kpi long"><div class="n" data-count="{longs}">{longs}</div><div class="l">Long</div></div>
   <div class="kpi short"><div class="n" data-count="{shorts}">{shorts}</div><div class="l">Short</div></div>
-  <div class="kpi"><div class="n" data-count="{elapsed:.1f}" data-dec="1" data-suffix="s">{elapsed:.1f}s</div><div class="l">Scan time</div></div>
 </div>"""
-
-    if n == 0:
-        radar_caption = "Nothing to plot. No symbol passed both conditions."
-    elif n > 12:
-        radar_caption = "Each blip is one matched signal. Hover a blip to see its symbol."
-    else:
-        radar_caption = "Each blip is one matched signal."
-
-    radar = (
-        '<div class="radar-wrap"><div class="radar-sweep"></div>'
-        + build_radar_svg(matches) + '</div>'
-        f'<div class="radar-cap">{radar_caption}</div>'
-    )
 
     # ---- scan breakdown ----
 
@@ -2272,8 +2744,8 @@ def generate_html_report(results, elapsed, universe_source):
         signals_html = f"""
 <div class="glass empty-state">
   <b>No symbol matched every condition.</b><br>
-  {total:,} symbols were checked against the {esc(fmt_day(signal_date))} session and none passed
-  both conditions. That is a normal outcome for a strategy this selective.
+  {total:,} symbols were checked against the {esc(fmt_day(previous_day))} and
+  {esc(fmt_day(day_before))} sessions and none passed all four conditions.
 </div>"""
 
     # ---- table ----
@@ -2302,57 +2774,73 @@ def generate_html_report(results, elapsed, universe_source):
 
     logo = (
         '<svg width="32" height="32" viewBox="0 0 32 32" aria-hidden="true">'
-        '<circle cx="16" cy="16" r="13" fill="none" stroke="#4FE0F0" stroke-opacity=".55" stroke-width="1.5"/>'
-        '<circle cx="16" cy="16" r="7" fill="none" stroke="#4FE0F0" stroke-opacity=".35" stroke-width="1.5"/>'
-        '<path d="M16 16 L26.5 8.5" stroke="#4FE0F0" stroke-width="2.2" stroke-linecap="round"/>'
-        '<circle cx="16" cy="16" r="2.4" fill="#4FE0F0"/></svg>'
+        '<circle cx="16" cy="16" r="13" fill="none" stroke="#A99BFF" stroke-opacity=".6" stroke-width="1.5"/>'
+        '<circle cx="16" cy="16" r="7" fill="none" stroke="#FFB257" stroke-opacity=".5" stroke-width="1.5"/>'
+        '<path d="M16 16 L26.5 8.5" stroke="#A99BFF" stroke-width="2.2" stroke-linecap="round"/>'
+        '<circle cx="16" cy="16" r="2.4" fill="#FFB257"/></svg>'
     )
+
+    aria = f"Three-dimensional overview of {ev:,} stocks, of which {n} are signals"
 
     document = f'''<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#07061B">
 <title>NSE Momentum Scanner</title>
+<script>document.documentElement.classList.add('js')</script>
 <style>{CSS}</style>
 </head>
 <body>
 <div class="aurora"><i class="a"></i><i class="b"></i><i class="c"></i></div>
 <div class="grid-bg"></div>
+<div class="cursor-glow" id="cg"></div>
 
-<div class="wrap">
-
-<header class="topbar">
-  <div class="brand">{logo}<div>NSE Momentum Scanner<small>3-minute closing-window strategy</small></div></div>
+<header class="topbar" id="topbar">
+  <div class="brand">{logo}<div>NSE Momentum Scanner<small>5-minute closing-window strategy</small></div></div>
   <div class="topmeta"><span class="live"><i></i>Scan complete</span><span>{esc(scan_time)}</span></div>
 </header>
 
+<section class="stage" id="stage" aria-label="Scan overview">
+  <div class="stage-pin">
+    <div class="horizon"></div>
+    <canvas id="scene" role="img" aria-label="{esc(aria)}"></canvas>
+    <div class="tip" id="tip"></div>
+    <div class="caps">{cap0}{cap1}{cap2}
+    </div>
+    <nav class="rail" aria-label="Overview sections">
+      <button type="button" data-p="0.05"><span>Universe</span><i></i></button>
+      <button type="button" data-p="0.52"><span>Funnel</span><i></i></button>
+      <button type="button" data-p="0.93"><span>Signals</span><i></i></button>
+    </nav>
+    <div class="scroll-hint"><span>Scroll</span><i></i></div>
+  </div>
+</section>
+<script type="application/json" id="scene-data">{scene_json}</script>
+
+<main class="wrap">
+
 {warning_html}
 
-<section class="hero">
-  <div class="glass hero-main">
-    <div>
-      <h1>{headline}</h1>
-      <p class="hero-sub">{hero_sub}</p>
-    </div>
-    {timeline}
-    {kpis}
-  </div>
-  <div class="glass hero-radar">{radar}</div>
+<section class="glass briefing reveal">
+  <div><h2>{brief_title}</h2><p class="hero-sub">{hero_sub}</p></div>
+  {kpis}
+  {timeline}
 </section>
 
-<section class="glass panel">
+<section class="glass panel reveal">
   <div class="sec-head"><h2 class="sec-title">Scan breakdown</h2><span class="sec-note">{total:,} symbols</span></div>
   <div class="dist-bar">{segs}</div>
   <div class="legend">{legend}</div>
 </section>
 
-<section>
+<section id="signals" class="reveal">
   <div class="sec-head"><h2 class="sec-title">Signals</h2><span class="sec-note">{n} matched</span></div>
   {signals_html}
 </section>
 
-<section class="glass table-panel">
+<section class="glass table-panel reveal" id="scan">
   <div class="table-head">
     <div class="search">{search_icon}<input id="q" type="search" placeholder="Search symbol" autocomplete="off" aria-label="Search symbol"></div>
     <div class="filters">{"".join(chips)}</div>
@@ -2360,8 +2848,9 @@ def generate_html_report(results, elapsed, universe_source):
   <div class="table-scroll">
   <table id="scan-table">
     <thead><tr>
-      <th>Symbol</th><th>Signal day</th><th>Direction</th><th>Candles</th>
-      <th>15:24 vol &gt; 15:27</th><th>Trend match (2+ of 4)</th><th>09:15 = 15:24</th>
+      <th>Symbol</th><th>Previous day</th><th>Direction</th><th>Candles</th>
+      <th>P: 15:20 vs 15:25</th><th>P: 2+ of 3 match</th>
+      <th>B: 15:20 = P 15:20</th><th>B: vol 15:20 &gt; 15:25</th>
       <th>Result</th><th>Data</th>
     </tr></thead>
     <tbody>{table_rows}</tbody>
@@ -2371,31 +2860,41 @@ def generate_html_report(results, elapsed, universe_source):
   <div class="table-foot"><span id="shown-label"></span><button class="btn" id="more" type="button">Show 50 more</button></div>
 </section>
 
-<div class="foot-grid">
+<div class="foot-grid reveal">
   <div class="glass foot-card">
     <h2>How the signal works</h2>
-    Every condition is read on the signal day, two trading days before entry, on
-    3-minute candles.
+    All candles are native 5-minute candles. P is the previous day (the latest completed
+    session) and B is the day before it. 15:25 is the last candle of a session and 15:20
+    the second to last.
     <ol>
-      <li>The 15:24 candle's volume is higher than the 15:27 candle's, and at least two of
-      the candles at 15:15, 15:18, 15:21 and 15:27 share the 15:24 candle's trend.</li>
-      <li>The 09:15 candle's trend matches the 15:24 candle's trend.</li>
+      <li>On P, the 15:20 candle's trend differs from the 15:25 candle's, and at least two
+      of the 15:05, 15:10 and 15:15 candles share the 15:20 candle's trend.</li>
+      <li>On B, the 15:20 candle's trend matches P's 15:20 trend, and B's 15:20 volume is
+      higher than B's 15:25 volume.</li>
     </ol>
-    Direction follows the 15:24 candle: up is long, down is short. Entry is the 09:15 open
-    on entry day; exit is 15:27 the same day.
+    Direction follows the 15:20 trend: up is long, down is short. Entry is the 09:15 open
+    on entry day; exit is {esc(EXIT_TIME_LABEL)} the same day.
+  </div>
+  <div class="glass foot-card">
+    <h2>Reading the 3D overview</h2>
+    Left to right is the day-before volume ratio (15:20 against 15:25) and bottom to top is
+    how hard the previous day's last candle reversed against the 15:20 trend. The top-right
+    quadrant is where both of those conditions hold. Depth shows how many of the four
+    conditions a stock passed, so signals sit at the front. Stocks with no usable data are
+    left out of the picture and counted in the scan breakdown.
   </div>
   <div class="glass foot-card">
     <h2>Data notes</h2>
-    Yahoo has no native 3-minute interval, so each 3-minute candle is built from three
-    1-minute bars. A minute with no trades is absent from Yahoo's data and is treated as
-    zero volume with no trend, which is correct when that is what happened, but Yahoo
-    cannot tell it apart from a dropped bar. A "Verify" tag means a candle was built from
-    an incomplete set of bars, so check it on TradingView before acting. Incomplete means no
-    data in the required window; stale means the signal day differs from most symbols.
+    Candles come straight from Yahoo's 5-minute feed with no aggregation. A candle with no
+    trades is absent from Yahoo's data and is read as having no trend, so it can never
+    satisfy a trend condition. The one case that could create a false signal is a missing
+    day-before 15:25 candle, because its volume then reads as zero; those signals carry a
+    "Verify" tag, so check them on TradingView. Incomplete means fewer than two completed
+    sessions came back; stale means the two sessions differ from most symbols.
   </div>
 </div>
 
-</div>
+</main>
 {SCRIPT}
 </body>
 </html>
@@ -2437,7 +2936,7 @@ def main():
     print("SCAN COMPLETE")
     print("=" * 70)
     print(f"Universe    : {len(universe)}")
-    print(f"Signal day  : {reference_date}")
+    print(f"Previous day: {reference_date}")
     print(f"Matches     : {len(matches)}")
     print(f"Time        : {elapsed:.1f} seconds")
     print()
