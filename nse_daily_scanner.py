@@ -21,7 +21,8 @@
 #
 # 1) On P:  the 15:20 candle's trend is DIFFERENT from the 15:25 candle's
 #    trend, AND at least 2 of the candles 15:05, 15:10, 15:15 share the
-#    15:20 candle's trend.
+#    15:20 candle's trend, AND P's 15:20 volume is greater than P's 15:25
+#    volume.
 #
 # 2) On B:  the 15:20 candle's trend MATCHES P's 15:20 trend, AND B's 15:20
 #    volume is greater than B's 15:25 volume.
@@ -626,6 +627,19 @@ def candle_direction(open_price, close_price):
     return 0
 
 
+def entry_session_day(today_str):
+    """Entry happens at the next session's open. Today is the entry day on
+    a weekday; on a weekend it rolls forward to Monday. (Exchange holidays
+    are not modelled - there is no holiday calendar to check them against.)"""
+
+    day = pd.Timestamp(today_str)
+
+    while day.weekday() >= 5:
+        day += pd.Timedelta(days=1)
+
+    return day.strftime("%Y-%m-%d")
+
+
 def slot_label(key):
     """'P1520' -> 'P 15:20' (used in missing/verify notes)."""
 
@@ -638,8 +652,9 @@ def evaluate_rows(rows):
     P = previous day (latest completed session), B = the session before it.
     Entry day = today.
 
-    1) On P: the 15:20 candle's trend differs from the 15:25 candle's, and
-       at least 2 of the candles 15:05, 15:10, 15:15 share 15:20's trend.
+    1) On P: the 15:20 candle's trend differs from the 15:25 candle's, at
+       least 2 of the candles 15:05, 15:10, 15:15 share 15:20's trend, and
+       P's 15:20 volume is greater than P's 15:25 volume.
     2) On B: the 15:20 trend matches P's 15:20 trend, and B's 15:20 volume
        is greater than B's 15:25 volume.
     """
@@ -674,7 +689,7 @@ def evaluate_rows(rows):
             "date": dates[-1] if dates else None,
             "previous_day": dates[-1] if dates else None,
             "day_before": None,
-            "entry_day": today,
+            "entry_day": entry_session_day(today),
             "missing": [slot_label(k) for k in SLOT_KEYS],
             "note": "fewer than 2 completed trading days of data before today",
         }
@@ -707,7 +722,7 @@ def evaluate_rows(rows):
             "date": previous_day,
             "previous_day": previous_day,
             "day_before": day_before,
-            "entry_day": today,
+            "entry_day": entry_session_day(today),
             "missing": missing,
         }
 
@@ -738,7 +753,13 @@ def evaluate_rows(rows):
     v_b1520, v_b1525 = volume("B1520"), volume("B1525")
     cond2b = candles["B1520"] is not None and v_b1520 > v_b1525
 
-    cond1 = cond1a and cond1b
+    # CONDITION 1c (P): P's 15:20 volume is greater than P's 15:25 volume.
+    # (A missing P 15:25 already fails 1a, and a missing P 15:20 reads as
+    # zero volume here, so this cannot manufacture a signal from missing data.)
+    v_p1520, v_p1525 = volume("P1520"), volume("P1525")
+    cond1c = candles["P1520"] is not None and v_p1520 > v_p1525
+
+    cond1 = cond1a and cond1b and cond1c
     cond2 = cond2a and cond2b
     passed = cond1 and cond2
 
@@ -756,22 +777,18 @@ def evaluate_rows(rows):
     # ---- coordinates for the 3D overview in the report ----
     # stage: how many conditions the stock cleared IN ORDER (1a, 1b, 2a, 2b).
     #        Where it stops is where it "fell out of the funnel".
-    # score: how many of the four it passed in total.
+    # score: how many of the five it passed in total.
     # x:     day-before volume ratio on a log scale. Right of centre means
     #        B's 15:20 volume beat its 15:25 volume (condition 2b).
     # y:     previous-day reversal: how far the 15:25 candle moved AGAINST
     #        the 15:20 trend. Above centre means the trends differ (1a).
     stage = 0
-    if cond1a:
-        stage = 1
-        if cond1b:
-            stage = 2
-            if cond2a:
-                stage = 3
-                if cond2b:
-                    stage = 4
+    for ok in (cond1a, cond1b, cond1c, cond2a, cond2b):
+        if not ok:
+            break
+        stage += 1
 
-    score = sum([cond1a, cond1b, cond2a, cond2b])
+    score = sum([cond1a, cond1b, cond1c, cond2a, cond2b])
 
     ratio = (v_b1520 / v_b1525) if v_b1525 > 0 else (8.0 if v_b1520 > 0 else 0.125)
     vol_log2 = max(-3.0, min(3.0, math.log2(max(ratio, 0.125))))
@@ -788,13 +805,14 @@ def evaluate_rows(rows):
         "date": previous_day,
         "previous_day": previous_day,
         "day_before": day_before,
-        "entry_day": today,
+        "entry_day": entry_session_day(today),
         "direction": direction if passed else None,
         "raw_direction": direction,
         "cond1": cond1,
         "cond1a": cond1a,
         "cond1b": cond1b,
         "cond1b_matches": matches,
+        "cond1c": cond1c,
         "cond2": cond2,
         "cond2a": cond2a,
         "cond2b": cond2b,
@@ -1026,7 +1044,7 @@ def fmt_day(value, weekday=True):
     return f"{ts.strftime('%a')} {base}" if weekday else base
 
 
-# The four candles whose trend/volume the strategy actually compares.
+# The four candles whose trend and volume the strategy compares (15:20 and 15:25, on both days).
 KEY_SLOTS = ("B1520", "B1525", "P1520", "P1525")
 
 
@@ -1034,7 +1052,8 @@ def build_candlestick_svg(ohlc, size="large", volumes=None):
     """Real OHLC candlesticks for the seven 5-minute candles the strategy
     reads: the day before previous (15:20, 15:25) then the previous day
     (15:05 to 15:25). The large version also draws volume bars (the day-
-    before 15:20 vs 15:25 volumes are what condition 2 compares), highlights
+    before 15:20 vs 15:25 volumes and the previous day's are what the
+    strategy compares), highlights
     both 15:20 anchor candles, and captions each day."""
 
     large = size == "large"
@@ -1153,7 +1172,7 @@ def build_candlestick_svg(ohlc, size="large", volumes=None):
             if v and vmax > 0:
                 bar_h = max(1.5, v / vmax * v_h)
                 color = "var(--long)" if (not c or c["close"] >= c["open"]) else "var(--short)"
-                emphasised = key in ("B1520", "B1525")
+                emphasised = key in KEY_SLOTS
                 parts.append(
                     f'<rect x="{cx - body_w/2:.1f}" y="{v_base - bar_h:.1f}" '
                     f'width="{body_w:.1f}" height="{bar_h:.1f}" rx="1.5" fill="{color}" '
@@ -1232,7 +1251,8 @@ a { color: inherit; }
 .aurora, .grid-bg { position: fixed; inset: 0; pointer-events: none; z-index: 0; }
 .aurora { overflow: hidden; }
 
-.aurora i { position: absolute; border-radius: 50%; filter: blur(80px); opacity: 0.65; }
+.aurora i { position: absolute; border-radius: 50%; opacity: 0.7; will-change: transform; }
+.calm .aurora i { animation-play-state: paused; }
 
 .aurora .a {
   width: 700px; height: 700px; left: -180px; top: -240px;
@@ -1270,7 +1290,6 @@ a { color: inherit; }
   pointer-events: none;
   z-index: 2;
   background: radial-gradient(circle, rgba(169, 155, 255, 0.10), transparent 62%);
-  mix-blend-mode: screen;
   opacity: 0;
   transition: opacity 0.6s;
 }
@@ -1542,8 +1561,8 @@ a { color: inherit; }
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.01)),
     var(--panel);
-  -webkit-backdrop-filter: blur(16px) saturate(130%);
-  backdrop-filter: blur(16px) saturate(130%);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 28px 60px -30px rgba(0, 0, 0, 0.85);
 }
 
@@ -1922,6 +1941,9 @@ tbody tr[data-status="pass"] td:first-child { box-shadow: inset 3px 0 0 var(--lo
   .wrap { padding: 28px 16px 56px; }
   .topbar { padding: 12px 16px; }
   .topmeta > span:last-child { display: none; }
+  .live-t { display: none; }
+  .live { padding: 8px; }
+  .brand { font-size: 0.92rem; white-space: nowrap; }
   .brand small { display: none; }
   .caps { bottom: 90px; height: 330px; }
   .timeline { grid-template-columns: 1fr 1fr; row-gap: 22px; }
@@ -1972,6 +1994,14 @@ SCRIPT = """<script>
     reveals.forEach(function (el) { io.observe(el); });
   } else {
     reveals.forEach(function (el) { el.classList.add('in'); });
+  }
+
+  /* ---------- keep the page cheap: pause the aurora when the stage is off-screen ---------- */
+  var stageEl = document.getElementById('stage');
+  if (stageEl && 'IntersectionObserver' in window) {
+    new IntersectionObserver(function (es) {
+      document.body.classList.toggle('calm', !es[0].isIntersecting);
+    }, { threshold: 0 }).observe(stageEl);
   }
 
   /* ---------- cursor glow ---------- */
@@ -2090,12 +2120,14 @@ SCRIPT = """<script>
       'stocks evaluated',
       'left after 15:20 and 15:25 differ',
       'left after 2+ of 3 earlier candles agree',
+      'left after the previous-day volume check',
       'left after the day-before trend matches',
       'left after the day-before volume check'
     ];
     var FAIL_LABEL = [
       '15:20 and 15:25 did not differ',
       'fewer than 2 earlier candles agreed',
+      'previous-day volume was not higher',
       'day-before trend did not match',
       'day-before volume was not higher'
     ];
@@ -2121,18 +2153,18 @@ SCRIPT = """<script>
     var L1 = new Float32Array(N * 3), L2 = new Float32Array(N * 3), L3 = new Float32Array(N * 3);
     var S0 = new Float32Array(N * 3), DLY = new Float32Array(N), SZ = new Float32Array(N);
     var SC = new Uint8Array(N), STG = new Uint8Array(N), DIR = new Int8Array(N);
-    var R_ST = [2.0, 1.62, 1.24, 0.86, 0.48], Z_ST = [2.2, 0.85, -0.5, -1.85, -3.2];
+    var R_ST = [2.0, 1.68, 1.36, 1.04, 0.72, 0.48], Z_ST = [2.2, 1.05, -0.1, -1.25, -2.4, -3.55];
     var sigIdx = [];
 
     for (var i = 0; i < N; i++) {
       var r = rows[i], rnd = rng(hash(r[0]));
       var stg = r[1], sc = r[2], o = i * 3;
       STG[i] = stg; SC[i] = sc; DIR[i] = r[5];
-      if (stg === 4) sigIdx.push(i);
+      if (stg === 5) sigIdx.push(i);
 
       L1[o] = sh(r[3]) * 1.55 + (rnd() - 0.5) * 0.07;
       L1[o + 1] = sh(r[4]) * 0.95 + (rnd() - 0.5) * 0.07;
-      L1[o + 2] = (sc - 2) * 0.55 + (rnd() - 0.5) * 0.36;
+      L1[o + 2] = (sc - 2.5) * 0.44 + (rnd() - 0.5) * 0.36;
 
       var ang = rnd() * 6.2832;
       var rr = R_ST[stg] * (rnd() < 0.25 ? Math.sqrt(rnd()) : 0.82 + 0.18 * rnd());
@@ -2150,16 +2182,22 @@ SCRIPT = """<script>
     nSig = sigIdx.length;
     sigIdx.forEach(function (idx, k) {
       var o = idx * 3, a = (k / nSig) * 6.2832 - 1.5708;
-      L2[o] = Math.cos(a) * 0.48; L2[o + 1] = Math.sin(a) * 0.48; L2[o + 2] = -3.2;
-      var perRow = Math.min(nSig, 8), row = Math.floor(k / perRow), col = k % perRow;
-      var inRow = Math.min(perRow, nSig - row * perRow);
-      var spacing = Math.min(0.95, 3.4 / Math.max(inRow, 1));
-      L3[o] = (col - (inRow - 1) / 2) * spacing;
-      L3[o + 1] = 0.12 - row * 0.72 + Math.sin(col * 0.9) * 0.06;
-      L3[o + 2] = -3.4;
+      L2[o] = Math.cos(a) * 0.48; L2[o + 1] = Math.sin(a) * 0.48; L2[o + 2] = -3.55;
     });
+    var narrow = false, CYF = 0.5;
+    function buildL3() {
+      sigIdx.forEach(function (idx, k) {
+        var o = idx * 3;
+        var perRow = Math.min(nSig, narrow ? 3 : 8), row = Math.floor(k / perRow), col = k % perRow;
+        var inRow = Math.min(perRow, nSig - row * perRow);
+        var spacing = Math.min(0.95, (narrow ? 2.4 : 3.4) / Math.max(inRow, 1));
+        L3[o] = (col - (inRow - 1) / 2) * spacing;
+        L3[o + 1] = 0.12 - row * 0.72 + Math.sin(col * 0.9) * 0.06;
+        L3[o + 2] = -3.75;
+      });
+    }
     for (var j = 0; j < N; j++) {
-      if (STG[j] === 4) continue;
+      if (STG[j] === 5) continue;
       var q = j * 3;
       L3[q] = L2[q] * 2.3; L3[q + 1] = L2[q + 1] * 2.3; L3[q + 2] = L2[q + 2];
     }
@@ -2179,7 +2217,7 @@ SCRIPT = """<script>
                sprite('255,178,87'), sprite('61,220,151'), sprite('255,107,127')];
     var KIND_ALPHA = [0.5, 0.62, 0.74, 0.95, 1, 1];
     var RGB = ['118,124,214', '140,146,236', '178,162,246', '255,178,87', '61,220,151', '255,107,127'];
-    function kindOf(i) { return SC[i] === 4 ? (DIR[i] === -1 ? 5 : 4) : SC[i]; }
+    function kindOf(i) { return SC[i] === 5 ? (DIR[i] === -1 ? 5 : 4) : (SC[i] <= 1 ? 0 : SC[i] - 1); }
 
     var stars = [], sr = rng(99);
     for (var s = 0; s < 150; s++) stars.push([sr(), sr(), 0.4 + sr() * 1.1, sr() * 6.28, 0.35 + sr() * 0.65]);
@@ -2192,10 +2230,17 @@ SCRIPT = """<script>
       W = rc.width; H = rc.height;
       canvas.width = Math.round(W * DPR); canvas.height = Math.round(H * DPR);
       ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
-      F = Math.min(W, H * 1.2) * 0.84;
+      narrow = W < 700;
+      CYF = narrow ? 0.34 : 0.5;
+      F = Math.min(W, H * 1.2) * 0.84 * (narrow ? 0.72 : 1);
     }
     resize();
-    var rt; window.addEventListener('resize', function () { clearTimeout(rt); rt = setTimeout(resize, 120); });
+    buildL3();
+    var rt;
+    window.addEventListener('resize', function () {
+      clearTimeout(rt);
+      rt = setTimeout(function () { var was = narrow; resize(); if (narrow !== was) buildL3(); }, 120);
+    });
 
     /* ---- input ---- */
     var mouse = { x: 0.5, y: 0.5, px: -999, py: -999, inside: false }, look = { x: 0, y: 0 };
@@ -2225,7 +2270,7 @@ SCRIPT = """<script>
       var x3 = cx * cly + z2 * sly, z3 = -cx * sly + z2 * cly;
       PZ = z3;
       PX = W / 2 + F * x3 / z3;
-      PY = H / 2 - F * y2 / z3;
+      PY = H * CYF - F * y2 / z3;
     }
     function line3(x1, y1, z1, x2, y2, z2) {
       proj(x1, y1, z1); var ax = PX, ay = PY, az = PZ;
@@ -2301,9 +2346,45 @@ SCRIPT = """<script>
           ctx.font = '500 11px "IBM Plex Mono", monospace'; ctx.fillStyle = 'rgb(255,200,140)';
           ctx.globalAlpha = 0.75 * uv; ctx.fillText('target zone', q3x + 8, q3y + 16);
         }
-        ctx.font = '500 11px "IBM Plex Mono", monospace'; ctx.fillStyle = 'rgb(190,182,255)'; ctx.globalAlpha = 0.5 * uv;
-        proj(0.1, -1.2, 1.95); ctx.fillText('day-before volume ratio \\u2192', PX, PY + 14);
-        proj(-1.75, 0.15, 1.15); ctx.fillText('previous-day reversal \\u2191', PX - 10, PY);
+        ctx.font = '500 11px "IBM Plex Mono", monospace'; ctx.fillStyle = 'rgb(190,182,255)'; ctx.globalAlpha = 0.6 * uv;
+        proj(0.8, 0, 1.15);
+        if (PZ > 0.4 && !narrow) {
+          ctx.textAlign = 'center'; ctx.fillText('day-before volume ratio \\u2192', PX, PY + 18);
+        }
+        proj(0, 0.5, 1.15);
+        if (PZ > 0.4 && !narrow) {
+          ctx.textAlign = 'right'; ctx.fillText('previous-day reversal \\u2191', PX - 12, PY);
+        }
+        ctx.textAlign = 'left';
+      }
+
+      /* funnel rings: one per condition, so the tunnel reads as a funnel */
+      var wf = w1 * (1 - w2);
+      if (wf > 0.02) {
+        ctx.lineWidth = 1;
+        for (var rs = 0; rs < 6; rs++) {
+          ctx.strokeStyle = rs === 5 ? 'rgb(255,178,87)' : 'rgb(169,155,255)';
+          ctx.globalAlpha = (rs === 5 ? 0.55 : 0.26) * wf;
+          ctx.beginPath();
+          var pen = false;
+          for (var sg = 0; sg <= 56; sg++) {
+            var aa = sg / 56 * 6.2832;
+            proj(Math.cos(aa) * R_ST[rs], Math.sin(aa) * R_ST[rs], Z_ST[rs]);
+            if (PZ < 0.4) { pen = false; continue; }
+            if (pen) ctx.lineTo(PX, PY); else { ctx.moveTo(PX, PY); pen = true; }
+          }
+          ctx.stroke();
+        }
+        ctx.globalAlpha = 0.10 * wf; ctx.strokeStyle = 'rgb(169,155,255)';
+        ctx.beginPath();
+        for (var sp = 0; sp < 10; sp++) {
+          var ab = sp / 10 * 6.2832;
+          for (var rq = 0; rq < 5; rq++) {
+            line3(Math.cos(ab) * R_ST[rq], Math.sin(ab) * R_ST[rq], Z_ST[rq],
+                  Math.cos(ab) * R_ST[rq + 1], Math.sin(ab) * R_ST[rq + 1], Z_ST[rq + 1]);
+          }
+        }
+        ctx.stroke();
       }
 
       /* ---- points ---- */
@@ -2325,9 +2406,9 @@ SCRIPT = """<script>
         proj(x, y, z);
         if (PZ < 0.35) { SA[i] = 0; continue; }
 
-        var isSig = STG[i] === 4, kind = kindOf(i);
+        var isSig = STG[i] === 5, kind = kindOf(i);
         var sc = F / PZ;
-        var rad = (isSig ? 0.05 : 0.0125 * SZ[i] + (SC[i] === 3 ? 0.007 : 0)) * sc;
+        var rad = (isSig ? 0.05 : 0.0125 * SZ[i] + (SC[i] === 4 ? 0.007 : 0)) * sc;
         rad = clamp(rad, 0.7, isSig ? 46 : 15);
         var df = clamp(1.3 - (PZ - 2.5) / 9, 0.12, 1);
         var dust = isSig ? 1 : 1 - 0.9 * w2;
@@ -2342,11 +2423,11 @@ SCRIPT = """<script>
       if (uv > 0.02) {
         ctx.globalCompositeOperation = 'lighter'; ctx.lineWidth = 1;
         for (var k = 0; k < N; k++) {
-          if (SC[k] < 3 || SA[k] < 0.05) continue;
+          if (SC[k] < 4 || SA[k] < 0.05) continue;
           var ko = k * 3; var kx = L1[ko], ky = L1[ko + 1], kz = L1[ko + 2];
           proj(kx, -1.2, kz); var fx = PX, fy = PY, fz = PZ;
           if (fz < 0.4) continue;
-          ctx.globalAlpha = (SC[k] === 4 ? 0.28 : 0.12) * uv * SA[k];
+          ctx.globalAlpha = (SC[k] === 5 ? 0.28 : 0.12) * uv * SA[k];
           ctx.strokeStyle = 'rgb(' + RGB[kindOf(k)] + ')';
           ctx.beginPath(); ctx.moveTo(SX[k], SY[k]); ctx.lineTo(fx, fy); ctx.stroke();
         }
@@ -2354,7 +2435,7 @@ SCRIPT = """<script>
 
       /* pulse rings + labels for signals */
       ctx.lineWidth = 1.2;
-      var labelA = clamp((1 - w1) + w2, 0, 1);
+      var labelA = narrow ? w2 : clamp((1 - w1) + w2, 0, 1);
       var showAll = nSig <= 12;
       for (var m = 0; m < sigIdx.length; m++) {
         var si = sigIdx[m];
@@ -2385,7 +2466,7 @@ SCRIPT = """<script>
         for (var h = 0; h < N; h++) {
           if (SA[h] < 0.2) continue;
           var dx = SX[h] - mouse.px, dy = SY[h] - mouse.py;
-          var lim = Math.max(11, SR[h] * 2.0), dd = (dx * dx + dy * dy) * (STG[h] === 4 ? 0.4 : 1);
+          var lim = Math.max(11, SR[h] * 2.0), dd = (dx * dx + dy * dy) * (STG[h] === 5 ? 0.4 : 1);
           if (dd < lim * lim && dd < bd) { bd = dd; best = h; }
         }
       }
@@ -2393,16 +2474,16 @@ SCRIPT = """<script>
         hoverIdx = best;
         if (best >= 0) {
           var rw = rows[best], line;
-          if (rw[1] === 4) {
+          if (rw[1] === 5) {
             line = '<span class="' + (rw[5] === -1 ? 'ts' : 'tg') + '">Signal, ' + (rw[5] === -1 ? 'short' : 'long') + '</span><br>Click to open its card';
           } else {
-            line = 'Passed ' + rw[2] + ' of 4 conditions<br><span class="tn">Stopped at: ' + FAIL_LABEL[rw[1]] + '</span>';
+            line = 'Passed ' + rw[2] + ' of 5 conditions<br><span class="tn">Stopped at: ' + FAIL_LABEL[rw[1]] + '</span>';
           }
           tip.innerHTML = '<b></b>' + line;
           tip.firstChild.textContent = rw[0];
           tip.style.opacity = 1;
         } else { tip.style.opacity = 0; }
-        canvas.style.cursor = (best >= 0 && rows[best][1] === 4) ? 'pointer' : 'default';
+        canvas.style.cursor = (best >= 0 && rows[best][1] === 5) ? 'pointer' : 'default';
       }
       if (best >= 0) {
         var tx = clamp(SX[best] + 18, 8, W - tip.offsetWidth - 8), ty = clamp(SY[best] + 18, 70, H - tip.offsetHeight - 8);
@@ -2415,7 +2496,7 @@ SCRIPT = """<script>
       setCap(caps[2], smooth(0.76, 0.86, p), 1);
 
       var u = clamp((p - 0.34) / 0.36, 0, 1);
-      var shown = Math.min(4, Math.floor(u * 5 - 1e-6));
+      var shown = Math.min(5, Math.floor(u * 6 - 1e-6));
       if (shown < 0) shown = 0;
       tkVal += (counts[shown] - tkVal) * (1 - Math.exp(-dt * 9));
       tkNum.textContent = Math.round(tkVal).toLocaleString('en-US');
@@ -2428,7 +2509,7 @@ SCRIPT = """<script>
     requestAnimationFrame(frame);
 
     canvas.addEventListener('click', function () {
-      if (hoverIdx >= 0 && rows[hoverIdx][1] === 4) {
+      if (hoverIdx >= 0 && rows[hoverIdx][1] === 5) {
         var card = document.getElementById('sig-' + rows[hoverIdx][0]);
         if (card) card.scrollIntoView({ behavior: reduce ? 'auto' : 'smooth', block: 'center' });
       }
@@ -2476,10 +2557,11 @@ def build_table_row(r):
         b20 = details["dB1520"]
         detail_1a = f'{trend_name(p20)} vs {trend_name(p25)}'
         detail_1b = f'{r.get("cond1b_matches", 0)} of 3 match'
+        detail_1c = f'{details["P1520_vol"]:,.0f} vs {details["P1525_vol"]:,.0f}'
         detail_2a = f'B {trend_name(b20)} / P {trend_name(p20)}'
         detail_2b = f'{details["B1520_vol"]:,.0f} vs {details["B1525_vol"]:,.0f}'
     else:
-        detail_1a = detail_1b = detail_2a = detail_2b = ""
+        detail_1a = detail_1b = detail_1c = detail_2a = detail_2b = ""
 
     direction = r.get("direction")
     if direction:
@@ -2518,6 +2600,7 @@ def build_table_row(r):
 <td>{chart}</td>
 <td>{chk(r.get("cond1a"), detail_1a)}</td>
 <td>{chk(r.get("cond1b"), detail_1b)}</td>
+<td>{chk(r.get("cond1c"), detail_1c)}</td>
 <td>{chk(r.get("cond2a"), detail_2a)}</td>
 <td>{chk(r.get("cond2b"), detail_2b)}</td>
 <td><span class="pill {key}">{STATUS_LABEL[key]}</span>{verify_html}</td>
@@ -2553,12 +2636,16 @@ def build_match_card(r, entry_day):
 
     v20 = d.get("B1520_vol", 0) or 0
     v25 = d.get("B1525_vol", 0) or 0
+    pv20 = d.get("P1520_vol", 0) or 0
+    pv25 = d.get("P1525_vol", 0) or 0
 
     checks = [
         ("Previous day: 15:20 and 15:25 trends differ",
          f'{trend_name(d.get("dP1520"))} vs {trend_name(d.get("dP1525"))}'),
         ("Previous day: 2+ of 15:05, 15:10, 15:15 match 15:20",
          f'{r.get("cond1b_matches", 0)} of 3'),
+        ("Previous day: 15:20 volume above 15:25",
+         f"{pv20:,.0f} vs {pv25:,.0f}"),
         ("Day before: 15:20 trend matches previous day's",
          f'{trend_name(d.get("dB1520"))} / {trend_name(d.get("dP1520"))}'),
         ("Day before: 15:20 volume above 15:25",
@@ -2615,7 +2702,7 @@ def generate_html_report(results, elapsed, universe_source):
 
     previous_day = most_common("previous_day")
     day_before = most_common("day_before")
-    entry_day = most_common("entry_day") or pd.Timestamp.now(tz="Asia/Kolkata").strftime("%Y-%m-%d")
+    entry_day = most_common("entry_day") or entry_session_day(pd.Timestamp.now(tz="Asia/Kolkata").strftime("%Y-%m-%d"))
 
     scan_time = pd.Timestamp.now(tz="Asia/Kolkata").strftime("%d %b %Y, %H:%M IST")
 
@@ -2631,7 +2718,7 @@ def generate_html_report(results, elapsed, universe_source):
             d = 1 if r.get("direction") == "LONG" else -1 if r.get("direction") == "SHORT" else 0
             scene_rows.append([str(r["symbol"]), sc["stage"], sc["score"], sc["x"], sc["y"], d])
 
-    stage_counts = [sum(1 for row in scene_rows if row[1] >= k) for k in range(5)]
+    stage_counts = [sum(1 for row in scene_rows if row[1] >= k) for k in range(6)]
     ev = stage_counts[0]
 
     scene_json = json.dumps(
@@ -2651,12 +2738,12 @@ def generate_html_report(results, elapsed, universe_source):
     <div class="cap">
       <h1>{words([f"{ev:,}", "stocks."])}<br>{words(["One", "closing", "bell."], start=2, hl=True)}</h1>
       <p>Every point is a stock, placed by what happened in the last 25 minutes of two
-      sessions. The higher it sits in the glow, the more of the four conditions it passed.</p>
+      sessions. The closer it floats to you, the more of the five conditions it passed.</p>
     </div>"""
 
     cap1 = """
     <div class="cap">
-      <h2>Four conditions.<br><span class="hl">Most fall away.</span></h2>
+      <h2>Five conditions.<br><span class="hl">Most fall away.</span></h2>
       <p>Keep scrolling to fly through the funnel. Each ring is one condition, and every stock
       stops at the first one it fails.</p>
       <div class="ticker"><span class="tk-num" id="tk-num">0</span><span class="tk-label" id="tk-label">stocks evaluated</span></div>
@@ -2674,7 +2761,7 @@ def generate_html_report(results, elapsed, universe_source):
         cap2 = f"""
     <div class="cap">
       <h2>Nothing <span class="hl">survived.</span></h2>
-      <p>No stock passed all four conditions on the {esc(fmt_day(previous_day))} and
+      <p>No stock passed all five conditions on the {esc(fmt_day(previous_day))} and
       {esc(fmt_day(day_before))} sessions. That is a normal outcome for a strategy this selective.</p>
       <a class="cta" href="#scan">See the full scan</a>
     </div>"""
@@ -2745,7 +2832,7 @@ def generate_html_report(results, elapsed, universe_source):
 <div class="glass empty-state">
   <b>No symbol matched every condition.</b><br>
   {total:,} symbols were checked against the {esc(fmt_day(previous_day))} and
-  {esc(fmt_day(day_before))} sessions and none passed all four conditions.
+  {esc(fmt_day(day_before))} sessions and none passed all five conditions.
 </div>"""
 
     # ---- table ----
@@ -2799,7 +2886,7 @@ def generate_html_report(results, elapsed, universe_source):
 
 <header class="topbar" id="topbar">
   <div class="brand">{logo}<div>NSE Momentum Scanner<small>5-minute closing-window strategy</small></div></div>
-  <div class="topmeta"><span class="live"><i></i>Scan complete</span><span>{esc(scan_time)}</span></div>
+  <div class="topmeta"><span class="live"><i></i><span class="live-t">Scan complete</span></span><span>{esc(scan_time)}</span></div>
 </header>
 
 <section class="stage" id="stage" aria-label="Scan overview">
@@ -2849,7 +2936,7 @@ def generate_html_report(results, elapsed, universe_source):
   <table id="scan-table">
     <thead><tr>
       <th>Symbol</th><th>Previous day</th><th>Direction</th><th>Candles</th>
-      <th>P: 15:20 vs 15:25</th><th>P: 2+ of 3 match</th>
+      <th>P: 15:20 vs 15:25</th><th>P: 2+ of 3 match</th><th>P: vol 15:20 &gt; 15:25</th>
       <th>B: 15:20 = P 15:20</th><th>B: vol 15:20 &gt; 15:25</th>
       <th>Result</th><th>Data</th>
     </tr></thead>
@@ -2867,8 +2954,9 @@ def generate_html_report(results, elapsed, universe_source):
     session) and B is the day before it. 15:25 is the last candle of a session and 15:20
     the second to last.
     <ol>
-      <li>On P, the 15:20 candle's trend differs from the 15:25 candle's, and at least two
-      of the 15:05, 15:10 and 15:15 candles share the 15:20 candle's trend.</li>
+      <li>On P, the 15:20 candle's trend differs from the 15:25 candle's, at least two
+      of the 15:05, 15:10 and 15:15 candles share the 15:20 candle's trend, and P's 15:20
+      volume is higher than P's 15:25 volume.</li>
       <li>On B, the 15:20 candle's trend matches P's 15:20 trend, and B's 15:20 volume is
       higher than B's 15:25 volume.</li>
     </ol>
@@ -2879,7 +2967,7 @@ def generate_html_report(results, elapsed, universe_source):
     <h2>Reading the 3D overview</h2>
     Left to right is the day-before volume ratio (15:20 against 15:25) and bottom to top is
     how hard the previous day's last candle reversed against the 15:20 trend. The top-right
-    quadrant is where both of those conditions hold. Depth shows how many of the four
+    quadrant is where both of those conditions hold. Depth shows how many of the five
     conditions a stock passed, so signals sit at the front. Stocks with no usable data are
     left out of the picture and counted in the scan breakdown.
   </div>
