@@ -16,9 +16,8 @@
 # NSE 15-minute candles are labelled by their start time: 09:15 ... 15:15.
 # 15:15 is the LAST candle, 15:00 the last second candle.
 #
-# ONE condition, with two parts that must both hold:
-#   a) the 15:00 candle's trend is DIFFERENT from the 15:15 candle's trend
-#   b) the 15:00 candle's volume is greater than the 15:15 candle's volume
+# ONE condition:
+#   the 15:00 candle's volume is greater than the 15:15 candle's volume
 #
 # DIRECTION: set by DIRECTION_RULE below (default: the 15:00 trend).
 # TRADE:     Entry = today's 09:15 OPEN, Exit = EXIT_TIME_LABEL.
@@ -658,9 +657,8 @@ def evaluate_rows(rows):
     """15-minute strategy, read on the previous day (P = the latest completed
     session). Entry day = today.
 
-    ONE condition with two parts, both required:
-      a) the 15:00 candle's trend is different from the 15:15 candle's trend
-      b) the 15:00 candle's volume is greater than the 15:15 candle's volume
+    One condition: volume at 15:00 must be greater than volume at 15:15.
+    Candle trend difference is not required.
     """
 
     if rows is None or rows.empty:
@@ -720,9 +718,8 @@ def evaluate_rows(rows):
     t1500, t1515 = trend("15m_1500"), trend("15m_1515")
     v1500, v1515 = volume("15m_1500"), volume("15m_1515")
 
-    # a) different trends (a candle with no trend can never differ), and
-    # b) the 15:00 volume is strictly greater than the 15:15 volume.
-    cond = t1500 != 0 and t1515 != 0 and t1500 != t1515 and v1500 > v1515
+    # Only volume condition: do not require the two candles to have different trends.
+    cond = v1500 > v1515
 
     anchor = t1500 if DIRECTION_RULE == "FOLLOW_1500" else t1515
     direction = "LONG" if anchor == 1 else "SHORT" if anchor == -1 else None
@@ -1144,7 +1141,7 @@ Entry: {esc(fmt_day(entry_day))} at the 09:15 open &nbsp;|&nbsp; Exit: {esc(EXIT
 <th>Symbol</th>
 <th>Previous day</th>
 <th>Direction</th>
-<th>Condition<br><small>15:00 and 15:15 trend differently, and 15:00 volume &gt; 15:15 volume</small></th>
+<th>Condition<br><small>15:00 volume &gt; 15:15 volume</small></th>
 <th>Result</th>
 <th>Data</th>
 </tr>
@@ -1158,14 +1155,13 @@ Entry: {esc(fmt_day(entry_day))} at the 09:15 open &nbsp;|&nbsp; Exit: {esc(EXIT
 <div class="footer">
 <b>STRATEGY (15-minute candles)</b><br>
 Read on the previous day, the latest completed session. The last candle of a session is
-15:15 and the last second candle is 15:00. A stock matches when both hold:<br>
-a) the 15:00 candle's trend is different from the 15:15 candle's trend, and<br>
-b) the 15:00 candle's volume is greater than the 15:15 candle's volume.<br>
+15:15 and the last second candle is 15:00. A stock matches when the 15:00 candle's
+volume is greater than the 15:15 candle's volume. No different-trend condition is applied.<br>
 Direction follows the {follow} trend: up is LONG, down is SHORT.<br>
 <b>Entry:</b> the 09:15 open on entry day. <b>Exit:</b> {esc(EXIT_TIME_LABEL)}.<br><br>
 <b>Data notes:</b> Candles come straight from Yahoo's 15-minute feed. A candle with no
-trades is missing from Yahoo's data and has no trend, and a match needs both candles to
-have a trend, so missing data can only block a match, never create one. INCOMPLETE means
+trades is missing from Yahoo's data. The volume rule is evaluated from the available
+15:00 and 15:15 volume values; a missing candle has volume zero. INCOMPLETE means
 no completed session came back. STALE means the previous day differs from most other
 symbols.
 </div>
