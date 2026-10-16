@@ -1,30 +1,42 @@
 # =============================================================================
-# NSE DAILY MOMENTUM SCANNER - FIXED VERSION
+# NSE DAILY MOMENTUM SCANNER - 1-MIN / 3-MIN CLOSING-CANDLE VERSION
 # =============================================================================
 #
-# Uses Yahoo Finance NATIVE 15-minute candles. No Parquet, no nselib.
+# Uses Yahoo Finance NATIVE 1-minute candles. The 3-minute candles are built
+# from those 1-minute candles (Yahoo has no native 3-minute interval).
 # Universe: Nifty 500 CSV -> NSE equity list -> built-in fallback.
 # Output: index.html (a plain dashboard)
 #
 # =============================================================================
-# STRATEGY  (15-minute timeframe, read on the previous day only)
+# STRATEGY  (read on the previous day only)
 # =============================================================================
 #
 # "Previous day" = the most recent COMPLETED trading session (today is never
 # used - today is the entry day).
 #
-# NSE 15-minute candles are labelled by their start time: 09:15 ... 15:15.
-# 15:15 is the LAST candle, 15:00 the last second candle.
+# Candles are labelled by their START time. NSE closes at 15:30, so:
+#   1-minute : ... 15:28, 15:29        (15:29 is the last, 15:28 the second last)
+#   3-minute : ... 15:24, 15:27        (15:27 is the last, 15:24 the second last)
+#              3-minute buckets are anchored to 09:15 (09:15, 09:18, ... 15:27),
+#              the same grid TradingView and broker charts use.
 #
-# ONE condition:
-#   the 15:00 candle's volume is greater than the 15:15 candle's volume
+# ALL THREE conditions must hold:
+#   1) 1m: the last two candles (15:28, 15:29) have the SAME trend, and the
+#      15:28 volume is greater than the 15:29 volume.
+#   2) 3m: the last two candles (15:24, 15:27) have the SAME trend, and the
+#      15:24 volume is greater than the 15:27 volume.
+#   3) The 1m 15:28 candle has the SAME trend as the 3m 15:24 candle.
 #
-# DIRECTION: set by DIRECTION_RULE below (default: the 15:00 trend).
+# "Trend" = candle colour (close > open is Up, close < open is Down). A flat
+# candle (close == open) has no trend and can never satisfy "same trend".
+#
+# Because of (1), (2) and (3), all four candles end up with one common trend.
+#
+# DIRECTION: set by DIRECTION_RULE below (default: trade WITH that trend).
 # TRADE:     Entry = today's 09:15 OPEN, Exit = EXIT_TIME_LABEL.
 #
-# A candle with no trades is absent from Yahoo's data and has no trend. Part a)
-# needs BOTH candles to have a trend, so a missing candle can only BLOCK a
-# match, never create one (a missing volume denominator is a missing trend).
+# A candle with no trades is absent from Yahoo's data and has no trend. A
+# missing candle can therefore only BLOCK a match, never create one.
 #
 # INSTALL:
 #   python -m pip install yfinance pandas requests curl_cffi
@@ -64,33 +76,34 @@ logging.getLogger("yfinance").setLevel(logging.CRITICAL)
 # CONFIGURATION
 # =============================================================================
 
-# Yahoo throttles heavy parallel use. If you see many rate-limit ERRORs,
-# lower this to 4-6.
+# Yahoo throttles heavy parallel use. 1-minute requests are heavier than
+# 15-minute ones; if you see many rate-limit ERRORs, lower this to 4-6.
 MAX_WORKERS = 8
 
 # Attempts per request (only rate limits / network errors are retried).
 MAX_RETRIES = 3
 
-# Native 15-minute candles. Yahoo keeps about 60 days of 15-minute history.
-INITIAL_PERIOD = {"15m": "5d"}
+# Native 1-minute candles. Yahoo keeps only about 7-8 days of 1-minute history,
+# so the fallback window must not exceed "7d" (anything longer is rejected).
+INITIAL_PERIOD = {"1m": "5d"}
 
-FALLBACK_PERIOD = {"15m": "1mo"}
+FALLBACK_PERIOD = {"1m": "7d"}
 
 REQUEST_TIMEOUT = 20
 
-# If fewer than this share of scanned symbols have both required candles, the
-# report shows a "data looks incomplete" warning. Kept low because illiquid
-# stocks often have a no-trade candle; when Yahoo's data is genuinely broken
-# the share is close to 0%.
+# If fewer than this share of scanned symbols have all four required candles,
+# the report shows a "data looks incomplete" warning. Kept low because
+# illiquid stocks often have a no-trade minute; when Yahoo's data is genuinely
+# broken the share is close to 0%.
 SESSION_COMPLETE_SHARE = 0.20
 
-# Which way to trade when a match fires. The strategy defines the condition but
-# not the direction, so this is a one-line switch:
-#   "FOLLOW_1500" -> trade with the 15:00 trend (default; 15:15 is the counter-move)
-#   "FOLLOW_1515" -> trade with the 15:15 trend, i.e. against the 15:00 trend
-DIRECTION_RULE = "FOLLOW_1500"
+# Which way to trade when a match fires. All four candles share one trend, so
+# the strategy only needs to say whether to follow it or fade it:
+#   "FOLLOW_TREND" -> trade with the common trend (default; Up = LONG)
+#   "FADE_TREND"   -> trade against it            (Up = SHORT)
+DIRECTION_RULE = "FOLLOW_TREND"
 
-# Exit time shown in the report (unchanged from before).
+# Exit time shown in the report.
 EXIT_TIME_LABEL = "15:27"
 
 
@@ -148,10 +161,13 @@ NSE_EQUITY_URL = (
 # REQUIRED CANDLES
 # =============================================================================
 
-# The two 15-minute candles the strategy reads, on the previous day.
-SLOTS = [("15m", 1500), ("15m", 1515)]
+# The four candles the strategy reads on the previous day: (timeframe, start).
+SLOTS = [("1m", 1528), ("1m", 1529), ("3m", 1524), ("3m", 1527)]
 
 SLOT_KEYS = [f"{tf}_{hm:04d}" for tf, hm in SLOTS]
+
+# 3-minute buckets start at the NSE open, 09:15.
+SESSION_START_MINUTES = 9 * 60 + 15
 
 
 # =============================================================================
@@ -458,8 +474,8 @@ def clean_yahoo_data(df):
 
     open_ = pd.to_numeric(df["Open"], errors="coerce")
     close_ = pd.to_numeric(df["Close"], errors="coerce")
-    # High/Low power the candlestick visuals; fall back to open/close for
-    # any feed that happens to omit them so nothing downstream breaks.
+    # High/Low are needed to build the 3-minute candles (max / min); fall back
+    # to open/close for any feed that happens to omit them so nothing breaks.
     high_ = pd.to_numeric(df["High"], errors="coerce") if "High" in df.columns else None
     low_ = pd.to_numeric(df["Low"], errors="coerce") if "Low" in df.columns else None
 
@@ -473,7 +489,7 @@ def clean_yahoo_data(df):
         "volume": pd.to_numeric(df["Volume"], errors="coerce").values,
     })
 
-    # Regular NSE session only.
+    # Regular NSE session only (09:15 - 15:29; the last 1-minute candle is 15:29).
     out = out[out["hm"].between(915, 1529)]
 
     out = out.dropna(subset=["open", "high", "low", "close", "volume"])
@@ -589,13 +605,14 @@ def fetch_interval(symbol, interval):
 
 
 def fetch_symbol_rows(symbol):
-    """Returns (rows, info): the 15-minute data from Yahoo's 15-minute feed.
+    """Returns (rows, info): the 1-minute data from Yahoo's 1-minute feed
+    (the 3-minute candles are built from it later).
     If rows is None, info is "NO_DATA" or an error message."""
 
     # Small random delay so the workers do not hit Yahoo in one burst.
     time.sleep(random.uniform(0.05, 0.25))
 
-    return fetch_interval(symbol, "15m")
+    return fetch_interval(symbol, "1m")
 
 
 # =============================================================================
@@ -629,6 +646,39 @@ def entry_session_day(today_str):
     return day.strftime("%Y-%m-%d")
 
 
+def resample_to_3m(rows):
+    """Build 3-minute candles from 1-minute rows.
+
+    Buckets are anchored to the 09:15 open (09:15, 09:18, ... 15:24, 15:27),
+    so the last two candles of the session are 15:24 and 15:27. Within a
+    bucket: open = first, high = max, low = min, close = last, volume = sum.
+    A bucket exists if at least one of its 1-minute candles traded."""
+
+    if rows is None or rows.empty:
+        return rows
+
+    work = rows.sort_values(["date", "hm"]).copy()
+
+    minutes = (work["hm"] // 100) * 60 + (work["hm"] % 100)
+    start = SESSION_START_MINUTES + ((minutes - SESSION_START_MINUTES) // 3) * 3
+    work["hm3"] = (start // 60) * 100 + (start % 60)
+
+    out = (
+        work.groupby(["date", "hm3"], sort=True)
+        .agg(
+            open=("open", "first"),
+            high=("high", "max"),
+            low=("low", "min"),
+            close=("close", "last"),
+            volume=("volume", "sum"),
+        )
+        .reset_index()
+        .rename(columns={"hm3": "hm"})
+    )
+
+    return out
+
+
 def day_map(rows):
     """DataFrame -> {date: {hm: (open, high, low, close, volume)}}"""
 
@@ -646,7 +696,7 @@ def day_map(rows):
 
 
 def slot_label(key):
-    """'15m_1500' -> '15m 15:00' (used in missing notes)."""
+    """'1m_1528' -> '1m 15:28' (used in missing notes)."""
 
     tf, hm = key.split("_")
 
@@ -654,23 +704,24 @@ def slot_label(key):
 
 
 def evaluate_rows(rows):
-    """15-minute strategy, read on the previous day (P = the latest completed
-    session). Entry day = today.
+    """1-minute / 3-minute closing-candle strategy, read on the previous day
+    (P = the latest completed session). Entry day = today.
 
-    One condition: volume at 15:00 must be greater than volume at 15:15.
-    Candle trend difference is not required.
+    1) 1m 15:28 and 15:29 same trend, and 15:28 volume > 15:29 volume.
+    2) 3m 15:24 and 15:27 same trend, and 15:24 volume > 15:27 volume.
+    3) 1m 15:28 trend == 3m 15:24 trend.
     """
 
     if rows is None or rows.empty:
         return {"status": "NO_DATA"}
 
-    by_date = day_map(rows)
+    by_date_1m = day_map(rows)
 
     # "Today" is the real calendar date and is never a candidate: it is the
     # entry day, whether the scan runs before the open or mid-session.
     today = pd.Timestamp.now(tz="Asia/Kolkata").strftime("%Y-%m-%d")
     entry = entry_session_day(today)
-    dates = sorted(d for d in by_date if d != today)
+    dates = sorted(d for d in by_date_1m if d != today)
 
     if not dates:
         return {
@@ -683,13 +734,19 @@ def evaluate_rows(rows):
         }
 
     previous_day = dates[-1]
-    day = by_date[previous_day]
+
+    # 3-minute candles are built from the previous day's 1-minute candles only.
+    day_1m = by_date_1m[previous_day]
+    rows_3m = resample_to_3m(rows[rows["date"] == previous_day])
+    day_3m = day_map(rows_3m).get(previous_day, {})
+
+    sources = {"1m": day_1m, "3m": day_3m}
 
     candles, missing = {}, []
 
     for tf, hm in SLOTS:
         key = f"{tf}_{hm:04d}"
-        bar = day.get(hm)
+        bar = sources[tf].get(hm)
 
         if bar is None:
             candles[key] = None
@@ -715,14 +772,22 @@ def evaluate_rows(rows):
         c = candles[key]
         return c["volume"] if c else 0
 
-    t1500, t1515 = trend("15m_1500"), trend("15m_1515")
-    v1500, v1515 = volume("15m_1500"), volume("15m_1515")
+    t1_28, t1_29 = trend("1m_1528"), trend("1m_1529")
+    t3_24, t3_27 = trend("3m_1524"), trend("3m_1527")
+    v1_28, v1_29 = volume("1m_1528"), volume("1m_1529")
+    v3_24, v3_27 = volume("3m_1524"), volume("3m_1527")
 
-    # Only volume condition: do not require the two candles to have different trends.
-    cond = v1500 > v1515
+    # A trend of 0 (flat or missing candle) never counts as "same trend", so
+    # a missing candle can only block a match.
+    cond_1m = t1_28 != 0 and t1_28 == t1_29 and v1_28 > v1_29
+    cond_3m = t3_24 != 0 and t3_24 == t3_27 and v3_24 > v3_27
+    cond_align = t1_28 != 0 and t1_28 == t3_24
 
-    anchor = t1500 if DIRECTION_RULE == "FOLLOW_1500" else t1515
-    direction = "LONG" if anchor == 1 else "SHORT" if anchor == -1 else None
+    cond = cond_1m and cond_3m and cond_align
+
+    # All four candles share one trend when cond is True.
+    side = t1_28 if DIRECTION_RULE == "FOLLOW_TREND" else -t1_28
+    direction = "LONG" if side == 1 else "SHORT" if side == -1 else None
 
     return {
         "status": "PASS" if cond else "FAIL",
@@ -731,9 +796,13 @@ def evaluate_rows(rows):
         "entry_day": entry,
         "direction": direction if cond else None,
         "cond": cond,
+        "cond_1m": cond_1m,
+        "cond_3m": cond_3m,
+        "cond_align": cond_align,
         "missing": missing,
         "details": {
-            "t1500": t1500, "t1515": t1515, "v1500": v1500, "v1515": v1515,
+            "t1_28": t1_28, "t1_29": t1_29, "t3_24": t3_24, "t3_27": t3_27,
+            "v1_28": v1_28, "v1_29": v1_29, "v3_24": v3_24, "v3_27": v3_27,
         },
     }
 
@@ -853,9 +922,9 @@ def mark_stale(results):
 
 
 def session_warning(results):
-    """Warn when a large share of symbols are missing one of the 2 required
-    15-minute candles - a sign of a broad Yahoo data-quality issue, not just
-    isolated thin trading."""
+    """Warn when a large share of symbols are missing one of the 4 required
+    candles - a sign of a broad Yahoo data-quality issue, not just isolated
+    thin trading."""
 
     evaluated = [r for r in results if r.get("status") in ("PASS", "FAIL")]
 
@@ -867,10 +936,10 @@ def session_warning(results):
 
     if share < SESSION_COMPLETE_SHARE:
         return (
-            f"Only {share:.0%} of scanned symbols have both required 15-minute "
-            f"candles (15:00 and 15:15) on the previous day. Yahoo's data may "
-            f"be unusually incomplete - treat matches with extra caution and "
-            f"verify on TradingView."
+            f"Only {share:.0%} of scanned symbols have all four required candles "
+            f"(1m 15:28 and 15:29; 3m 15:24 and 15:27) on the previous day. "
+            f"Yahoo's data may be unusually incomplete - treat matches with "
+            f"extra caution and verify on TradingView."
         )
 
     return None
@@ -1002,12 +1071,20 @@ def build_table_row(r):
     status_class = {"PASS": "pass", "FAIL": "fail"}.get(status, "skip")
 
     if details:
-        note = (
-            f'15:00 {trend_name(details["t1500"])} / 15:15 {trend_name(details["t1515"])}; '
-            f'vol {details["v1500"]:,.0f} vs {details["v1515"]:,.0f}'
+        note_1m = (
+            f'15:28 {trend_name(details["t1_28"])} / 15:29 {trend_name(details["t1_29"])}; '
+            f'vol {details["v1_28"]:,.0f} vs {details["v1_29"]:,.0f}'
+        )
+        note_3m = (
+            f'15:24 {trend_name(details["t3_24"])} / 15:27 {trend_name(details["t3_27"])}; '
+            f'vol {details["v3_24"]:,.0f} vs {details["v3_27"]:,.0f}'
+        )
+        note_align = (
+            f'1m 15:28 {trend_name(details["t1_28"])} vs '
+            f'3m 15:24 {trend_name(details["t3_24"])}'
         )
     else:
-        note = ""
+        note_1m = note_3m = note_align = ""
 
     data_label = {
         "OK": "OK", "FALLBACK": "Fallback window", "NO_DATA": "No data", "ERROR": "Error",
@@ -1029,7 +1106,9 @@ def build_table_row(r):
 <td class="symbol">{esc(r.get('symbol', ''))}</td>
 <td>{esc(r['previous_day']) if r.get('previous_day') else DASH}</td>
 <td>{cell(r.get('direction'))}</td>
-<td>{badge(r.get('cond'))}<br><small>{note}</small></td>
+<td>{badge(r.get('cond_1m'))}<br><small>{note_1m}</small></td>
+<td>{badge(r.get('cond_3m'))}<br><small>{note_3m}</small></td>
+<td>{badge(r.get('cond_align'))}<br><small>{note_align}</small></td>
 <td class="{status_class}">{esc(STATUS_LABEL.get(status, status))}</td>
 <td>{data_text}</td>
 </tr>
@@ -1102,7 +1181,7 @@ def generate_html_report(results, elapsed, universe_source):
         f'<div class="stat"><b>{value}</b>{label}</div>' for value, label in stats
     )
 
-    follow = "15:00" if DIRECTION_RULE == "FOLLOW_1500" else "15:15"
+    follow = "with" if DIRECTION_RULE == "FOLLOW_TREND" else "against"
 
     document = f"""<!DOCTYPE html>
 <html lang="en">
@@ -1120,7 +1199,7 @@ def generate_html_report(results, elapsed, universe_source):
 <div class="subtitle">
 Generated: {esc(scan_time)}<br>
 Universe: {esc(universe_source)}<br>
-Yahoo Finance 15-minute data<br>
+Yahoo Finance 1-minute data (3-minute candles built from 1-minute)<br>
 Previous day: {esc(fmt_day(previous_day))}<br>
 Entry: {esc(fmt_day(entry_day))} at the 09:15 open &nbsp;|&nbsp; Exit: {esc(EXIT_TIME_LABEL)}
 </div>
@@ -1141,7 +1220,9 @@ Entry: {esc(fmt_day(entry_day))} at the 09:15 open &nbsp;|&nbsp; Exit: {esc(EXIT
 <th>Symbol</th>
 <th>Previous day</th>
 <th>Direction</th>
-<th>Condition<br><small>15:00 volume &gt; 15:15 volume</small></th>
+<th>1m condition<br><small>15:28 &amp; 15:29 same trend; 15:28 vol &gt; 15:29 vol</small></th>
+<th>3m condition<br><small>15:24 &amp; 15:27 same trend; 15:24 vol &gt; 15:27 vol</small></th>
+<th>Alignment<br><small>1m 15:28 trend = 3m 15:24 trend</small></th>
 <th>Result</th>
 <th>Data</th>
 </tr>
@@ -1153,17 +1234,24 @@ Entry: {esc(fmt_day(entry_day))} at the 09:15 open &nbsp;|&nbsp; Exit: {esc(EXIT
 </div>
 
 <div class="footer">
-<b>STRATEGY (15-minute candles)</b><br>
-Read on the previous day, the latest completed session. The last candle of a session is
-15:15 and the last second candle is 15:00. A stock matches when the 15:00 candle's
-volume is greater than the 15:15 candle's volume. No different-trend condition is applied.<br>
-Direction follows the {follow} trend: up is LONG, down is SHORT.<br>
+<b>STRATEGY (1-minute and 3-minute candles)</b><br>
+Read on the previous day, the latest completed session. Candles are labelled by start
+time: the last 1-minute candle is 15:29 (second last 15:28); the last 3-minute candle
+is 15:27 (second last 15:24). A stock matches only when ALL three hold:<br>
+1) 1m: the 15:28 and 15:29 candles have the same trend, and the 15:28 volume is greater
+than the 15:29 volume.<br>
+2) 3m: the 15:24 and 15:27 candles have the same trend, and the 15:24 volume is greater
+than the 15:27 volume.<br>
+3) The 1m 15:28 candle has the same trend as the 3m 15:24 candle.<br>
+Trend = candle colour (close vs open); a flat candle has no trend. Direction trades {follow}
+the common trend: up is LONG, down is SHORT (with the default rule).<br>
 <b>Entry:</b> the 09:15 open on entry day. <b>Exit:</b> {esc(EXIT_TIME_LABEL)}.<br><br>
-<b>Data notes:</b> Candles come straight from Yahoo's 15-minute feed. A candle with no
-trades is missing from Yahoo's data. The volume rule is evaluated from the available
-15:00 and 15:15 volume values; a missing candle has volume zero. INCOMPLETE means
-no completed session came back. STALE means the previous day differs from most other
-symbols.
+<b>Data notes:</b> 1-minute candles come straight from Yahoo's 1-minute feed (about 7
+days of history). 3-minute candles are built from them on a 09:15 grid: open = first,
+high = max, low = min, close = last, volume = sum of the 1-minute candles in the bucket.
+A candle with no trades is missing from Yahoo's data and can only block a match. INCOMPLETE
+means no completed session (or none of the four candles) came back. STALE means the
+previous day differs from most other symbols.
 </div>
 
 </div>
