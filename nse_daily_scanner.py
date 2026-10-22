@@ -18,16 +18,20 @@
 #   15-minute : ... 15:00, 15:15       (15:15 is the last, 15:00 the second last)
 #   5-minute  : ... 15:20, 15:25       (15:25 is the last, 15:20 the second last)
 #
-# BOTH conditions must hold:
+# ALL THREE conditions must hold:
 #   1) 15m: the last two candles (15:00, 15:15) are in OPPOSITE trends
 #      (one Up, the other Down).
 #   2) 5m:  the last two candles (15:20, 15:25) are in OPPOSITE trends.
+#   3) The 15m 15:00 candle and the 5m 15:20 candle have the SAME trend.
 #
 # "Trend" = candle colour (close > open is Up, close < open is Down). A flat
-# candle (close == open) has no trend and can never be "opposite".
+# candle (close == open) has no trend: it is never "opposite" and never "same".
+#
+# Because of (1), (2) and (3), the 15m 15:15 and 5m 15:25 candles also share
+# one trend (the opposite of the 15:00 / 15:20 trend).
 #
 # DIRECTION: the strategy does not say which way to trade, so it is set by
-# DIRECTION_RULE below (default: trade WITH the 15m 15:15 candle).
+# DIRECTION_RULE below (default: trade WITH the final candles' trend).
 # TRADE:     Entry = today's 09:15 OPEN, Exit = EXIT_TIME_LABEL.
 #
 # A candle with no trades is absent from Yahoo's data and has no trend. A
@@ -91,21 +95,17 @@ REQUEST_TIMEOUT = 20
 # broken the share is close to 0%.
 SESSION_COMPLETE_SHARE = 0.20
 
-# Which way to trade when a match fires. The two candles in each timeframe are
-# opposite, so the strategy needs a rule for which candle to anchor on:
-#   "FOLLOW_1515" -> trade WITH the 15m 15:15 candle (default)
-#   "FADE_1515"   -> trade AGAINST the 15m 15:15 candle
-#   "FOLLOW_1525" -> trade WITH the 5m 15:25 candle
-#   "FADE_1525"   -> trade AGAINST the 5m 15:25 candle
-# (Up = LONG, Down = SHORT when following; reversed when fading.)
+# Which way to trade when a match fires. The final candles (15m 15:15 and
+# 5m 15:25) always share one trend, and the earlier candles (15m 15:00 and
+# 5m 15:20) share the opposite one, so there are only two choices:
+#   "FOLLOW_LAST" -> trade WITH the final candles' trend (default; Up = LONG)
+#   "FADE_LAST"   -> trade AGAINST it, i.e. with the 15:00 / 15:20 trend
 DIRECTION_RULES = {
-    "FOLLOW_1515": ("15m_1515", 1),
-    "FADE_1515": ("15m_1515", -1),
-    "FOLLOW_1525": ("5m_1525", 1),
-    "FADE_1525": ("5m_1525", -1),
+    "FOLLOW_LAST": 1,
+    "FADE_LAST": -1,
 }
 
-DIRECTION_RULE = "FOLLOW_1515"
+DIRECTION_RULE = "FOLLOW_LAST"
 
 # Exit time shown in the report.
 EXIT_TIME_LABEL = "15:27"
@@ -698,6 +698,7 @@ def evaluate_rows(rows_by_tf):
 
     1) 15m 15:00 and 15:15 candles are in opposite trends.
     2) 5m 15:20 and 15:25 candles are in opposite trends.
+    3) 15m 15:00 and 5m 15:20 candles have the same trend.
     """
 
     if not rows_by_tf:
@@ -752,15 +753,16 @@ def evaluate_rows(rows_by_tf):
     t15_00, t15_15 = trend("15m_1500"), trend("15m_1515")
     t5_20, t5_25 = trend("5m_1520"), trend("5m_1525")
 
-    # A trend of 0 (flat or missing candle) is never "opposite" to anything,
-    # so a missing candle can only block a match.
+    # A trend of 0 (flat or missing candle) is never "opposite" or "same", so
+    # a missing candle can only block a match.
     cond_15m = t15_00 != 0 and t15_00 == -t15_15
     cond_5m = t5_20 != 0 and t5_20 == -t5_25
+    cond_align = t15_00 != 0 and t15_00 == t5_20
 
-    cond = cond_15m and cond_5m
+    cond = cond_15m and cond_5m and cond_align
 
-    anchor_key, sign = DIRECTION_RULES[DIRECTION_RULE]
-    side = trend(anchor_key) * sign
+    # When cond is True, 15m 15:15 and 5m 15:25 share one trend.
+    side = t15_15 * DIRECTION_RULES[DIRECTION_RULE]
     direction = "LONG" if side == 1 else "SHORT" if side == -1 else None
 
     return {
@@ -772,6 +774,7 @@ def evaluate_rows(rows_by_tf):
         "cond": cond,
         "cond_15m": cond_15m,
         "cond_5m": cond_5m,
+        "cond_align": cond_align,
         "missing": missing,
         "details": {
             "t15_00": t15_00, "t15_15": t15_15,
@@ -1052,8 +1055,12 @@ def build_table_row(r):
             f'15:20 {trend_name(details["t5_20"])} / '
             f'15:25 {trend_name(details["t5_25"])}'
         )
+        note_align = (
+            f'15m 15:00 {trend_name(details["t15_00"])} vs '
+            f'5m 15:20 {trend_name(details["t5_20"])}'
+        )
     else:
-        note_15m = note_5m = ""
+        note_15m = note_5m = note_align = ""
 
     data_label = {
         "OK": "OK", "FALLBACK": "Fallback window", "NO_DATA": "No data", "ERROR": "Error",
@@ -1077,6 +1084,7 @@ def build_table_row(r):
 <td>{cell(r.get('direction'))}</td>
 <td>{badge(r.get('cond_15m'))}<br><small>{note_15m}</small></td>
 <td>{badge(r.get('cond_5m'))}<br><small>{note_5m}</small></td>
+<td>{badge(r.get('cond_align'))}<br><small>{note_align}</small></td>
 <td class="{status_class}">{esc(STATUS_LABEL.get(status, status))}</td>
 <td>{data_text}</td>
 </tr>
@@ -1149,13 +1157,16 @@ def generate_html_report(results, elapsed, universe_source):
         f'<div class="stat"><b>{value}</b>{label}</div>' for value, label in stats
     )
 
-    anchor_key, sign = DIRECTION_RULES[DIRECTION_RULE]
-    anchor_text = slot_label(anchor_key)
-
-    if sign == 1:
-        direction_text = f"Direction follows the {anchor_text} candle: Up is LONG, Down is SHORT."
+    if DIRECTION_RULES[DIRECTION_RULE] == 1:
+        direction_text = (
+            "Direction follows the final candles (15m 15:15 / 5m 15:25): "
+            "Up is LONG, Down is SHORT."
+        )
     else:
-        direction_text = f"Direction fades the {anchor_text} candle: Up is SHORT, Down is LONG."
+        direction_text = (
+            "Direction fades the final candles (15m 15:15 / 5m 15:25): "
+            "Up is SHORT, Down is LONG."
+        )
 
     document = f"""<!DOCTYPE html>
 <html lang="en">
@@ -1196,6 +1207,7 @@ Entry: {esc(fmt_day(entry_day))} at the 09:15 open &nbsp;|&nbsp; Exit: {esc(EXIT
 <th>Direction</th>
 <th>15m condition<br><small>15:00 &amp; 15:15 opposite trends</small></th>
 <th>5m condition<br><small>15:20 &amp; 15:25 opposite trends</small></th>
+<th>Alignment<br><small>15m 15:00 trend = 5m 15:20 trend</small></th>
 <th>Result</th>
 <th>Data</th>
 </tr>
@@ -1210,10 +1222,12 @@ Entry: {esc(fmt_day(entry_day))} at the 09:15 open &nbsp;|&nbsp; Exit: {esc(EXIT
 <b>STRATEGY (15-minute and 5-minute candles)</b><br>
 Read on the previous day, the latest completed session. Candles are labelled by start
 time: the last 15-minute candle is 15:15 (second last 15:00); the last 5-minute candle
-is 15:25 (second last 15:20). A stock matches only when BOTH hold:<br>
+is 15:25 (second last 15:20). A stock matches only when ALL THREE hold:<br>
 1) 15m: the 15:00 and 15:15 candles are in opposite trends (one Up, one Down).<br>
 2) 5m: the 15:20 and 15:25 candles are in opposite trends.<br>
-Trend = candle colour (close vs open); a flat candle has no trend and is never opposite.
+3) The 15m 15:00 candle and the 5m 15:20 candle have the same trend.<br>
+Trend = candle colour (close vs open); a flat candle has no trend, so it is never
+opposite or the same.
 {esc(direction_text)}<br>
 <b>Entry:</b> the 09:15 open on entry day. <b>Exit:</b> {esc(EXIT_TIME_LABEL)}.<br><br>
 <b>Data notes:</b> Candles come straight from Yahoo's 15-minute and 5-minute feeds. A
