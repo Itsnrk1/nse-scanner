@@ -11,31 +11,54 @@
 # STRATEGY  (read on the previous day only)
 # =============================================================================
 #
-# "Previous day" = the most recent COMPLETED trading session (today is never
-# used - today is the entry day).
+# "Previous day" = the most recent COMPLETED trading session:
+#   * run BEFORE the market opens, or on a weekend -> the last session
+#     (e.g. Tuesday morning reads Monday, Monday morning reads Friday);
+#   * run AFTER the market has closed (15:30 + DATA_READY_BUFFER_MINUTES) -> TODAY's
+#     session is already complete and is used (Monday evening reads Monday, and
+#     the signals are for Tuesday);
+#   * run WHILE the market is open -> today is still in progress, so the last
+#     completed session (yesterday) is used.
+# The entry day is the next trading session after the one being read.
 #
 # Candles are labelled by their START time. NSE closes at 15:30, so:
 #   15-minute : ... 15:00, 15:15       (15:15 is the last, 15:00 the second last)
 #   5-minute  : ... 15:20, 15:25       (15:25 is the last, 15:20 the second last)
 #
-# ALL THREE conditions must hold:
-#   1) 15m: the last two candles (15:00, 15:15) are in OPPOSITE trends
+# ALL of these must hold:
+#   1) 15m trend:  the last two candles (15:00, 15:15) are in OPPOSITE trends
 #      (one Up, the other Down).
-#   2) 5m:  the last two candles (15:20, 15:25) are in OPPOSITE trends.
-#   3) The 15m 15:00 candle and the 5m 15:20 candle have the SAME trend.
+#   2) 15m volume: the 15:00 candle's volume is HIGHER than the 15:15 candle's.
+#   3) 5m trend:   the last two candles (15:20, 15:25) are in OPPOSITE trends.
+#   4) 5m volume:  the 15:20 candle's volume is HIGHER than the 15:25 candle's.
+#   5) The 15m 15:00 candle and the 5m 15:20 candle have the SAME trend.
 #
 # "Trend" = candle colour (close > open is Up, close < open is Down). A flat
 # candle (close == open) has no trend: it is never "opposite" and never "same".
 #
-# Because of (1), (2) and (3), the 15m 15:15 and 5m 15:25 candles also share
+# Because of (1), (3) and (5), the 15m 15:15 and 5m 15:25 candles also share
 # one trend (the opposite of the 15:00 / 15:20 trend).
 #
 # DIRECTION: the strategy does not say which way to trade, so it is set by
 # DIRECTION_RULE below (default: trade WITH the final candles' trend).
-# TRADE:     Entry = today's 09:15 OPEN, Exit = EXIT_TIME_LABEL.
+# TRADE:     Entry = the 09:15 OPEN of the entry day, Exit = EXIT_TIME_LABEL.
 #
 # A candle with no trades is absent from Yahoo's data and has no trend. A
 # missing candle can therefore only BLOCK a match, never create one.
+#
+# DATA-ACCURACY SAFEGUARDS
+#   * Prices are rounded to 2 decimals, so Yahoo's float noise can never turn a
+#     flat candle into an Up/Down one.
+#   * Zero-volume candles and corrupt candles (price <= 0, close/open outside
+#     the high-low range) are dropped and treated as MISSING.
+#   * Cross-check: the native 15m 15:00 and 15:15 candles are rebuilt from the
+#     5m candles inside them (volume = sum of the 5m volumes). If the two Yahoo
+#     feeds disagree on either candle's trend, or on which of the two 15m
+#     candles has more volume, the symbol is marked DATA CONFLICT and never
+#     produces a signal.
+#   * Every row in the report shows each candle's open -> close, so any signal
+#     can be checked against a chart in seconds.
+#   * Single-stock audit:  python scanner.py --check RELIANCE TCS
 #
 # INSTALL:
 #   python -m pip install yfinance pandas requests curl_cffi
@@ -95,6 +118,14 @@ REQUEST_TIMEOUT = 20
 # broken the share is close to 0%.
 SESSION_COMPLETE_SHARE = 0.20
 
+# Cross-check the native 15m candles against the 5m candles inside them (see
+# header). Keep True for accuracy; set False only to diagnose.
+CROSS_CHECK_FEEDS = True
+
+# If more than this share of scanned symbols show a 15m/5m conflict, the report
+# warns that Yahoo's data is inconsistent today.
+CONFLICT_WARN_SHARE = 0.10
+
 # Which way to trade when a match fires. The final candles (15m 15:15 and
 # 5m 15:25) always share one trend, and the earlier candles (15m 15:00 and
 # 5m 15:20) share the opposite one, so there are only two choices:
@@ -109,6 +140,15 @@ DIRECTION_RULE = "FOLLOW_LAST"
 
 # Exit time shown in the report.
 EXIT_TIME_LABEL = "15:27"
+
+# NSE session times in minutes after midnight (IST).
+MARKET_OPEN_MINUTES = 9 * 60 + 15
+MARKET_CLOSE_MINUTES = 15 * 60 + 30
+
+# After the 15:30 close, Yahoo needs a few minutes to publish the final
+# candles. Today's session is only treated as complete this many minutes after
+# the close (default 15:40); before that the scanner still reads yesterday.
+DATA_READY_BUFFER_MINUTES = 10
 
 
 # =============================================================================
@@ -498,6 +538,29 @@ def clean_yahoo_data(df):
 
     out = out.dropna(subset=["open", "high", "low", "close", "volume"])
 
+    # Yahoo prices carry float32 noise (e.g. 2850.800048828125). NSE ticks are
+    # 0.01 or larger, so 2 decimals keep every real price and remove the noise.
+    for column in ("open", "high", "low", "close"):
+        out[column] = out[column].round(2)
+
+    # Drop candles that cannot be trusted; they then count as MISSING, which
+    # can only block a signal, never create one:
+    #   - volume 0: nothing traded, so there is no real candle;
+    #   - a price <= 0, or open/close outside the high-low range: corrupt data.
+    tolerance = 0.011
+    body_high = out[["open", "close"]].max(axis=1)
+    body_low = out[["open", "close"]].min(axis=1)
+
+    sane = (
+        (out["volume"] > 0)
+        & (out[["open", "high", "low", "close"]].min(axis=1) > 0)
+        & (out["high"] + tolerance >= body_high)
+        & (out["low"] - tolerance <= body_low)
+        & (out["high"] + tolerance >= out["low"])
+    )
+
+    out = out[sane]
+
     out = out.drop_duplicates(subset=["date", "hm"], keep="last")
 
     if out.empty:
@@ -656,9 +719,9 @@ def candle_direction(open_price, close_price):
 
 
 def entry_session_day(today_str):
-    """Entry happens at the next session's open. Today is the entry day on
-    a weekday; on a weekend it rolls forward to Monday. (Exchange holidays
-    are not modelled - there is no holiday calendar to check them against.)"""
+    """First weekday on or after the given date (a weekend rolls forward to
+    Monday). Exchange holidays are not modelled - there is no holiday
+    calendar to check them against."""
 
     day = pd.Timestamp(today_str)
 
@@ -666,6 +729,72 @@ def entry_session_day(today_str):
         day += pd.Timedelta(days=1)
 
     return day.strftime("%Y-%m-%d")
+
+
+_RUN_CONTEXT = None
+
+
+def build_run_context(now=None):
+    """Decide ONCE per run which session is read and which day is the entry.
+
+    today_complete is True on a weekday once the market has closed and Yahoo
+    has had DATA_READY_BUFFER_MINUTES to publish the final candles. Then
+    today's own session is the latest completed one, and the entry day is the
+    next trading day. Otherwise today is excluded (not started, in progress, or
+    not yet final) and today (or the next weekday) is the entry day.
+    Returns a dict: today, today_complete, entry, note."""
+
+    now = now if now is not None else pd.Timestamp.now(tz="Asia/Kolkata")
+    today = now.strftime("%Y-%m-%d")
+    minutes = now.hour * 60 + now.minute
+    weekday = now.weekday() < 5
+    ready_at = MARKET_CLOSE_MINUTES + DATA_READY_BUFFER_MINUTES
+
+    today_complete = weekday and minutes >= ready_at
+
+    if today_complete:
+        tomorrow = (now + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+        entry = entry_session_day(tomorrow)
+        note = (
+            f"The market has closed, so today's session ({fmt_day(today)}) is "
+            f"used as the latest completed session. Entry is the next trading "
+            f"day, {fmt_day(entry)}."
+        )
+    else:
+        entry = entry_session_day(today)
+        note = None
+
+        if weekday and MARKET_OPEN_MINUTES <= minutes < MARKET_CLOSE_MINUTES:
+            note = (
+                "The market is open, so today's session is not complete yet. "
+                "The last completed session is used, and today's 09:15 entry "
+                "price has already passed."
+            )
+        elif weekday and MARKET_CLOSE_MINUTES <= minutes < ready_at:
+            note = (
+                "The market has just closed and Yahoo's closing candles are not "
+                "final yet, so the previous session is used. Run again after "
+                f"{hm_text((ready_at // 60) * 100 + ready_at % 60)} to use today's session."
+            )
+
+    return {
+        "today": today,
+        "today_complete": today_complete,
+        "entry": entry,
+        "note": note,
+    }
+
+
+def get_run_context():
+    """The run context, built once and shared by every worker thread so that
+    all symbols read the same session even if the scan crosses the cutoff."""
+
+    global _RUN_CONTEXT
+
+    if _RUN_CONTEXT is None:
+        _RUN_CONTEXT = build_run_context()
+
+    return _RUN_CONTEXT
 
 
 def day_map(rows):
@@ -692,13 +821,49 @@ def slot_label(key):
     return f"{tf} {hm_text(int(hm))}"
 
 
+def window_hms(start_hm, minutes=15, step=5):
+    """Start times of the step-minute candles inside the candle that starts at
+    start_hm, e.g. 1515 -> [1515, 1520, 1525]."""
+
+    start = (start_hm // 100) * 60 + start_hm % 100
+
+    return [
+        ((start + k) // 60) * 100 + (start + k) % 60
+        for k in range(0, minutes, step)
+    ]
+
+
+def derive_15m_from_5m(day_5m, start_hm):
+    """Rebuild the 15-minute candle starting at start_hm from the 5-minute
+    candles inside it: open = first 5m open, close = last 5m close, volume =
+    sum of the 5m volumes. A 5m
+    candle exists only if it traded, so this equals Yahoo's real 15m candle.
+    Returns None if no 5m candle exists inside the window."""
+
+    bars = [day_5m[h] for h in window_hms(start_hm) if h in day_5m]
+
+    if not bars:
+        return None
+
+    return {
+        "open": bars[0][0],
+        "close": bars[-1][3],
+        "volume": int(round(sum(b[4] for b in bars))),
+    }
+
+
 def evaluate_rows(rows_by_tf):
     """15-minute / 5-minute opposite-trend strategy, read on the previous day
-    (P = the latest completed session). Entry day = today.
+    (P = the latest completed session). Entry day = the next trading day.
 
-    1) 15m 15:00 and 15:15 candles are in opposite trends.
-    2) 5m 15:20 and 15:25 candles are in opposite trends.
+    1) 15m 15:00 and 15:15 candles are in opposite trends, and the 15:00
+       volume is higher than the 15:15 volume.
+    2) 5m 15:20 and 15:25 candles are in opposite trends, and the 15:20
+       volume is higher than the 15:25 volume.
     3) 15m 15:00 and 5m 15:20 candles have the same trend.
+
+    Before a signal is allowed, the 15m candles are cross-checked against the
+    5m candles inside them; a disagreement gives status CONFLICT, not a signal.
     """
 
     if not rows_by_tf:
@@ -706,11 +871,12 @@ def evaluate_rows(rows_by_tf):
 
     by_tf = {tf: day_map(rows) for tf, rows in rows_by_tf.items()}
 
-    # "Today" is the real calendar date and is never a candidate: it is the
-    # entry day, whether the scan runs before the open or mid-session.
-    today = pd.Timestamp.now(tz="Asia/Kolkata").strftime("%Y-%m-%d")
-    entry = entry_session_day(today)
-    dates = sorted({d for days in by_tf.values() for d in days} - {today})
+    # Which session is "previous" is decided once per run (see
+    # build_run_context): today's session counts only once it is complete.
+    ctx = get_run_context()
+    entry = ctx["entry"]
+    excluded = set() if ctx["today_complete"] else {ctx["today"]}
+    dates = sorted({d for days in by_tf.values() for d in days} - excluded)
 
     if not dates:
         return {
@@ -735,7 +901,7 @@ def evaluate_rows(rows_by_tf):
             missing.append(slot_label(key))
         else:
             o, h, l, c, v = bar
-            candles[key] = {"open": o, "close": c}
+            candles[key] = {"open": o, "close": c, "volume": int(round(v))}
 
     if len(missing) == len(SLOTS):
         return {
@@ -753,20 +919,84 @@ def evaluate_rows(rows_by_tf):
     t15_00, t15_15 = trend("15m_1500"), trend("15m_1515")
     t5_20, t5_25 = trend("5m_1520"), trend("5m_1525")
 
-    # A trend of 0 (flat or missing candle) is never "opposite" or "same", so
-    # a missing candle can only block a match.
-    cond_15m = t15_00 != 0 and t15_00 == -t15_15
-    cond_5m = t5_20 != 0 and t5_20 == -t5_25
+    def volume(key):
+        c = candles[key]
+        return c["volume"] if c else None
+
+    v15_00, v15_15 = volume("15m_1500"), volume("15m_1515")
+    v5_20, v5_25 = volume("5m_1520"), volume("5m_1525")
+
+    # Trend: a flat or missing candle (trend 0) is never "opposite" or "same".
+    # Volume: both candles must exist. Either way a missing candle can only
+    # block a match, never create one.
+    trend_15m = t15_00 != 0 and t15_00 == -t15_15
+    trend_5m = t5_20 != 0 and t5_20 == -t5_25
+
+    vol_15m = v15_00 is not None and v15_15 is not None and v15_00 > v15_15
+    vol_5m = v5_20 is not None and v5_25 is not None and v5_20 > v5_25
+
+    cond_15m = trend_15m and vol_15m
+    cond_5m = trend_5m and vol_5m
     cond_align = t15_00 != 0 and t15_00 == t5_20
 
     cond = cond_15m and cond_5m and cond_align
+
+    # Cross-check the two Yahoo feeds against each other.
+    five_day = by_tf.get("5m", {}).get(previous_day, {})
+    derived, conflicts = {}, []
+
+    for hm in (1500, 1515):
+        key = f"15m_{hm:04d}"
+        rebuilt = derive_15m_from_5m(five_day, hm)
+        derived[key] = rebuilt
+        native = candles[key]
+
+        if not CROSS_CHECK_FEEDS or native is None:
+            continue
+
+        if rebuilt is None:
+            conflicts.append(
+                f"15m {hm_text(hm)} exists but the 5m feed has no candle inside it"
+            )
+            continue
+
+        native_trend = candle_direction(native["open"], native["close"])
+        rebuilt_trend = candle_direction(rebuilt["open"], rebuilt["close"])
+
+        if native_trend != rebuilt_trend:
+            conflicts.append(
+                f"15m {hm_text(hm)} is {trend_name(native_trend)} in the 15m feed "
+                f"but {trend_name(rebuilt_trend)} when rebuilt from 5m candles"
+            )
+
+    # The two 15m candles' volume ordering must also agree between the feeds.
+    rebuilt_00, rebuilt_15 = derived.get("15m_1500"), derived.get("15m_1515")
+
+    if (
+        CROSS_CHECK_FEEDS
+        and v15_00 is not None and v15_15 is not None
+        and rebuilt_00 is not None and rebuilt_15 is not None
+    ):
+        native_higher = v15_00 > v15_15
+        rebuilt_higher = rebuilt_00["volume"] > rebuilt_15["volume"]
+
+        if native_higher != rebuilt_higher:
+            conflicts.append(
+                f"15m volume: '15:00 higher than 15:15' is {native_higher} in the "
+                f"15m feed but {rebuilt_higher} when rebuilt from 5m candles"
+            )
 
     # When cond is True, 15m 15:15 and 5m 15:25 share one trend.
     side = t15_15 * DIRECTION_RULES[DIRECTION_RULE]
     direction = "LONG" if side == 1 else "SHORT" if side == -1 else None
 
+    if conflicts:
+        status, direction = "CONFLICT", None
+    else:
+        status = "PASS" if cond else "FAIL"
+
     return {
-        "status": "PASS" if cond else "FAIL",
+        "status": status,
         "date": previous_day,
         "previous_day": previous_day,
         "entry_day": entry,
@@ -775,7 +1005,14 @@ def evaluate_rows(rows_by_tf):
         "cond_15m": cond_15m,
         "cond_5m": cond_5m,
         "cond_align": cond_align,
+        "trend_15m": trend_15m,
+        "vol_15m": vol_15m,
+        "trend_5m": trend_5m,
+        "vol_5m": vol_5m,
         "missing": missing,
+        "conflicts": conflicts,
+        "candles": candles,
+        "derived": derived,
         "details": {
             "t15_00": t15_00, "t15_15": t15_15,
             "t5_20": t5_20, "t5_25": t5_25,
@@ -898,29 +1135,47 @@ def mark_stale(results):
 
 
 def session_warning(results):
-    """Warn when a large share of symbols are missing one of the 4 required
-    candles - a sign of a broad Yahoo data-quality issue, not just isolated
-    thin trading."""
+    """Warn about broad Yahoo data-quality problems: many symbols missing one
+    of the 4 required candles, or many 15m/5m conflicts. Returns text or None."""
 
-    evaluated = [r for r in results if r.get("status") in ("PASS", "FAIL")]
+    evaluated = [
+        r for r in results if r.get("status") in ("PASS", "FAIL", "CONFLICT")
+    ]
 
     if not evaluated:
         return None
+
+    messages = []
 
     complete = sum(1 for r in evaluated if not r.get("missing"))
     share = complete / len(evaluated)
 
     if share < SESSION_COMPLETE_SHARE:
-        return (
+        messages.append(
             f"Only {share:.0%} of scanned symbols have all four required candles "
             f"(15m 15:00 and 15:15; 5m 15:20 and 15:25) on the previous day. "
             f"Yahoo's data may be unusually incomplete - treat matches with "
             f"extra caution and verify on TradingView."
+            + (
+                " Yahoo can lag a few minutes after the close; if you just ran "
+                "this, try again shortly."
+                if get_run_context()["today_complete"] else ""
+            )
         )
 
-    return None
+    conflicts = sum(1 for r in evaluated if r.get("status") == "CONFLICT")
+
+    if conflicts / len(evaluated) > CONFLICT_WARN_SHARE:
+        messages.append(
+            f"{conflicts} of {len(evaluated)} symbols have a 15m/5m data conflict. "
+            f"Yahoo's feeds are inconsistent with each other today; those "
+            f"symbols were blocked from signalling."
+        )
+
+    return " ".join(messages) or None
 
 
+# =============================================================================
 # =============================================================================
 # HTML HELPERS
 # =============================================================================
@@ -972,11 +1227,15 @@ def badge(value):
 
 
 STATUS_LABEL = {
-    "PASS": "PASS", "FAIL": "FAIL", "INCOMPLETE": "INCOMPLETE",
-    "STALE": "STALE", "NO_DATA": "NO DATA", "ERROR": "ERROR",
+    "PASS": "PASS", "FAIL": "FAIL", "CONFLICT": "DATA CONFLICT",
+    "INCOMPLETE": "INCOMPLETE", "STALE": "STALE", "NO_DATA": "NO DATA",
+    "ERROR": "ERROR",
 }
 
-STATUS_RANK = {"PASS": 0, "FAIL": 1, "INCOMPLETE": 2, "STALE": 3, "ERROR": 4, "NO_DATA": 5}
+STATUS_RANK = {
+    "PASS": 0, "FAIL": 1, "CONFLICT": 2, "INCOMPLETE": 3,
+    "STALE": 4, "ERROR": 5, "NO_DATA": 6,
+}
 
 CSS = """
 body {
@@ -991,6 +1250,10 @@ h1 { margin-bottom: 5px; }
 .subtitle { color: #777; line-height: 1.6; }
 .warn {
     background: #fff3cd; border: 1px solid #e0c36a; color: #6b5200;
+    border-radius: 8px; padding: 12px 16px; margin: 18px 0;
+}
+.note {
+    background: #e8f1fb; border: 1px solid #9bbbe0; color: #1d3f66;
     border-radius: 8px; padding: 12px 16px; margin: 18px 0;
 }
 .stats { display: flex; flex-wrap: wrap; gap: 10px; margin: 20px 0; }
@@ -1040,20 +1303,49 @@ small { color: #777; font-size: 10px; }
 """
 
 
+def candle_text(candle, label):
+    """'15:00 Up (100.00->101.00) vol 1,234' for the report; numbers only."""
+
+    if candle is None:
+        return f"{label} missing"
+
+    direction = candle_direction(candle["open"], candle["close"])
+
+    return (
+        f'{label} {trend_name(direction)} '
+        f'({candle["open"]:.2f}&rarr;{candle["close"]:.2f}) '
+        f'vol {candle["volume"]:,}'
+    )
+
+
+def part_badge(value):
+    """Small PASS/FAIL text for one part (trend or volume) of a condition."""
+
+    if value is None:
+        return "-"
+
+    return "PASS" if value else "FAIL"
+
+
 def build_table_row(r):
 
     details = r.get("details")
+    candles = r.get("candles") or {}
     status = r.get("status", "UNKNOWN")
     status_class = {"PASS": "pass", "FAIL": "fail"}.get(status, "skip")
 
     if details:
         note_15m = (
-            f'15:00 {trend_name(details["t15_00"])} / '
-            f'15:15 {trend_name(details["t15_15"])}'
+            candle_text(candles.get("15m_1500"), "15:00") + "<br>"
+            + candle_text(candles.get("15m_1515"), "15:15") + "<br>"
+            + f'trend {part_badge(r.get("trend_15m"))} / '
+            f'volume {part_badge(r.get("vol_15m"))}'
         )
         note_5m = (
-            f'15:20 {trend_name(details["t5_20"])} / '
-            f'15:25 {trend_name(details["t5_25"])}'
+            candle_text(candles.get("5m_1520"), "15:20") + "<br>"
+            + candle_text(candles.get("5m_1525"), "15:25") + "<br>"
+            + f'trend {part_badge(r.get("trend_5m"))} / '
+            f'volume {part_badge(r.get("vol_5m"))}'
         )
         note_align = (
             f'15m 15:00 {trend_name(details["t15_00"])} vs '
@@ -1074,6 +1366,9 @@ def build_table_row(r):
             + ", ".join(esc(m) for m in r["missing"]) + "</small>"
         )
 
+    for conflict in r.get("conflicts") or []:
+        data_text += f"<br><small>CONFLICT: {esc(conflict)}</small>"
+
     if r.get("error"):
         data_text += f"<br><small>{esc(r['error'][:120])}</small>"
 
@@ -1092,10 +1387,11 @@ def build_table_row(r):
 
 
 # =============================================================================
+# =============================================================================
 # GENERATE HTML
 # =============================================================================
 
-def generate_html_report(results, elapsed, universe_source):
+def generate_html_report(results, elapsed, universe_source, run_note=None):
 
     def count(name):
         return sum(1 for r in results if r.get("status") == name)
@@ -1111,14 +1407,15 @@ def generate_html_report(results, elapsed, universe_source):
         return c[0][0] if c else None
 
     previous_day = most_common("previous_day")
-    entry_day = most_common("entry_day") or entry_session_day(
-        pd.Timestamp.now(tz="Asia/Kolkata").strftime("%Y-%m-%d")
-    )
+    entry_day = most_common("entry_day") or get_run_context()["entry"]
 
     scan_time = pd.Timestamp.now(tz="Asia/Kolkata").strftime("%Y-%m-%d %H:%M:%S IST")
 
     warning = session_warning(results)
-    warning_html = f'<div class="warn">{esc(warning)}</div>' if warning else ""
+    warning_html = (
+        (f'<div class="note">{esc(run_note)}</div>' if run_note else "")
+        + (f'<div class="warn">{esc(warning)}</div>' if warning else "")
+    )
 
     if matches:
         match_html = "".join(
@@ -1146,6 +1443,7 @@ def generate_html_report(results, elapsed, universe_source):
         (longs, "Long"),
         (shorts, "Short"),
         (count("FAIL"), "No match"),
+        (count("CONFLICT"), "Data conflict"),
         (count("INCOMPLETE"), "Incomplete"),
         (count("STALE"), "Stale"),
         (count("NO_DATA"), "No data"),
@@ -1205,8 +1503,8 @@ Entry: {esc(fmt_day(entry_day))} at the 09:15 open &nbsp;|&nbsp; Exit: {esc(EXIT
 <th>Symbol</th>
 <th>Previous day</th>
 <th>Direction</th>
-<th>15m condition<br><small>15:00 &amp; 15:15 opposite trends</small></th>
-<th>5m condition<br><small>15:20 &amp; 15:25 opposite trends</small></th>
+<th>15m condition<br><small>15:00 &amp; 15:15 opposite trends; 15:00 vol &gt; 15:15 vol</small></th>
+<th>5m condition<br><small>15:20 &amp; 15:25 opposite trends; 15:20 vol &gt; 15:25 vol</small></th>
 <th>Alignment<br><small>15m 15:00 trend = 5m 15:20 trend</small></th>
 <th>Result</th>
 <th>Data</th>
@@ -1222,18 +1520,23 @@ Entry: {esc(fmt_day(entry_day))} at the 09:15 open &nbsp;|&nbsp; Exit: {esc(EXIT
 <b>STRATEGY (15-minute and 5-minute candles)</b><br>
 Read on the previous day, the latest completed session. Candles are labelled by start
 time: the last 15-minute candle is 15:15 (second last 15:00); the last 5-minute candle
-is 15:25 (second last 15:20). A stock matches only when ALL THREE hold:<br>
-1) 15m: the 15:00 and 15:15 candles are in opposite trends (one Up, one Down).<br>
-2) 5m: the 15:20 and 15:25 candles are in opposite trends.<br>
-3) The 15m 15:00 candle and the 5m 15:20 candle have the same trend.<br>
+is 15:25 (second last 15:20). A stock matches only when ALL of these hold:<br>
+1) 15m trend: the 15:00 and 15:15 candles are in opposite trends (one Up, one Down).<br>
+2) 15m volume: the 15:00 candle's volume is higher than the 15:15 candle's.<br>
+3) 5m trend: the 15:20 and 15:25 candles are in opposite trends.<br>
+4) 5m volume: the 15:20 candle's volume is higher than the 15:25 candle's.<br>
+5) The 15m 15:00 candle and the 5m 15:20 candle have the same trend.<br>
 Trend = candle colour (close vs open); a flat candle has no trend, so it is never
 opposite or the same.
 {esc(direction_text)}<br>
 <b>Entry:</b> the 09:15 open on entry day. <b>Exit:</b> {esc(EXIT_TIME_LABEL)}.<br><br>
-<b>Data notes:</b> Candles come straight from Yahoo's 15-minute and 5-minute feeds. A
-candle with no trades is missing from Yahoo's data and can only block a match. INCOMPLETE
-means no completed session (or none of the four candles) came back. STALE means the
-previous day differs from most other symbols.
+<b>Data notes:</b> Candles come straight from Yahoo's 15-minute and 5-minute feeds.
+Prices are rounded to 2 decimals; zero-volume and corrupt candles are dropped and count as
+missing, which can only block a match. DATA CONFLICT means a native 15m candle's trend, or which 15m candle has more volume,
+disagrees with the same candles rebuilt from the 5m candles inside them, so the symbol is
+blocked rather than trusted. INCOMPLETE means no completed session (or none of the four
+candles) came back. STALE means the previous day differs from most other symbols. Each
+candle is shown as open&rarr;close so a signal can be checked against a chart.
 </div>
 
 </div>
@@ -1246,10 +1549,80 @@ previous day differs from most other symbols.
 
 
 # =============================================================================
-# MAIN
+# SINGLE-STOCK AUDIT   (python scanner.py --check RELIANCE TCS)
 # =============================================================================
 
+def print_audit(r):
+
+    print("=" * 70)
+    print(f"{r.get('symbol')}: {STATUS_LABEL.get(r.get('status'), r.get('status'))}"
+          f"   (data: {r.get('data_status')})")
+
+    if r.get("error"):
+        print("  error:", r["error"])
+
+    if not r.get("previous_day"):
+        print("  no completed session found")
+        return
+
+    print(f"  Previous day: {r['previous_day']}   Entry day: {r.get('entry_day')}")
+
+    candles = r.get("candles") or {}
+    derived = r.get("derived") or {}
+
+    for key in SLOT_KEYS:
+        c = candles.get(key)
+        label = slot_label(key)
+
+        if c is None:
+            print(f"  {label:<10} missing")
+            continue
+
+        d = candle_direction(c["open"], c["close"])
+        line = (
+            f"  {label:<10} {trend_name(d):<5} open {c['open']:.2f}  "
+            f"close {c['close']:.2f}  vol {c['volume']:,}"
+        )
+
+        if key in derived and derived[key]:
+            rb = derived[key]
+            rd = candle_direction(rb["open"], rb["close"])
+            line += (
+                f"   | rebuilt from 5m: {trend_name(rd)} "
+                f"({rb['open']:.2f} -> {rb['close']:.2f}) vol {rb['volume']:,}"
+            )
+
+        print(line)
+
+    if "cond_15m" in r:
+        print(f"  15m opposite trends : {r['trend_15m']}")
+        print(f"  15m 15:00 vol > 15:15: {r['vol_15m']}")
+        print(f"  5m opposite trends  : {r['trend_5m']}")
+        print(f"  5m 15:20 vol > 15:25 : {r['vol_5m']}")
+        print(f"  15:00 == 5m 15:20   : {r['cond_align']}")
+
+    for conflict in r.get("conflicts") or []:
+        print("  CONFLICT:", conflict)
+
+    if r.get("direction"):
+        print("  Direction:", r["direction"])
+
+
+def audit_symbols(symbols):
+
+    if not symbols:
+        print("Usage: python scanner.py --check SYMBOL [SYMBOL ...]")
+        return
+
+    for symbol in symbols:
+        print_audit(scan_one_symbol(symbol.strip().upper()))
+
+
 def main():
+
+    if len(sys.argv) > 1 and sys.argv[1] == "--check":
+        audit_symbols(sys.argv[2:])
+        return
 
     print()
     print("=" * 70)
@@ -1261,6 +1634,13 @@ def main():
     if DIRECTION_RULE not in DIRECTION_RULES:
         print(f"ERROR: DIRECTION_RULE must be one of {list(DIRECTION_RULES)}")
         sys.exit(1)
+
+    # Fix the session being read for the whole run.
+    context = get_run_context()
+
+    if context["note"]:
+        print()
+        print("NOTE:", context["note"])
 
     universe, source = get_stock_universe()
 
@@ -1281,7 +1661,7 @@ def main():
     print("SCAN COMPLETE")
     print("=" * 70)
     print(f"Universe    : {len(universe)}")
-    print(f"Previous day: {reference_date}")
+    print(f"Previous day: {reference_date}   Entry day: {context['entry']}")
     print(f"Matches     : {len(matches)}")
     print(f"Time        : {elapsed:.1f} seconds")
     print()
@@ -1299,7 +1679,7 @@ def main():
 
     print()
 
-    for name in ("PASS", "FAIL", "INCOMPLETE", "STALE", "NO_DATA", "ERROR"):
+    for name in ("PASS", "FAIL", "CONFLICT", "INCOMPLETE", "STALE", "NO_DATA", "ERROR"):
         n = sum(1 for r in results if r.get("status") == name)
         print(f"{name:<11}: {n}")
 
@@ -1319,7 +1699,7 @@ def main():
         print()
         print("WARNING:", warning)
 
-    generate_html_report(results, elapsed, source)
+    generate_html_report(results, elapsed, source, context["note"])
 
     print()
     print("HTML report: index.html")
