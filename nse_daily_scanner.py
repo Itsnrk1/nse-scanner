@@ -2,9 +2,13 @@
 # NSE DAILY MOMENTUM SCANNER - 15-MIN / 3-MIN / 1-MIN CLOSING-CANDLE VERSION
 # =============================================================================
 #
-# Downloads Yahoo Finance NATIVE 15-minute and 1-minute candles (two downloads
-# per symbol). Yahoo has no 3-minute feed, so the 3-minute candles are built
-# from the 1-minute candles.
+# Downloads NATIVE 15-minute and 1-minute candles (two downloads per symbol)
+# from a free source that needs no API key:
+#   * NSE's own charting feed (charting.nseindia.com) - the exchange's data
+#     (default; see DATA_SOURCE), with
+#   * Yahoo Finance as an automatic per-stock fallback (FALLBACK_TO_YAHOO).
+# Neither has a 3-minute feed, so the 3-minute candles are built from the
+# 1-minute candles.
 # Universe: Nifty 500 CSV -> NSE equity list -> built-in fallback.
 # Output: index.html (a plain dashboard)
 #
@@ -50,8 +54,10 @@
 # trend, i.e. the 15m 15:00 / 3m 15:24 / 1m 15:28 trend: Up = LONG, Down = SHORT).
 # TRADE:     Entry = the 09:15 OPEN of the entry day, Exit = EXIT_TIME_LABEL.
 #
-# A candle with no trades is absent from Yahoo's data. A missing candle can
-# therefore only BLOCK a match, never create one.
+# A candle with no trades is absent from the data. By default a missing
+# candle can only BLOCK a match, never create one. Optionally
+# MISSING_LAST_CANDLE_IS_ZERO_VOLUME treats a missing LAST 3m/1m candle as
+# volume 0 (see CONFIGURATION).
 #
 # DATA-ACCURACY SAFEGUARDS
 #   * Prices are rounded to 2 decimals, so Yahoo's float noise can never turn a
@@ -67,16 +73,20 @@
 #   * Every row in the report shows each candle's open -> close and volume, so
 #     any signal can be checked against a chart in seconds.
 #   * Single-stock audit:  python scanner.py --check RELIANCE TCS
+#   * Source test:         python scanner.py --compare RELIANCE   (NSE vs Yahoo)
 #
 # INSTALL:
-#   python -m pip install yfinance pandas requests curl_cffi
+#   python -m pip install pandas requests
+#   (plus: yfinance curl_cffi - only needed for Yahoo / the Yahoo fallback)
 #
 # =============================================================================
 
 import html
+import json
 import logging
 import random
 import sys
+import threading
 import time
 import warnings
 
@@ -89,14 +99,11 @@ import requests
 
 warnings.filterwarnings("ignore")
 
+# yfinance is only needed for DATA_SOURCE = "YAHOO" or the Yahoo fallback.
 try:
     import yfinance as yf
 except ImportError:
-    print()
-    print("ERROR: yfinance is not installed.")
-    print("Install with: pip install yfinance pandas requests curl_cffi")
-    print()
-    sys.exit(1)
+    yf = None
 
 # yfinance logs every failed ticker; we report those ourselves.
 logging.getLogger("yfinance").setLevel(logging.CRITICAL)
@@ -135,6 +142,40 @@ CROSS_CHECK_FEEDS = True
 # If more than this share of scanned symbols show a 15m/1m conflict, the report
 # warns that Yahoo's data is inconsistent today.
 CONFLICT_WARN_SHARE = 0.10
+
+# A candle with no trades is absent from the data. For the volume rules
+# ("second-last volume > last volume"), a LAST candle with no trades has volume
+# 0, so:
+#   False -> a missing last candle BLOCKS the match (default, strictest)
+#   True  -> a missing last candle counts as volume 0: the rule passes whenever
+#            the second-last candle traded. Many more stocks qualify, but it
+#            admits thin stocks that did not trade in the final minute (1m
+#            15:29) or final 3 minutes (3m 15:27). The second-last candles
+#            must always exist (their trends are needed for the alignment), and
+#            the 15m candles need both to exist (opposite trends).
+MISSING_LAST_CANDLE_IS_ZERO_VOLUME = False
+
+# Where the candles come from (both are free and need no API key):
+#   "NSE"   -> NSE's own charting feed (charting.nseindia.com): the exchange's
+#              data. Unofficial, so NSE may rate-limit or block it (cloud
+#              servers such as GitHub Actions are often blocked).
+#   "YAHOO" -> Yahoo Finance via yfinance.
+DATA_SOURCE = "NSE"
+
+# If a stock cannot be fetched from NSE (blocked, odd format, no data), try
+# Yahoo for that stock. The Data column of the report shows which source each
+# stock came from. Set False to use NSE only (yfinance is then not needed).
+FALLBACK_TO_YAHOO = True
+
+# Days of history requested from NSE (only the last session is needed).
+NSE_HISTORY_DAYS = 8
+
+# Stock -> NSE chart token, saved between runs so each symbol is looked up once.
+NSE_TOKEN_CACHE_FILE = "nse_token_cache.json"
+
+# After this many NSE failures in a row (not "no data"), NSE is considered
+# blocked for the rest of the run and the scanner goes straight to the fallback.
+NSE_MAX_CONSECUTIVE_FAILURES = 20
 
 # Which way to trade when a match fires. The second-last candles (15m 15:00,
 # 3m 15:24, 1m 15:28) always share one trend - the "alignment trend" - so there
@@ -586,6 +627,300 @@ def clean_yahoo_data(df):
 
 
 # =============================================================================
+# NSE CHARTING SOURCE   (free, no API key)
+# =============================================================================
+#
+# NSE's own chart site serves candles through two JSON endpoints (the same ones
+# the open-source `openchart` package uses):
+#   1) symbolsDynamic       : symbol -> scripcode (token)
+#   2) symbolHistoricalData : token + time range + interval -> candles
+# It is unofficial and undocumented, so it can change or be blocked. Any
+# failure for a stock falls back to Yahoo when FALLBACK_TO_YAHOO is True.
+#
+# NSE labels a candle by its END time minus one second (the last 1-minute
+# candle of the day is 15:29:59, the last 15-minute candle also 15:29:59).
+# This code converts that to the START-time labels used everywhere else (15:29
+# and 15:15) and REFUSES any timestamp format it does not recognise, so candles
+# can never be silently mislabelled.
+
+NSE_SEARCH_URL = "https://charting.nseindia.com/v1/exchanges/symbolsDynamic"
+NSE_HISTORY_URL = "https://charting.nseindia.com/v1/charts/symbolHistoricalData"
+NSE_HOME_URL = "https://www.nseindia.com"
+
+NSE_INTERVAL_MINUTES = {"15m": 15, "1m": 1}
+
+NSE_CHART_HEADERS = {
+    "User-Agent":
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/120.0.0.0 Safari/537.36",
+    "Accept": "application/json, text/plain, */*",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Content-Type": "application/json",
+    "Origin": "https://charting.nseindia.com",
+    "Referer": "https://charting.nseindia.com/",
+}
+
+_nse_local = threading.local()
+_nse_lock = threading.Lock()
+_nse_tokens = {}
+_nse_state = {"failures": 0, "blocked": False}
+
+
+def nse_session(refresh=False):
+    """One requests session per worker thread, with NSE's cookies set."""
+
+    session = getattr(_nse_local, "session", None)
+
+    if session is None or refresh:
+        session = requests.Session()
+        session.headers.update(NSE_CHART_HEADERS)
+
+        try:
+            session.get(NSE_HOME_URL, timeout=REQUEST_TIMEOUT)
+        except Exception:
+            pass
+
+        _nse_local.session = session
+
+    return session
+
+
+def nse_post(url, payload):
+    """POST JSON to NSE's chart API and return the parsed reply. Retries
+    rate limits and blocks with a fresh session; raises RuntimeError with a
+    readable reason if every attempt fails."""
+
+    last_error = "NSE request failed"
+    refresh = False
+
+    for attempt in range(MAX_RETRIES):
+
+        try:
+            response = nse_session(refresh).post(
+                url, json=payload, timeout=REQUEST_TIMEOUT
+            )
+            refresh = False
+            status = response.status_code
+
+            if status in (401, 403):
+                last_error = (
+                    f"NSE refused the request (HTTP {status}); "
+                    f"NSE may be blocking this network"
+                )
+                refresh = True
+            elif status == 429:
+                last_error = "NSE rate limit (HTTP 429)"
+                time.sleep(4.0 * (2 ** attempt))
+            elif status >= 400:
+                last_error = f"NSE HTTP {status}"
+            else:
+                try:
+                    return response.json()
+                except ValueError:
+                    last_error = "NSE returned a non-JSON reply (probably a block page)"
+                    refresh = True
+
+        except requests.RequestException as e:
+            last_error = f"NSE network error: {type(e).__name__}"
+            refresh = True
+
+        if attempt < MAX_RETRIES - 1:
+            time.sleep(1.0 * (2 ** attempt) + random.uniform(0.2, 1.0))
+
+    raise RuntimeError(last_error)
+
+
+def nse_lookup(symbol):
+    """(token, chart_symbol, symbol_type) for an equity, or None if NSE has no
+    exact match. An exact SYMBOL or SYMBOL-EQ match is required: a stock is
+    never guessed from a partial match."""
+
+    with _nse_lock:
+        if symbol in _nse_tokens:
+            return _nse_tokens[symbol]
+
+    result = nse_post(NSE_SEARCH_URL, {"symbol": symbol, "segment": "EQ"})
+    found = None
+
+    if isinstance(result, dict) and result.get("status") and result.get("data"):
+        wanted = {symbol.upper(), f"{symbol.upper()}-EQ"}
+
+        for item in result["data"]:
+            if str(item.get("symbol", "")).upper() in wanted:
+                found = (
+                    str(item["scripcode"]), str(item["symbol"]), str(item["type"])
+                )
+                break
+
+    with _nse_lock:
+        _nse_tokens[symbol] = found
+
+    return found
+
+
+def nse_candles_to_frame(data, minutes):
+    """NSE candles -> a Yahoo-style frame (Datetime index = candle START time in
+    IST; Open/High/Low/Close/Volume) that clean_yahoo_data understands.
+
+    Raises ValueError for a format it does not recognise rather than guessing."""
+
+    df = pd.DataFrame(data)
+
+    needed = ("time", "open", "high", "low", "close", "volume")
+    absent = [c for c in needed if c not in df.columns]
+
+    if absent:
+        raise ValueError(f"unexpected NSE candle columns (missing {absent})")
+
+    stamp = pd.to_datetime(
+        pd.to_numeric(df["time"], errors="coerce"), unit="ms", errors="coerce"
+    )
+
+    keep = stamp.notna()
+    df = df.loc[keep].reset_index(drop=True)
+    stamp = stamp.loc[keep].reset_index(drop=True)
+
+    if stamp.empty:
+        return None
+
+    def in_session(values):
+        minute_of_day = values.dt.hour * 60 + values.dt.minute
+        return ((minute_of_day >= 9 * 60) & (minute_of_day <= 15 * 60 + 35)).mean()
+
+    # NSE normally encodes India wall-clock time as if it were UTC. If the
+    # stamps only look like trading hours after +05:30, they are real UTC.
+    if (
+        in_session(stamp) < 0.5
+        and in_session(stamp + pd.Timedelta(hours=5, minutes=30)) >= 0.9
+    ):
+        stamp = stamp + pd.Timedelta(hours=5, minutes=30)
+
+    if (stamp.dt.second == 59).mean() < 0.99:
+        raise ValueError(
+            "NSE candle timestamps are not in the expected "
+            "'end time minus one second' format"
+        )
+
+    start = stamp + pd.Timedelta(seconds=1) - pd.Timedelta(minutes=minutes)
+
+    minute_of_day = start.dt.hour * 60 + start.dt.minute
+
+    if ((minute_of_day - MARKET_OPEN_MINUTES) % minutes != 0).mean() > 0.01:
+        raise ValueError("NSE candles are not aligned to the 09:15 grid")
+
+    out = pd.DataFrame({
+        "Open": pd.to_numeric(df["open"], errors="coerce"),
+        "High": pd.to_numeric(df["high"], errors="coerce"),
+        "Low": pd.to_numeric(df["low"], errors="coerce"),
+        "Close": pd.to_numeric(df["close"], errors="coerce"),
+        "Volume": pd.to_numeric(df["volume"], errors="coerce"),
+    })
+
+    index = pd.DatetimeIndex(start).tz_localize("Asia/Kolkata")
+    index.name = "Datetime"
+    out.index = index
+
+    return out
+
+
+def fetch_interval_nse(symbol, interval):
+    """One timeframe from NSE's chart feed. Returns (rows, info) like
+    fetch_interval: rows is a cleaned DataFrame, or None with info "NO_DATA" or
+    an error message."""
+
+    try:
+        found = nse_lookup(symbol)
+
+        if found is None:
+            return None, "NO_DATA"
+
+        token, chart_symbol, symbol_type = found
+        minutes = NSE_INTERVAL_MINUTES[interval]
+        now = int(time.time())
+
+        result = nse_post(NSE_HISTORY_URL, {
+            "token": token,
+            "fromDate": now - NSE_HISTORY_DAYS * 86400,
+            "toDate": now,
+            "symbol": chart_symbol,
+            "symbolType": symbol_type,
+            "chartType": "I",
+            "timeInterval": minutes,
+        })
+
+        data = result.get("data") if isinstance(result, dict) else None
+
+        if not data:
+            return None, "NO_DATA"
+
+        frame = nse_candles_to_frame(data, minutes)
+
+        if frame is None:
+            return None, "NO_DATA"
+
+        cleaned = clean_yahoo_data(frame)
+
+        if cleaned is None or cleaned.empty:
+            return None, "NO_DATA"
+
+        return cleaned, "OK"
+
+    except Exception as e:
+        return None, f"{type(e).__name__}: {e}"[:240]
+
+
+def load_nse_token_cache():
+    try:
+        with open(NSE_TOKEN_CACHE_FILE, encoding="utf-8") as file:
+            saved = json.load(file)
+
+        with _nse_lock:
+            for symbol, value in saved.items():
+                if isinstance(value, list) and len(value) == 3:
+                    _nse_tokens[symbol] = tuple(value)
+    except Exception:
+        pass
+
+
+def save_nse_token_cache():
+    with _nse_lock:
+        saved = {k: list(v) for k, v in _nse_tokens.items() if v}
+
+    if not saved:
+        return
+
+    try:
+        with open(NSE_TOKEN_CACHE_FILE, "w", encoding="utf-8") as file:
+            json.dump(saved, file)
+    except Exception:
+        pass
+
+
+def nse_record(ok):
+    """Circuit breaker: after NSE_MAX_CONSECUTIVE_FAILURES failures in a row
+    NSE is treated as blocked for the rest of the run."""
+
+    with _nse_lock:
+        if ok:
+            _nse_state["failures"] = 0
+            return
+
+        _nse_state["failures"] += 1
+
+        if (
+            _nse_state["failures"] >= NSE_MAX_CONSECUTIVE_FAILURES
+            and not _nse_state["blocked"]
+        ):
+            _nse_state["blocked"] = True
+            print()
+            print(
+                f"NOTE: NSE failed {NSE_MAX_CONSECUTIVE_FAILURES} times in a row "
+                f"- treating it as blocked for the rest of this run."
+            )
+
+
+# =============================================================================
 # YAHOO DOWNLOAD
 # =============================================================================
 #
@@ -605,6 +940,9 @@ def yahoo_download(symbol, period, interval):
     """Returns (dataframe, None) on success, or (None, reason).
     reason == "NO_DATA" means Yahoo has nothing for this ticker;
     any other string is a real error message."""
+
+    if yf is None:
+        return None, "yfinance is not installed"
 
     ticker = yahoo_ticker(symbol)
     last_error = "NO_DATA"
@@ -687,19 +1025,15 @@ def fetch_interval(symbol, interval):
     return None, error
 
 
-def fetch_symbol_rows(symbol):
-    """Returns (rows_by_timeframe, info): native 15m and 1m data, each straight
-    from Yahoo's own feed for that timeframe. If rows_by_timeframe is None,
-    info is "NO_DATA" or an error message. Otherwise info is "OK" or
-    "FALLBACK" (a longer window was needed for at least one timeframe)."""
-
-    # Small random delay so the workers do not hit Yahoo in one burst.
-    time.sleep(random.uniform(0.05, 0.25))
+def fetch_all_timeframes(symbol, fetcher):
+    """Both timeframes for one symbol from one source (fetcher). Returns
+    (rows_by_timeframe, info); rows_by_timeframe is None unless every timeframe
+    came back, and then info is "NO_DATA" or an error message."""
 
     rows_by_tf, infos, errors = {}, [], []
 
     for tf in TIMEFRAMES:
-        rows, info = fetch_interval(symbol, tf)
+        rows, info = fetcher(symbol, tf)
 
         if rows is None:
             errors.append(info)
@@ -715,6 +1049,47 @@ def fetch_symbol_rows(symbol):
     return None, (real_errors[0] if real_errors else "NO_DATA")
 
 
+def fetch_symbol_rows(symbol):
+    """Returns (rows_by_timeframe, info, source): native 15m and 1m candles.
+    Both timeframes always come from the SAME source. With DATA_SOURCE "NSE"
+    the stock falls back to Yahoo as a whole if NSE fails and
+    FALLBACK_TO_YAHOO is True. If rows_by_timeframe is None, info is "NO_DATA"
+    or an error message. Otherwise info is "OK" or "FALLBACK" (a longer Yahoo
+    window was needed)."""
+
+    # Small random delay so the workers do not hit the source in one burst.
+    time.sleep(random.uniform(0.05, 0.25))
+
+    if DATA_SOURCE == "YAHOO":
+        rows, info = fetch_all_timeframes(symbol, fetch_interval)
+        return rows, info, "Yahoo"
+
+    nse_info = "NSE skipped (blocked earlier in this run)"
+
+    if not _nse_state["blocked"]:
+        rows, nse_info = fetch_all_timeframes(symbol, fetch_interval_nse)
+
+        if rows is not None:
+            nse_record(True)
+            return rows, nse_info, "NSE"
+
+        nse_record(nse_info == "NO_DATA")
+
+    if not FALLBACK_TO_YAHOO:
+        return None, nse_info, "NSE"
+
+    rows, yahoo_info = fetch_all_timeframes(symbol, fetch_interval)
+
+    if rows is not None:
+        return rows, yahoo_info, "Yahoo (fallback)"
+
+    if nse_info == "NO_DATA" and yahoo_info == "NO_DATA":
+        return None, "NO_DATA", "NSE"
+
+    return None, f"NSE: {nse_info} | Yahoo: {yahoo_info}"[:240], "NSE"
+
+
+# =============================================================================
 # =============================================================================
 # STRATEGY HELPERS
 # =============================================================================
@@ -787,7 +1162,7 @@ def build_run_context(now=None):
             )
         elif weekday and MARKET_CLOSE_MINUTES <= minutes < ready_at:
             note = (
-                "The market has just closed and Yahoo's closing candles are not "
+                "The market has just closed and the closing candles are not "
                 "final yet, so the previous session is used. Run again after "
                 f"{hm_text((ready_at // 60) * 100 + ready_at % 60)} to use today's session."
             )
@@ -985,8 +1360,15 @@ def evaluate_rows(rows_by_tf):
     v1_28, v1_29 = volume("1m_1528"), volume("1m_1529")
 
     def higher(first, second):
-        # Both candles must exist; a missing candle can only block a match.
-        return first is not None and second is not None and first > second
+        # The second-last candle must exist. A missing LAST candle has no
+        # trades, i.e. volume 0: it passes only if the switch above is on.
+        if first is None:
+            return False
+
+        if second is None:
+            return MISSING_LAST_CANDLE_IS_ZERO_VOLUME
+
+        return first > second
 
     # 15m: opposite trends (flat or missing = trend 0, never opposite) + volume.
     trend_15m = t15_00 != 0 and t15_00 == -t15_15
@@ -1081,6 +1463,7 @@ def evaluate_rows(rows_by_tf):
         "conflicts": conflicts,
         "candles": candles,
         "derived": derived,
+        "tail_1m": sorted(h for h in one_day if h >= 1520),
         "details": {
             "t15_00": t15_00, "t15_15": t15_15,
             "t3_24": t3_24, "t3_27": t3_27,
@@ -1095,24 +1478,33 @@ def evaluate_rows(rows_by_tf):
 
 def scan_one_symbol(symbol):
 
+    source = None
+
     try:
-        rows, info = fetch_symbol_rows(symbol)
+        rows, info, source = fetch_symbol_rows(symbol)
 
         if rows is None:
 
             if info == "NO_DATA":
-                return {"symbol": symbol, "status": "NO_DATA", "data_status": "NO_DATA"}
+                return {
+                    "symbol": symbol,
+                    "status": "NO_DATA",
+                    "data_status": "NO_DATA",
+                    "source": source,
+                }
 
             return {
                 "symbol": symbol,
                 "status": "ERROR",
                 "data_status": "ERROR",
                 "error": info,
+                "source": source,
             }
 
         result = evaluate_rows(rows)
         result["symbol"] = symbol
         result["data_status"] = info
+        result["source"] = source
 
         return result
 
@@ -1122,6 +1514,7 @@ def scan_one_symbol(symbol):
             "status": "ERROR",
             "data_status": "ERROR",
             "error": f"{type(e).__name__}: {e}"[:240],
+            "source": source,
         }
 
 
@@ -1224,10 +1617,10 @@ def session_warning(results):
             f"Only {share:.0%} of scanned symbols have all six required candles "
             f"(15m 15:00 and 15:15; 3m 15:24 and 15:27; 1m 15:28 and 15:29) on "
             f"the previous day. "
-            f"Yahoo's data may be unusually incomplete - treat matches with "
+            f"The data may be unusually incomplete - treat matches with "
             f"extra caution and verify on TradingView."
             + (
-                " Yahoo can lag a few minutes after the close; if you just ran "
+                " The data feed can lag a few minutes after the close; if you just ran "
                 "this, try again shortly."
                 if get_run_context()["today_complete"] else ""
             )
@@ -1238,7 +1631,7 @@ def session_warning(results):
     if conflicts / len(evaluated) > CONFLICT_WARN_SHARE:
         messages.append(
             f"{conflicts} of {len(evaluated)} symbols have a 15m/1m data conflict. "
-            f"Yahoo's feeds are inconsistent with each other today; those "
+            f"The 15m and 1m feeds are inconsistent with each other today; those "
             f"symbols were blocked from signalling."
         )
 
@@ -1407,7 +1800,10 @@ def build_funnel(results):
 
     got_data = [r for r in results if r.get("status") not in ("NO_DATA", "ERROR")]
     evaluated = [r for r in results if "cond_15m" in r]
-    full = [r for r in evaluated if not r.get("missing")]
+    allowed_missing = (
+        {"3m 15:27", "1m 15:29"} if MISSING_LAST_CANDLE_IS_ZERO_VOLUME else set()
+    )
+    full = [r for r in evaluated if set(r.get("missing") or []) <= allowed_missing]
     step_1 = [r for r in full if r.get("trend_15m")]
     step_2 = [r for r in step_1 if r.get("vol_15m")]
     step_3 = [r for r in step_2 if r.get("vol_3m")]
@@ -1420,7 +1816,11 @@ def build_funnel(results):
         ("Stocks scanned", len(results)),
         ("Data downloaded (no error / no-data)", len(got_data)),
         ("A completed session found", len(evaluated)),
-        ("All six candles present", len(full)),
+        (
+            "All six candles present"
+            + (" (last 3m/1m may be missing)" if allowed_missing else ""),
+            len(full),
+        ),
         ("15m: 15:00 and 15:15 opposite trends", len(step_1)),
         ("15m: 15:00 volume > 15:15 volume", len(step_2)),
         ("3m: 15:24 volume > 15:27 volume", len(step_3)),
@@ -1431,6 +1831,28 @@ def build_funnel(results):
     ]
 
 
+def missing_summary(results):
+    """How many stocks lack each of the six candles, and how many lack ONLY the
+    last 3m / 1m candle (the ones MISSING_LAST_CANDLE_IS_ZERO_VOLUME would
+    recover). Returns (per_slot, only_last, evaluated_count)."""
+
+    evaluated = [r for r in results if "cond_15m" in r]
+    counts = Counter()
+
+    for r in evaluated:
+        for label in r.get("missing") or []:
+            counts[label] += 1
+
+    per_slot = [(slot_label(k), counts.get(slot_label(k), 0)) for k in SLOT_KEYS]
+
+    last_only = sum(
+        1 for r in evaluated
+        if r.get("missing") and set(r["missing"]) <= {"3m 15:27", "1m 15:29"}
+    )
+
+    return per_slot, last_only, len(evaluated)
+
+
 def funnel_console(results):
 
     lines, previous = [], None
@@ -1439,6 +1861,19 @@ def funnel_console(results):
         lost = f"  (-{previous - count})" if previous is not None and previous > count else ""
         lines.append(f"  {count:>5}  {label}{lost}")
         previous = count
+
+    per_slot, last_only, total = missing_summary(results)
+
+    lines.append("")
+    lines.append(f"  Stocks missing each candle (of {total} with a session):")
+
+    for label, count in per_slot:
+        lines.append(f"  {count:>5}  {label}")
+
+    lines.append(
+        f"  {last_only:>5}  missing ONLY the last 3m/1m candle "
+        f"(MISSING_LAST_CANDLE_IS_ZERO_VOLUME = {MISSING_LAST_CANDLE_IS_ZERO_VOLUME})"
+    )
 
     return "\n".join(lines)
 
@@ -1458,10 +1893,24 @@ def funnel_html(results):
         )
         previous = count
 
+    per_slot, last_only, total = missing_summary(results)
+
+    missing_body = "".join(
+        f'<tr><td>{esc(label)}</td><td>{count}</td></tr>' for label, count in per_slot
+    )
+    missing_body += (
+        f'<tr><td>Missing ONLY the last 3m/1m candle '
+        f'(MISSING_LAST_CANDLE_IS_ZERO_VOLUME = '
+        f'{esc(MISSING_LAST_CANDLE_IS_ZERO_VOLUME)})</td><td>{last_only}</td></tr>'
+    )
+
     return (
         '<div class="match-box"><h2>Where stocks dropped out</h2>'
         '<div class="table-wrap"><table class="funnel"><tbody>'
-        f'{body}</tbody></table></div></div>'
+        f'{body}</tbody></table></div>'
+        f'<h2 style="margin-top:22px">Stocks missing each candle (of {total} with a session)</h2>'
+        '<div class="table-wrap"><table class="funnel"><tbody>'
+        f'{missing_body}</tbody></table></div></div>'
     )
 
 
@@ -1502,6 +1951,9 @@ def build_table_row(r):
     }.get(r.get("data_status"), r.get("data_status"))
 
     data_text = cell(data_label)
+
+    if r.get("source"):
+        data_text += f" ({esc(r['source'])})"
 
     if r.get("missing"):
         data_text += (
@@ -1554,6 +2006,15 @@ def generate_html_report(results, elapsed, universe_source, run_note=None):
 
     scan_time = pd.Timestamp.now(tz="Asia/Kolkata").strftime("%Y-%m-%d %H:%M:%S IST")
 
+    source_counts = Counter(
+        r["source"] for r in results
+        if r.get("source") and r.get("status") not in ("NO_DATA", "ERROR")
+    )
+    source_text = (
+        ", ".join(f"{name}: {n} stocks" for name, n in source_counts.most_common())
+        or DATA_SOURCE
+    )
+
     warning = session_warning(results)
     warning_html = (
         (f'<div class="note">{esc(run_note)}</div>' if run_note else "")
@@ -1598,6 +2059,11 @@ def generate_html_report(results, elapsed, universe_source, run_note=None):
         f'<div class="stat"><b>{value}</b>{label}</div>' for value, label in stats
     )
 
+    zero_note = (
+        " A last 3m/1m candle with no trades counts as volume 0."
+        if MISSING_LAST_CANDLE_IS_ZERO_VOLUME else ""
+    )
+
     if DIRECTION_RULES[DIRECTION_RULE] == 1:
         direction_text = (
             "Direction follows the alignment trend (the second-last candles: "
@@ -1627,7 +2093,7 @@ def generate_html_report(results, elapsed, universe_source, run_note=None):
 <div class="subtitle">
 Generated: {esc(scan_time)}<br>
 Universe: {esc(universe_source)}<br>
-Yahoo Finance 15-minute and 1-minute data (3-minute candles built from 1-minute)<br>
+Data: {esc(source_text)} - 15-minute and 1-minute candles (3-minute built from 1-minute)<br>
 Previous day: {esc(fmt_day(previous_day))}<br>
 Entry: {esc(fmt_day(entry_day))} at the 09:15 open &nbsp;|&nbsp; Exit: {esc(EXIT_TIME_LABEL)}
 </div>
@@ -1680,11 +2146,12 @@ Trend = candle colour (close vs open); a flat candle has no trend, so it is neve
 opposite or the same.
 {esc(direction_text)}<br>
 <b>Entry:</b> the 09:15 open on entry day. <b>Exit:</b> {esc(EXIT_TIME_LABEL)}.<br><br>
-<b>Data notes:</b> 15-minute and 1-minute candles come straight from Yahoo's own feeds;
-Yahoo has no 3-minute feed, so 3-minute candles are built from the 1-minute candles on a
+<b>Data notes:</b> 15-minute and 1-minute candles come straight from the data source's own
+feeds (NSE's charting feed, or Yahoo as a fallback - shown per stock in the Data column);
+there is no 3-minute feed, so 3-minute candles are built from the 1-minute candles on a
 09:15 grid (open = first, close = last, volume = sum). Prices are rounded to 2 decimals;
 zero-volume and corrupt candles are dropped and count as missing, which can only block a
-match. DATA CONFLICT means a native 15m candle's trend, or which 15m candle has more
+match.{zero_note} DATA CONFLICT means a native 15m candle's trend, or which 15m candle has more
 volume, disagrees with the same candles rebuilt from the 1m candles inside them, so the
 symbol is blocked rather than trusted. INCOMPLETE means no completed session (or none of
 the six candles) came back. STALE means the previous day differs from most other symbols.
@@ -1709,7 +2176,7 @@ def print_audit(r):
 
     print("=" * 70)
     print(f"{r.get('symbol')}: {STATUS_LABEL.get(r.get('status'), r.get('status'))}"
-          f"   (data: {r.get('data_status')})")
+          f"   (data: {r.get('data_status')}, source: {r.get('source')})")
 
     if r.get("error"):
         print("  error:", r["error"])
@@ -1719,6 +2186,10 @@ def print_audit(r):
         return
 
     print(f"  Previous day: {r['previous_day']}   Entry day: {r.get('entry_day')}")
+
+    if r.get("tail_1m") is not None:
+        tail = ", ".join(hm_text(h) for h in r["tail_1m"]) or "none"
+        print(f"  1m candles returned from 15:20 on: {tail}")
 
     candles = r.get("candles") or {}
     derived = r.get("derived") or {}
@@ -1771,10 +2242,96 @@ def audit_symbols(symbols):
         print_audit(scan_one_symbol(symbol.strip().upper()))
 
 
+# =============================================================================
+# SOURCE TEST   (python scanner.py --compare RELIANCE TCS)
+# =============================================================================
+
+def compare_sources(symbols):
+    """Fetch the same stock from NSE and from Yahoo and print the six strategy
+    candles side by side, so the two sources can be checked against each other
+    (and against a chart) before trusting a scan."""
+
+    if not symbols:
+        print("Usage: python scanner.py --compare SYMBOL [SYMBOL ...]")
+        return
+
+    def candle_line(candle):
+        if candle is None:
+            return "missing"
+
+        return (
+            f"{candle['open']:>9.2f} {candle['close']:>9.2f} "
+            f"{candle['volume']:>10,}"
+        )
+
+    for symbol in symbols:
+        symbol = symbol.strip().upper()
+        evaluated = {}
+
+        for label, fetcher in (("NSE", fetch_interval_nse), ("Yahoo", fetch_interval)):
+            rows_by_tf, errors = {}, []
+
+            for tf in TIMEFRAMES:
+                rows, info = fetcher(symbol, tf)
+
+                if rows is None:
+                    errors.append(f"{tf}: {info}")
+                else:
+                    rows_by_tf[tf] = rows
+
+            if len(rows_by_tf) == len(TIMEFRAMES):
+                evaluated[label] = (evaluate_rows(rows_by_tf), [])
+            else:
+                evaluated[label] = (None, errors)
+
+        print("=" * 78)
+        print(symbol)
+
+        for label in ("NSE", "Yahoo"):
+            result, errors = evaluated[label]
+
+            if result is None:
+                print(f"  {label:<6}: no data  ({'; '.join(errors)})")
+            else:
+                print(f"  {label:<6}: session {result.get('previous_day')}  "
+                      f"status {result.get('status')}")
+
+        nse, yahoo = evaluated["NSE"][0], evaluated["Yahoo"][0]
+
+        if nse is None or yahoo is None or "candles" not in nse or "candles" not in yahoo:
+            continue
+
+        print(f"  {'candle':<10} {'NSE open':>9} {'close':>9} {'volume':>10}   "
+              f"{'Yahoo open':>10} {'close':>9} {'volume':>10}   verdict")
+
+        for key in SLOT_KEYS:
+            a, b = nse["candles"].get(key), yahoo["candles"].get(key)
+
+            if a is None or b is None:
+                verdict = "one source is missing this candle"
+            elif (
+                abs(a["open"] - b["open"]) <= 0.011
+                and abs(a["close"] - b["close"]) <= 0.011
+                and abs(a["volume"] - b["volume"]) <= max(1, 0.02 * max(a["volume"], b["volume"]))
+            ):
+                verdict = "same"
+            else:
+                verdict = "DIFFERENT"
+
+            print(f"  {slot_label(key):<10} {candle_line(a)}   {candle_line(b)}   {verdict}")
+
+
 def main():
 
     if len(sys.argv) > 1 and sys.argv[1] == "--check":
+        load_nse_token_cache()
         audit_symbols(sys.argv[2:])
+        return
+
+    if len(sys.argv) > 1 and sys.argv[1] == "--compare":
+        load_nse_token_cache()
+        compare_sources(sys.argv[2:])
+        save_nse_token_cache()
         return
 
     print()
@@ -1782,7 +2339,24 @@ def main():
     print("NSE EOD MOMENTUM SCANNER")
     print("=" * 70)
     print()
-    print("yfinance version:", getattr(yf, "__version__", "unknown"))
+    if DATA_SOURCE not in ("NSE", "YAHOO"):
+        print('ERROR: DATA_SOURCE must be "NSE" or "YAHOO"')
+        sys.exit(1)
+
+    if (DATA_SOURCE == "YAHOO" or FALLBACK_TO_YAHOO) and yf is None:
+        print()
+        print("ERROR: yfinance is not installed, but it is needed for Yahoo / the Yahoo fallback.")
+        print("Install with: pip install yfinance curl_cffi")
+        print('Or set DATA_SOURCE = "NSE" and FALLBACK_TO_YAHOO = False in the scanner.')
+        print()
+        sys.exit(1)
+
+    print("Data source:", DATA_SOURCE, "(Yahoo fallback on)" if FALLBACK_TO_YAHOO and DATA_SOURCE == "NSE" else "")
+
+    if yf is not None:
+        print("yfinance version:", getattr(yf, "__version__", "unknown"))
+
+    load_nse_token_cache()
 
     if DIRECTION_RULE not in DIRECTION_RULES:
         print(f"ERROR: DIRECTION_RULE must be one of {list(DIRECTION_RULES)}")
@@ -1804,6 +2378,7 @@ def main():
     print("=" * 70)
 
     results, elapsed = scan_all_symbols(universe)
+    save_nse_token_cache()
 
     reference_date = mark_stale(results)
 
@@ -1835,6 +2410,15 @@ def main():
     for name in ("PASS", "FAIL", "CONFLICT", "INCOMPLETE", "STALE", "NO_DATA", "ERROR"):
         n = sum(1 for r in results if r.get("status") == name)
         print(f"{name:<11}: {n}")
+
+    sources = Counter(
+        r["source"] for r in results
+        if r.get("source") and r.get("status") not in ("NO_DATA", "ERROR")
+    )
+
+    if sources:
+        print()
+        print("DATA SOURCE :", ", ".join(f"{n} from {name}" for name, n in sources.most_common()))
 
     print()
     print("WHERE STOCKS DROPPED OUT:")
