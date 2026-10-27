@@ -665,6 +665,7 @@ _nse_local = threading.local()
 _nse_lock = threading.Lock()
 _nse_tokens = {}
 _nse_state = {"failures": 0, "blocked": False}
+_nse_errors = Counter()
 
 
 def nse_session(refresh=False):
@@ -897,6 +898,18 @@ def save_nse_token_cache():
         pass
 
 
+def nse_note_failure(message):
+    """Remember why NSE failed for a stock (shown in the source-health report)."""
+
+    key = (
+        "no data (symbol not found or no candles)"
+        if message == "NO_DATA" else str(message)[:110]
+    )
+
+    with _nse_lock:
+        _nse_errors[key] += 1
+
+
 def nse_record(ok):
     """Circuit breaker: after NSE_MAX_CONSECUTIVE_FAILURES failures in a row
     NSE is treated as blocked for the rest of the run."""
@@ -1074,6 +1087,8 @@ def fetch_symbol_rows(symbol):
             return rows, nse_info, "NSE"
 
         nse_record(nse_info == "NO_DATA")
+
+    nse_note_failure(nse_info)
 
     if not FALLBACK_TO_YAHOO:
         return None, nse_info, "NSE"
@@ -1853,6 +1868,86 @@ def missing_summary(results):
     return per_slot, last_only, len(evaluated)
 
 
+def source_health(results):
+    """Is the NSE source working, or did stocks fall back to Yahoo?
+    Returns (lines, level): level is "ok", "partial" or "bad"."""
+
+    counts = Counter(
+        r["source"] for r in results
+        if r.get("source") and r.get("status") not in ("NO_DATA", "ERROR")
+    )
+
+    nse = counts.get("NSE", 0)
+    fallback = counts.get("Yahoo (fallback)", 0)
+    yahoo = counts.get("Yahoo", 0)
+
+    if DATA_SOURCE != "NSE":
+        return [f"Data source is Yahoo (DATA_SOURCE = YAHOO): {yahoo} stocks."], "ok"
+
+    lines = [f"NSE served {nse} stocks; Yahoo fallback served {fallback} stocks."]
+
+    if nse == 0 and fallback > 0:
+        level = "bad"
+        lines.append(
+            "NSE is NOT working from this network: every stock came from Yahoo."
+        )
+    elif nse == 0:
+        level = "bad"
+        lines.append("NSE served no stocks and neither did the fallback.")
+    elif fallback == 0:
+        level = "ok"
+        lines.append("NSE is working: no stock needed the Yahoo fallback.")
+    elif fallback <= 0.10 * (nse + fallback):
+        level = "ok"
+        lines.append(
+            "NSE is working: only a few stocks (thin or unlisted symbols) fell back."
+        )
+    else:
+        level = "partial"
+        lines.append("NSE is only partly working: many stocks fell back to Yahoo.")
+
+    with _nse_lock:
+        reasons = _nse_errors.most_common(5)
+
+    if reasons:
+        lines.append("Why NSE failed for those stocks (top reasons):")
+        lines.extend(f"{count} x {message}" for message, count in reasons)
+
+    return lines, level
+
+
+def near_miss_list(results):
+    """Stocks that failed ONLY because their last 3m (15:27) and/or last 1m
+    (15:29) candle is missing - every other condition holds. With
+    MISSING_LAST_CANDLE_IS_ZERO_VOLUME = True they would be signals. Returns
+    [(symbol, direction)]. Empty when the switch is already on."""
+
+    if MISSING_LAST_CANDLE_IS_ZERO_VOLUME:
+        return []
+
+    allowed = {"3m 15:27", "1m 15:29"}
+    found = []
+
+    for r in results:
+        missing = set(r.get("missing") or [])
+
+        if r.get("status") != "FAIL" or not missing or not missing <= allowed:
+            continue
+
+        c = r.get("candles") or {}
+
+        # A missing last candle has volume 0, so it passes if the second-last
+        # candle exists (and traded).
+        ok_3m = r.get("vol_3m") or (c.get("3m_1527") is None and c.get("3m_1524") is not None)
+        ok_1m = r.get("vol_1m") or (c.get("1m_1529") is None and c.get("1m_1528") is not None)
+
+        if r.get("trend_15m") and r.get("vol_15m") and ok_3m and ok_1m and r.get("cond_align"):
+            side = r["details"]["t15_00"] * DIRECTION_RULES[DIRECTION_RULE]
+            found.append((r["symbol"], "LONG" if side == 1 else "SHORT"))
+
+    return sorted(found)
+
+
 def funnel_console(results):
 
     lines, previous = [], None
@@ -1874,6 +1969,18 @@ def funnel_console(results):
         f"  {last_only:>5}  missing ONLY the last 3m/1m candle "
         f"(MISSING_LAST_CANDLE_IS_ZERO_VOLUME = {MISSING_LAST_CANDLE_IS_ZERO_VOLUME})"
     )
+
+    near = near_miss_list(results)
+
+    if near:
+        lines.append("")
+        lines.append(
+            f"  {len(near)} stock(s) fail ONLY because the last 3m/1m candle had no trades."
+        )
+        lines.append(
+            "  They would be signals with MISSING_LAST_CANDLE_IS_ZERO_VOLUME = True:"
+        )
+        lines.append("    " + ", ".join(f"{sym} ({d})" for sym, d in near))
 
     return "\n".join(lines)
 
@@ -1904,13 +2011,28 @@ def funnel_html(results):
         f'{esc(MISSING_LAST_CANDLE_IS_ZERO_VOLUME)})</td><td>{last_only}</td></tr>'
     )
 
+    near = near_miss_list(results)
+
+    near_html = ""
+
+    if near:
+        names = ", ".join(f"{esc(sym)} ({esc(d)})" for sym, d in near)
+        near_html = (
+            f'<h2 style="margin-top:22px">Filtered only by a missing last candle ({len(near)})</h2>'
+            '<p class="none">Every other condition holds; the last 3m (15:27) and/or '
+            'last 1m (15:29) candle had no trades. They would be signals with '
+            'MISSING_LAST_CANDLE_IS_ZERO_VOLUME = True. Check them on a chart '
+            f'before deciding.</p><p>{names}</p>'
+        )
+
     return (
         '<div class="match-box"><h2>Where stocks dropped out</h2>'
         '<div class="table-wrap"><table class="funnel"><tbody>'
         f'{body}</tbody></table></div>'
         f'<h2 style="margin-top:22px">Stocks missing each candle (of {total} with a session)</h2>'
         '<div class="table-wrap"><table class="funnel"><tbody>'
-        f'{missing_body}</tbody></table></div></div>'
+        f'{missing_body}</tbody></table></div>'
+        f'{near_html}</div>'
     )
 
 
@@ -2015,9 +2137,17 @@ def generate_html_report(results, elapsed, universe_source, run_note=None):
         or DATA_SOURCE
     )
 
+    health_lines, health_level = source_health(results)
+    health_html = (
+        f'<div class="{"note" if health_level == "ok" else "warn"}">'
+        + "<br>".join(esc(line) for line in health_lines)
+        + "</div>"
+    )
+
     warning = session_warning(results)
     warning_html = (
         (f'<div class="note">{esc(run_note)}</div>' if run_note else "")
+        + health_html
         + (f'<div class="warn">{esc(warning)}</div>' if warning else "")
     )
 
@@ -2411,14 +2541,11 @@ def main():
         n = sum(1 for r in results if r.get("status") == name)
         print(f"{name:<11}: {n}")
 
-    sources = Counter(
-        r["source"] for r in results
-        if r.get("source") and r.get("status") not in ("NO_DATA", "ERROR")
-    )
-
-    if sources:
-        print()
-        print("DATA SOURCE :", ", ".join(f"{n} from {name}" for name, n in sources.most_common()))
+    health_lines, _ = source_health(results)
+    print()
+    print("DATA SOURCE HEALTH:")
+    for line in health_lines:
+        print("  " + line)
 
     print()
     print("WHERE STOCKS DROPPED OUT:")
