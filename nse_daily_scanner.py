@@ -177,6 +177,10 @@ NSE_TOKEN_CACHE_FILE = "nse_token_cache.json"
 # blocked for the rest of the run and the scanner goes straight to the fallback.
 NSE_MAX_CONSECUTIVE_FAILURES = 20
 
+# If NSE has served NOTHING usable after this many stocks, stop trying it for
+# the rest of the run (it is not working from this network / the API changed).
+NSE_GIVE_UP_AFTER = 40
+
 # Which way to trade when a match fires. The second-last candles (15m 15:00,
 # 3m 15:24, 1m 15:28) always share one trend - the "alignment trend" - so there
 # are only two choices:
@@ -664,8 +668,34 @@ NSE_CHART_HEADERS = {
 _nse_local = threading.local()
 _nse_lock = threading.Lock()
 _nse_tokens = {}
-_nse_state = {"failures": 0, "blocked": False}
+_nse_state = {"failures": 0, "blocked": False, "attempts": 0, "successes": 0}
 _nse_errors = Counter()
+_nse_examples = {}
+_nse_misses = {}
+
+
+class NseNoData(Exception):
+    """NSE answered, but has no usable data for this stock."""
+
+
+def is_no_data(info):
+    """True for "NO_DATA" and "NO_DATA: <detail>" (a stock with no data, as
+    opposed to a real error)."""
+
+    return str(info).startswith("NO_DATA")
+
+
+def snippet(value, limit=200):
+    """A short, single-line preview of a reply for error messages."""
+
+    try:
+        text = value if isinstance(value, str) else json.dumps(value, default=str)
+    except Exception:
+        text = repr(value)
+
+    text = " ".join(str(text).split())
+
+    return text if len(text) <= limit else text[:limit] + "..."
 
 
 def nse_session(refresh=False):
@@ -733,31 +763,73 @@ def nse_post(url, payload):
 
 
 def nse_lookup(symbol):
-    """(token, chart_symbol, symbol_type) for an equity, or None if NSE has no
-    exact match. An exact SYMBOL or SYMBOL-EQ match is required: a stock is
-    never guessed from a partial match."""
+    """(token, chart_symbol, symbol_type) for an equity. Raises NseNoData with a
+    reason if NSE has no exact match (a stock is never guessed from a partial
+    match) and RuntimeError if NSE's reply is not understood."""
 
     with _nse_lock:
-        if symbol in _nse_tokens:
+        if symbol in _nse_tokens and _nse_tokens[symbol]:
             return _nse_tokens[symbol]
 
+        if symbol in _nse_misses:
+            raise NseNoData(_nse_misses[symbol])
+
     result = nse_post(NSE_SEARCH_URL, {"symbol": symbol, "segment": "EQ"})
-    found = None
 
-    if isinstance(result, dict) and result.get("status") and result.get("data"):
-        wanted = {symbol.upper(), f"{symbol.upper()}-EQ"}
+    if not isinstance(result, dict) or "status" not in result:
+        raise RuntimeError(
+            f"NSE symbol search gave an unexpected reply | e.g. {symbol}: {snippet(result)}"
+        )
 
-        for item in result["data"]:
-            if str(item.get("symbol", "")).upper() in wanted:
+    if not result.get("status"):
+        detail = (
+            f"NSE symbol search said status=false | e.g. {symbol}: {snippet(result)}"
+        )
+
+        with _nse_lock:
+            _nse_misses[symbol] = detail
+
+        raise NseNoData(detail)
+
+    items = result.get("data") or []
+
+    if not items:
+        detail = f"NSE symbol search returned no results | e.g. {symbol}"
+
+        with _nse_lock:
+            _nse_misses[symbol] = detail
+
+        raise NseNoData(detail)
+
+    wanted = {symbol.upper(), f"{symbol.upper()}-EQ"}
+
+    for item in items:
+        if isinstance(item, dict) and str(item.get("symbol", "")).upper() in wanted:
+            try:
                 found = (
                     str(item["scripcode"]), str(item["symbol"]), str(item["type"])
                 )
-                break
+            except KeyError as e:
+                raise RuntimeError(
+                    f"NSE search result lacks field {e} | e.g. {symbol}: {snippet(item)}"
+                )
+
+            with _nse_lock:
+                _nse_tokens[symbol] = found
+
+            return found
+
+    first = items[0] if isinstance(items[0], dict) else {}
+    names = [str(i.get("symbol")) for i in items[:4] if isinstance(i, dict)]
+    detail = (
+        f"NSE symbol search returned results but no exact match | e.g. "
+        f"{symbol} -> {names}, fields {sorted(first)[:8]}"
+    )
 
     with _nse_lock:
-        _nse_tokens[symbol] = found
+        _nse_misses[symbol] = detail
 
-    return found
+    raise NseNoData(detail)
 
 
 def nse_candles_to_frame(data, minutes):
@@ -827,16 +899,13 @@ def nse_candles_to_frame(data, minutes):
 
 def fetch_interval_nse(symbol, interval):
     """One timeframe from NSE's chart feed. Returns (rows, info) like
-    fetch_interval: rows is a cleaned DataFrame, or None with info "NO_DATA" or
-    an error message."""
+    fetch_interval: rows is a cleaned DataFrame, or None with info
+    "NO_DATA: <reason>" (NSE answered but has nothing for this stock) or an
+    error message. Every failure carries a specific reason."""
 
     try:
-        found = nse_lookup(symbol)
+        token, chart_symbol, symbol_type = nse_lookup(symbol)
 
-        if found is None:
-            return None, "NO_DATA"
-
-        token, chart_symbol, symbol_type = found
         minutes = NSE_INTERVAL_MINUTES[interval]
         now = int(time.time())
 
@@ -850,25 +919,48 @@ def fetch_interval_nse(symbol, interval):
             "timeInterval": minutes,
         })
 
-        data = result.get("data") if isinstance(result, dict) else None
+        if not isinstance(result, dict) or "status" not in result:
+            raise RuntimeError(
+                f"NSE history gave an unexpected reply | e.g. {symbol} {interval}: "
+                f"{snippet(result)}"
+            )
 
-        if not data:
-            return None, "NO_DATA"
+        data = result.get("data")
+
+        if not result.get("status") or not data:
+            rest = {k: v for k, v in result.items() if k != "data"}
+            raise NseNoData(
+                f"NSE history returned no candles | e.g. {symbol} {interval}: "
+                f"{snippet(rest)}"
+            )
 
         frame = nse_candles_to_frame(data, minutes)
 
         if frame is None:
-            return None, "NO_DATA"
+            raise NseNoData(f"NSE history had no usable timestamps | e.g. {symbol} {interval}")
 
         cleaned = clean_yahoo_data(frame)
 
         if cleaned is None or cleaned.empty:
-            return None, "NO_DATA"
+            index = frame.index
+            minute_of_day = index.hour * 60 + index.minute
+            outside = int(((minute_of_day < 555) | (minute_of_day > 929)).sum())
+            zero_volume = int((frame["Volume"].fillna(0) <= 0).sum())
+            raise RuntimeError(
+                f"all NSE candles were dropped by cleaning | e.g. {symbol} {interval}: "
+                f"{len(frame)} candles, {zero_volume} with zero volume, "
+                f"{outside} outside 09:15-15:29, first start "
+                f"{index[0].strftime('%Y-%m-%d %H:%M')}, last start "
+                f"{index[-1].strftime('%Y-%m-%d %H:%M')}"
+            )
 
         return cleaned, "OK"
 
+    except NseNoData as e:
+        return None, f"NO_DATA: {e}"[:300]
+
     except Exception as e:
-        return None, f"{type(e).__name__}: {e}"[:240]
+        return None, f"{type(e).__name__}: {e}"[:300]
 
 
 def load_nse_token_cache():
@@ -899,38 +991,56 @@ def save_nse_token_cache():
 
 
 def nse_note_failure(message):
-    """Remember why NSE failed for a stock (shown in the source-health report)."""
+    """Remember why NSE failed for a stock (shown in the source-health report).
+    A message may carry an example after ' | e.g. '; the first example for each
+    reason is kept."""
 
-    key = (
-        "no data (symbol not found or no candles)"
-        if message == "NO_DATA" else str(message)[:110]
-    )
+    text = str(message)
 
-    with _nse_lock:
-        _nse_errors[key] += 1
+    if text.startswith("NO_DATA"):
+        text = "no data: " + (text[len("NO_DATA"):].lstrip(": ") or "(no detail)")
 
-
-def nse_record(ok):
-    """Circuit breaker: after NSE_MAX_CONSECUTIVE_FAILURES failures in a row
-    NSE is treated as blocked for the rest of the run."""
+    reason, _, example = text.partition(" | e.g. ")
+    reason = reason[:140]
 
     with _nse_lock:
-        if ok:
+        _nse_errors[reason] += 1
+
+        if example and reason not in _nse_examples:
+            _nse_examples[reason] = example[:260]
+
+
+def nse_record(outcome):
+    """Circuit breaker. outcome: "ok"; "soft" (NSE answered but had no data for
+    that stock); "hard" (an error). NSE is treated as unusable for the rest of
+    the run after NSE_MAX_CONSECUTIVE_FAILURES hard failures in a row, or if it
+    has served nothing at all after NSE_GIVE_UP_AFTER stocks."""
+
+    with _nse_lock:
+        _nse_state["attempts"] += 1
+
+        if outcome == "ok":
+            _nse_state["successes"] += 1
             _nse_state["failures"] = 0
             return
 
-        _nse_state["failures"] += 1
+        if outcome == "hard":
+            _nse_state["failures"] += 1
 
-        if (
-            _nse_state["failures"] >= NSE_MAX_CONSECUTIVE_FAILURES
-            and not _nse_state["blocked"]
-        ):
+        if _nse_state["blocked"]:
+            return
+
+        reason = None
+
+        if _nse_state["failures"] >= NSE_MAX_CONSECUTIVE_FAILURES:
+            reason = f"NSE failed {NSE_MAX_CONSECUTIVE_FAILURES} times in a row"
+        elif _nse_state["successes"] == 0 and _nse_state["attempts"] >= NSE_GIVE_UP_AFTER:
+            reason = f"NSE gave nothing usable for the first {_nse_state['attempts']} stocks"
+
+        if reason:
             _nse_state["blocked"] = True
             print()
-            print(
-                f"NOTE: NSE failed {NSE_MAX_CONSECUTIVE_FAILURES} times in a row "
-                f"- treating it as blocked for the rest of this run."
-            )
+            print(f"NOTE: {reason} - not using NSE for the rest of this run.")
 
 
 # =============================================================================
@@ -1041,7 +1151,7 @@ def fetch_interval(symbol, interval):
 def fetch_all_timeframes(symbol, fetcher):
     """Both timeframes for one symbol from one source (fetcher). Returns
     (rows_by_timeframe, info); rows_by_timeframe is None unless every timeframe
-    came back, and then info is "NO_DATA" or an error message."""
+    came back, and then info is "NO_DATA[: reason]" or an error message."""
 
     rows_by_tf, infos, errors = {}, [], []
 
@@ -1057,9 +1167,12 @@ def fetch_all_timeframes(symbol, fetcher):
     if len(rows_by_tf) == len(TIMEFRAMES):
         return rows_by_tf, ("FALLBACK" if "FALLBACK" in infos else "OK")
 
-    real_errors = [e for e in errors if e != "NO_DATA"]
+    real_errors = [e for e in errors if not is_no_data(e)]
 
-    return None, (real_errors[0] if real_errors else "NO_DATA")
+    if real_errors:
+        return None, real_errors[0]
+
+    return None, (errors[0] if errors else "NO_DATA")
 
 
 def fetch_symbol_rows(symbol):
@@ -1077,34 +1190,33 @@ def fetch_symbol_rows(symbol):
         rows, info = fetch_all_timeframes(symbol, fetch_interval)
         return rows, info, "Yahoo"
 
-    nse_info = "NSE skipped (blocked earlier in this run)"
+    nse_info = "NSE skipped (not used for the rest of this run)"
 
     if not _nse_state["blocked"]:
         rows, nse_info = fetch_all_timeframes(symbol, fetch_interval_nse)
 
         if rows is not None:
-            nse_record(True)
+            nse_record("ok")
             return rows, nse_info, "NSE"
 
-        nse_record(nse_info == "NO_DATA")
+        nse_record("soft" if is_no_data(nse_info) else "hard")
 
     nse_note_failure(nse_info)
 
     if not FALLBACK_TO_YAHOO:
-        return None, nse_info, "NSE"
+        return None, ("NO_DATA" if is_no_data(nse_info) else nse_info), "NSE"
 
     rows, yahoo_info = fetch_all_timeframes(symbol, fetch_interval)
 
     if rows is not None:
         return rows, yahoo_info, "Yahoo (fallback)"
 
-    if nse_info == "NO_DATA" and yahoo_info == "NO_DATA":
+    if is_no_data(nse_info) and is_no_data(yahoo_info):
         return None, "NO_DATA", "NSE"
 
-    return None, f"NSE: {nse_info} | Yahoo: {yahoo_info}"[:240], "NSE"
+    return None, f"NSE: {nse_info} | Yahoo: {yahoo_info}"[:300], "NSE"
 
 
-# =============================================================================
 # =============================================================================
 # STRATEGY HELPERS
 # =============================================================================
@@ -1500,7 +1612,7 @@ def scan_one_symbol(symbol):
 
         if rows is None:
 
-            if info == "NO_DATA":
+            if is_no_data(info):
                 return {
                     "symbol": symbol,
                     "status": "NO_DATA",
@@ -1889,7 +2001,8 @@ def source_health(results):
     if nse == 0 and fallback > 0:
         level = "bad"
         lines.append(
-            "NSE is NOT working from this network: every stock came from Yahoo."
+            "NSE served nothing: every stock came from Yahoo. The reasons are "
+            "below; run  python scanner.py --nse-debug RELIANCE  to see NSE's raw replies."
         )
     elif nse == 0:
         level = "bad"
@@ -1908,10 +2021,16 @@ def source_health(results):
 
     with _nse_lock:
         reasons = _nse_errors.most_common(5)
+        examples = dict(_nse_examples)
 
     if reasons:
         lines.append("Why NSE failed for those stocks (top reasons):")
-        lines.extend(f"{count} x {message}" for message, count in reasons)
+
+        for message, count in reasons:
+            lines.append(f"{count} x {message}")
+
+            if message in examples:
+                lines.append(f"      e.g. {examples[message]}")
 
     return lines, level
 
@@ -2451,11 +2570,124 @@ def compare_sources(symbols):
             print(f"  {slot_label(key):<10} {candle_line(a)}   {candle_line(b)}   {verdict}")
 
 
+# =============================================================================
+# NSE DEBUG   (python scanner.py --nse-debug RELIANCE)
+# =============================================================================
+
+def nse_debug(symbols):
+    """Print NSE's raw replies for one stock so a problem can be diagnosed
+    (blocked? different reply format? empty data?). Paste the output when
+    asking for help."""
+
+    symbol = (symbols[0] if symbols else "RELIANCE").strip().upper()
+    session = nse_session(refresh=True)
+
+    print("=" * 78)
+    print(f"NSE DEBUG for {symbol}")
+    print("=" * 78)
+
+    try:
+        reply = session.get(NSE_HOME_URL, timeout=REQUEST_TIMEOUT)
+        print(f"1) GET {NSE_HOME_URL}: HTTP {reply.status_code}, "
+              f"cookies set: {sorted(session.cookies.keys())}")
+    except Exception as e:
+        print(f"1) GET {NSE_HOME_URL} failed: {type(e).__name__}: {e}")
+
+    try:
+        reply = session.post(
+            NSE_SEARCH_URL, json={"symbol": symbol, "segment": "EQ"},
+            timeout=REQUEST_TIMEOUT,
+        )
+    except Exception as e:
+        print(f"2) symbol search failed: {type(e).__name__}: {e}")
+        return
+
+    print(f"2) symbol search: HTTP {reply.status_code}, "
+          f"content-type {reply.headers.get('content-type')}")
+    print("   body:", snippet(reply.text, 500))
+
+    try:
+        search = reply.json()
+    except ValueError:
+        print("   -> not JSON (probably a block page).")
+        return
+
+    items = (search.get("data") or []) if isinstance(search, dict) else []
+    match = next(
+        (i for i in items if isinstance(i, dict)
+         and str(i.get("symbol", "")).upper() in {symbol, f"{symbol}-EQ"}),
+        None,
+    )
+
+    if match is None:
+        print("   -> no exact match for the symbol in this reply.")
+        return
+
+    print("   -> exact match:", snippet(match, 300))
+
+    for interval, minutes in (("1m", 1), ("15m", 15)):
+        now = int(time.time())
+        payload = {
+            "token": str(match["scripcode"]),
+            "fromDate": now - NSE_HISTORY_DAYS * 86400,
+            "toDate": now,
+            "symbol": match["symbol"],
+            "symbolType": match["type"],
+            "chartType": "I",
+            "timeInterval": minutes,
+        }
+
+        try:
+            reply = session.post(NSE_HISTORY_URL, json=payload, timeout=REQUEST_TIMEOUT)
+        except Exception as e:
+            print(f"3) {interval} history failed: {type(e).__name__}: {e}")
+            continue
+
+        print(f"3) {interval} history: HTTP {reply.status_code}")
+
+        try:
+            body = reply.json()
+        except ValueError:
+            print("   body (not JSON):", snippet(reply.text, 500))
+            continue
+
+        data = body.get("data") if isinstance(body, dict) else None
+        print("   reply fields:", snippet({k: v for k, v in body.items() if k != "data"}) if isinstance(body, dict) else snippet(body))
+
+        if not data:
+            print("   -> no candles in the reply.")
+            continue
+
+        print(f"   candles: {len(data)}")
+
+        for label, row in (("first", data[0]), ("last", data[-1])):
+            shown = dict(row) if isinstance(row, dict) else {"raw": row}
+
+            try:
+                shown["time_as_utc"] = str(pd.to_datetime(row["time"], unit="ms"))
+            except Exception:
+                pass
+
+            print(f"   {label}: {snippet(shown, 300)}")
+
+        try:
+            frame = nse_candles_to_frame(data, minutes)
+            cleaned = clean_yahoo_data(frame)
+            print(f"   converted: first start {frame.index[0]}, last start {frame.index[-1]}; "
+                  f"{0 if cleaned is None else len(cleaned)} candles kept after cleaning")
+        except Exception as e:
+            print(f"   conversion refused: {type(e).__name__}: {e}")
+
+
 def main():
 
     if len(sys.argv) > 1 and sys.argv[1] == "--check":
         load_nse_token_cache()
         audit_symbols(sys.argv[2:])
+        return
+
+    if len(sys.argv) > 1 and sys.argv[1] == "--nse-debug":
+        nse_debug(sys.argv[2:])
         return
 
     if len(sys.argv) > 1 and sys.argv[1] == "--compare":
