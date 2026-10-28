@@ -647,11 +647,14 @@ def clean_yahoo_data(df):
 # It is unofficial and undocumented, so it can change or be blocked. Any
 # failure for a stock falls back to Yahoo when FALLBACK_TO_YAHOO is True.
 #
-# NSE labels a candle by its END time minus one second (the last 1-minute
-# candle of the day is 15:29:59, the last 15-minute candle also 15:29:59).
-# This code converts that to the START-time labels used everywhere else (15:29
-# and 15:15) and REFUSES any timestamp format it does not recognise, so candles
-# can never be silently mislabelled.
+# The time format of NSE's candles is not documented, so the converter works it
+# out from the data itself: epoch seconds or milliseconds (by size), India
+# wall-clock or real UTC (by which one falls inside trading hours), and whether
+# a time marks a candle's START or END (by whether the day's first candle is
+# stamped 09:15 or the last one 15:30; "end minus one second" stamps such as
+# 15:29:59 are recognised as END). Evidence found once is reused for the rest of
+# the run. If the evidence is unclear or contradictory the stock is REFUSED with
+# a message showing the raw times, so candles can never be silently shifted.
 
 NSE_SEARCH_URL = "https://charting.nseindia.com/v1/exchanges/symbolsDynamic"
 NSE_HISTORY_URL = "https://charting.nseindia.com/v1/charts/symbolHistoricalData"
@@ -684,6 +687,7 @@ _nse_state = {"failures": 0, "blocked": False, "attempts": 0, "successes": 0}
 _nse_errors = Counter()
 _nse_examples = {}
 _nse_misses = {}
+_nse_convention = {"labels": None}
 
 
 class NseNoData(Exception):
@@ -862,7 +866,8 @@ def nse_candles_to_frame(data, minutes):
     """NSE candles -> a Yahoo-style frame (Datetime index = candle START time in
     IST; Open/High/Low/Close/Volume) that clean_yahoo_data understands.
 
-    Raises ValueError for a format it does not recognise rather than guessing."""
+    Raises ValueError, showing the raw times, when the time format cannot be
+    determined with confidence - it never guesses."""
 
     df = pd.DataFrame(data)
 
@@ -872,41 +877,92 @@ def nse_candles_to_frame(data, minutes):
     if absent:
         raise ValueError(f"unexpected NSE candle columns (missing {absent})")
 
-    stamp = pd.to_datetime(
-        pd.to_numeric(df["time"], errors="coerce"), unit="ms", errors="coerce"
-    )
-
-    keep = stamp.notna()
+    raw = pd.to_numeric(df["time"], errors="coerce")
+    keep = raw.notna()
     df = df.loc[keep].reset_index(drop=True)
-    stamp = stamp.loc[keep].reset_index(drop=True)
+    raw = raw.loc[keep].reset_index(drop=True)
 
-    if stamp.empty:
+    if raw.empty:
         return None
+
+    unit = "ms" if raw.abs().median() > 1e11 else "s"
+    stamp = pd.to_datetime(raw, unit=unit)
+
+    def where():
+        return (
+            f"raw times {raw.head(3).tolist()} ... {raw.tail(1).tolist()}, "
+            f"unit {unit}, first {stamp.iloc[0]}, last {stamp.iloc[-1]}"
+        )
 
     def in_session(values):
         minute_of_day = values.dt.hour * 60 + values.dt.minute
         return ((minute_of_day >= 9 * 60) & (minute_of_day <= 15 * 60 + 35)).mean()
 
-    # NSE normally encodes India wall-clock time as if it were UTC. If the
-    # stamps only look like trading hours after +05:30, they are real UTC.
-    if (
-        in_session(stamp) < 0.5
-        and in_session(stamp + pd.Timedelta(hours=5, minutes=30)) >= 0.9
-    ):
-        stamp = stamp + pd.Timedelta(hours=5, minutes=30)
+    # India wall-clock (stored as if it were UTC) or real UTC?
+    shifted = stamp + pd.Timedelta(hours=5, minutes=30)
 
-    if (stamp.dt.second == 59).mean() < 0.99:
+    if in_session(shifted) > in_session(stamp) and in_session(shifted) >= 0.9:
+        stamp = shifted
+    elif in_session(stamp) < 0.9:
         raise ValueError(
-            "NSE candle timestamps are not in the expected "
-            "'end time minus one second' format"
+            f"NSE candle times do not fall inside trading hours | e.g. {where()}"
         )
 
-    start = stamp + pd.Timedelta(seconds=1) - pd.Timedelta(minutes=minutes)
+    # Seconds pattern: :00 (clean minute) or :59 (end time minus one second).
+    seconds = stamp.dt.second
+    common_second = int(seconds.mode().iloc[0])
 
-    minute_of_day = start.dt.hour * 60 + start.dt.minute
+    if (seconds == common_second).mean() < 0.99 or common_second not in (0, 59):
+        raise ValueError(
+            f"NSE candle times have an unrecognised seconds pattern "
+            f"(most common second {common_second}) | e.g. {where()}"
+        )
 
-    if ((minute_of_day - MARKET_OPEN_MINUTES) % minutes != 0).mean() > 0.01:
-        raise ValueError("NSE candles are not aligned to the 09:15 grid")
+    boundary = stamp + pd.Timedelta(seconds=1) if common_second == 59 else stamp
+    minute_of_day = boundary.dt.hour * 60 + boundary.dt.minute
+
+    if common_second == 59:
+        labels = "end"
+    else:
+        opens = int((minute_of_day == MARKET_OPEN_MINUTES).sum())
+        closes = int((minute_of_day == MARKET_CLOSE_MINUTES).sum())
+
+        if opens > 0 and closes == 0:
+            labels = "start"
+        elif closes > 0 and opens == 0:
+            labels = "end"
+        else:
+            labels = None
+
+        with _nse_lock:
+            known = _nse_convention["labels"]
+
+            if labels is None:
+                labels = known
+            elif known is not None and known != labels:
+                raise ValueError(
+                    f"NSE candle times look like candle {labels.upper()} times, "
+                    f"which contradicts the {known.upper()} times found earlier "
+                    f"| e.g. {where()}"
+                )
+            else:
+                _nse_convention["labels"] = labels
+
+        if labels is None:
+            raise ValueError(
+                f"cannot tell whether NSE candle times mark the START or END of a "
+                f"candle (candles stamped 09:15: {opens}, stamped 15:30: {closes}) "
+                f"| e.g. {where()}"
+            )
+
+    start = boundary - pd.Timedelta(minutes=minutes) if labels == "end" else boundary
+    start_minutes = start.dt.hour * 60 + start.dt.minute
+
+    if ((start_minutes - MARKET_OPEN_MINUTES) % minutes != 0).mean() > 0.01:
+        raise ValueError(
+            f"NSE candles are not aligned to the 09:15 grid after treating the "
+            f"times as candle {labels.upper()} times | e.g. {where()}"
+        )
 
     out = pd.DataFrame({
         "Open": pd.to_numeric(df["open"], errors="coerce"),
@@ -2688,7 +2744,8 @@ def nse_debug(symbols):
             shown = dict(row) if isinstance(row, dict) else {"raw": row}
 
             try:
-                shown["time_as_utc"] = str(pd.to_datetime(row["time"], unit="ms"))
+                unit = "ms" if abs(float(row["time"])) > 1e11 else "s"
+                shown["time_as_utc"] = f"{pd.to_datetime(row['time'], unit=unit)} (unit {unit})"
             except Exception:
                 pass
 
