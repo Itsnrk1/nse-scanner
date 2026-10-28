@@ -78,16 +78,16 @@ small { color: #777; font-size: 10px; }
 <h1>NSE Momentum Scanner</h1>
 
 <div class="subtitle">
-Generated: 2026-10-27 21:28:19 IST<br>
+Generated: 2026-10-28 08:04:31 IST<br>
 Universe: Nifty Total Market (Nifty 500 + Microcap 250)<br>
 Data: Yahoo (fallback): 748 stocks - 15-minute and 1-minute candles (3-minute built from 1-minute)<br>
 Previous day: Tue 27 Oct 2026<br>
 Entry: Wed 28 Oct 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 </div>
 
-<div class="note">The market has closed, so today&#x27;s session (Tue 27 Oct 2026) is used as the latest completed session. Entry is the next trading day, Wed 28 Oct 2026.</div><div class="warn">NSE served 0 stocks; Yahoo fallback served 748 stocks.<br>NSE is NOT working from this network: every stock came from Yahoo.<br>Why NSE failed for those stocks (top reasons):<br>755 x no data (symbol not found or no candles)</div>
+<div class="warn">NSE served 0 stocks; Yahoo fallback served 748 stocks.<br>NSE served nothing: every stock came from Yahoo. The reasons are below; run  python scanner.py --nse-debug RELIANCE  to see NSE&#x27;s raw replies.<br>Why NSE failed for those stocks (top reasons):<br>713 x NSE skipped (not used for the rest of this run)<br>42 x no data: NSE symbol search returned results but no exact match<br>      e.g. ACMESOLAR -&gt; [&#x27;NIFTY 50&#x27;, &#x27;NIFTY IT&#x27;, &#x27;NIFTY NEXT 50&#x27;, &#x27;NIFTY BANK&#x27;], fields [&#x27;description&#x27;, &#x27;exchange&#x27;, &#x27;fullname&#x27;, &#x27;instrumentType&#x27;, &#x27;scripcode&#x27;, &#x27;symbol&#x27;, &#x27;type&#x27;]</div>
 
-<div class="stats"><div class="stat"><b>755</b>Stocks scanned</div><div class="stat"><b>20</b>Matches</div><div class="stat"><b>12</b>Long</div><div class="stat"><b>8</b>Short</div><div class="stat"><b>699</b>No match</div><div class="stat"><b>29</b>Data conflict</div><div class="stat"><b>0</b>Incomplete</div><div class="stat"><b>0</b>Stale</div><div class="stat"><b>5</b>No data</div><div class="stat"><b>2</b>Errors</div><div class="stat"><b>95.9s</b>Scan time</div></div>
+<div class="stats"><div class="stat"><b>755</b>Stocks scanned</div><div class="stat"><b>20</b>Matches</div><div class="stat"><b>12</b>Long</div><div class="stat"><b>8</b>Short</div><div class="stat"><b>699</b>No match</div><div class="stat"><b>29</b>Data conflict</div><div class="stat"><b>0</b>Incomplete</div><div class="stat"><b>0</b>Stale</div><div class="stat"><b>0</b>No data</div><div class="stat"><b>7</b>Errors</div><div class="stat"><b>57.0s</b>Scan time</div></div>
 
 <div class="match-box"><h2>Where stocks dropped out</h2><div class="table-wrap"><table class="funnel"><tbody><tr><td>Stocks scanned</td><td>755</td><td class="lost"></td></tr><tr><td>Data downloaded (no error / no-data)</td><td>748</td><td class="lost">-7</td></tr><tr><td>A completed session found</td><td>748</td><td class="lost"></td></tr><tr><td>All six candles present</td><td>528</td><td class="lost">-220</td></tr><tr><td>15m: 15:00 and 15:15 opposite trends</td><td>315</td><td class="lost">-213</td></tr><tr><td>15m: 15:00 volume &gt; 15:15 volume</td><td>220</td><td class="lost">-95</td></tr><tr><td>3m: 15:24 volume &gt; 15:27 volume</td><td>142</td><td class="lost">-78</td></tr><tr><td>1m: 15:28 volume &gt; 15:29 volume</td><td>107</td><td class="lost">-35</td></tr><tr><td>Same trend: 15m 15:00 = 3m 15:24 = 1m 15:28</td><td>20</td><td class="lost">-87</td></tr><tr><td>No 15m/1m data conflict</td><td>20</td><td class="lost"></td></tr><tr><td>Same session as most stocks (SIGNALS)</td><td>20</td><td class="lost"></td></tr></tbody></table></div><h2 style="margin-top:22px">Stocks missing each candle (of 748 with a session)</h2><div class="table-wrap"><table class="funnel"><tbody><tr><td>15m 15:00</td><td>0</td></tr><tr><td>15m 15:15</td><td>0</td></tr><tr><td>3m 15:24</td><td>213</td></tr><tr><td>3m 15:27</td><td>0</td></tr><tr><td>1m 15:28</td><td>1</td></tr><tr><td>1m 15:29</td><td>220</td></tr><tr><td>Missing ONLY the last 3m/1m candle (MISSING_LAST_CANDLE_IS_ZERO_VOLUME = False)</td><td>6</td></tr></tbody></table></div></div>
 
@@ -9090,6 +9090,18 @@ Entry: Wed 28 Oct 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 </tr>
 
 <tr>
+<td class="symbol">BAGMANE</td>
+<td>&mdash;</td>
+<td>&mdash;</td>
+<td>&mdash;<br><small></small></td>
+<td>&mdash;<br><small></small></td>
+<td>&mdash;<br><small></small></td>
+<td>&mdash;<br><small></small></td>
+<td class="skip">ERROR</td>
+<td>Error (NSE)<br><small>NSE: NSE skipped (not used for the rest of this run) | Yahoo: NO_DATA</small></td>
+</tr>
+
+<tr>
 <td class="symbol">BIRET</td>
 <td>&mdash;</td>
 <td>&mdash;</td>
@@ -9098,7 +9110,55 @@ Entry: Wed 28 Oct 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td>&mdash;<br><small></small></td>
 <td>&mdash;<br><small></small></td>
 <td class="skip">ERROR</td>
-<td>Error (NSE)<br><small>NSE: NO_DATA | Yahoo: &#x27;tradingPeriods&#x27;</small></td>
+<td>Error (NSE)<br><small>NSE: NSE skipped (not used for the rest of this run) | Yahoo: &#x27;tradingPeriods&#x27;</small></td>
+</tr>
+
+<tr>
+<td class="symbol">DUMMYHEG</td>
+<td>&mdash;</td>
+<td>&mdash;</td>
+<td>&mdash;<br><small></small></td>
+<td>&mdash;<br><small></small></td>
+<td>&mdash;<br><small></small></td>
+<td>&mdash;<br><small></small></td>
+<td class="skip">ERROR</td>
+<td>Error (NSE)<br><small>NSE: NSE skipped (not used for the rest of this run) | Yahoo: NO_DATA</small></td>
+</tr>
+
+<tr>
+<td class="symbol">DUMMYINGL1</td>
+<td>&mdash;</td>
+<td>&mdash;</td>
+<td>&mdash;<br><small></small></td>
+<td>&mdash;<br><small></small></td>
+<td>&mdash;<br><small></small></td>
+<td>&mdash;<br><small></small></td>
+<td class="skip">ERROR</td>
+<td>Error (NSE)<br><small>NSE: NSE skipped (not used for the rest of this run) | Yahoo: NO_DATA</small></td>
+</tr>
+
+<tr>
+<td class="symbol">DUMMYINGL2</td>
+<td>&mdash;</td>
+<td>&mdash;</td>
+<td>&mdash;<br><small></small></td>
+<td>&mdash;<br><small></small></td>
+<td>&mdash;<br><small></small></td>
+<td>&mdash;<br><small></small></td>
+<td class="skip">ERROR</td>
+<td>Error (NSE)<br><small>NSE: NSE skipped (not used for the rest of this run) | Yahoo: NO_DATA</small></td>
+</tr>
+
+<tr>
+<td class="symbol">DUMMYINXGN</td>
+<td>&mdash;</td>
+<td>&mdash;</td>
+<td>&mdash;<br><small></small></td>
+<td>&mdash;<br><small></small></td>
+<td>&mdash;<br><small></small></td>
+<td>&mdash;<br><small></small></td>
+<td class="skip">ERROR</td>
+<td>Error (NSE)<br><small>NSE: NSE skipped (not used for the rest of this run) | Yahoo: NO_DATA</small></td>
 </tr>
 
 <tr>
@@ -9110,67 +9170,7 @@ Entry: Wed 28 Oct 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td>&mdash;<br><small></small></td>
 <td>&mdash;<br><small></small></td>
 <td class="skip">ERROR</td>
-<td>Error (NSE)<br><small>NSE: NO_DATA | Yahoo: &#x27;tradingPeriods&#x27;</small></td>
-</tr>
-
-<tr>
-<td class="symbol">BAGMANE</td>
-<td>&mdash;</td>
-<td>&mdash;</td>
-<td>&mdash;<br><small></small></td>
-<td>&mdash;<br><small></small></td>
-<td>&mdash;<br><small></small></td>
-<td>&mdash;<br><small></small></td>
-<td class="skip">NO DATA</td>
-<td>No data (NSE)</td>
-</tr>
-
-<tr>
-<td class="symbol">DUMMYHEG</td>
-<td>&mdash;</td>
-<td>&mdash;</td>
-<td>&mdash;<br><small></small></td>
-<td>&mdash;<br><small></small></td>
-<td>&mdash;<br><small></small></td>
-<td>&mdash;<br><small></small></td>
-<td class="skip">NO DATA</td>
-<td>No data (NSE)</td>
-</tr>
-
-<tr>
-<td class="symbol">DUMMYINGL1</td>
-<td>&mdash;</td>
-<td>&mdash;</td>
-<td>&mdash;<br><small></small></td>
-<td>&mdash;<br><small></small></td>
-<td>&mdash;<br><small></small></td>
-<td>&mdash;<br><small></small></td>
-<td class="skip">NO DATA</td>
-<td>No data (NSE)</td>
-</tr>
-
-<tr>
-<td class="symbol">DUMMYINGL2</td>
-<td>&mdash;</td>
-<td>&mdash;</td>
-<td>&mdash;<br><small></small></td>
-<td>&mdash;<br><small></small></td>
-<td>&mdash;<br><small></small></td>
-<td>&mdash;<br><small></small></td>
-<td class="skip">NO DATA</td>
-<td>No data (NSE)</td>
-</tr>
-
-<tr>
-<td class="symbol">DUMMYINXGN</td>
-<td>&mdash;</td>
-<td>&mdash;</td>
-<td>&mdash;<br><small></small></td>
-<td>&mdash;<br><small></small></td>
-<td>&mdash;<br><small></small></td>
-<td>&mdash;<br><small></small></td>
-<td class="skip">NO DATA</td>
-<td>No data (NSE)</td>
+<td>Error (NSE)<br><small>NSE: NSE skipped (not used for the rest of this run) | Yahoo: &#x27;tradingPeriods&#x27;</small></td>
 </tr>
 
 </tbody>
