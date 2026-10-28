@@ -181,6 +181,10 @@ NSE_MAX_CONSECUTIVE_FAILURES = 20
 # the rest of the run (it is not working from this network / the API changed).
 NSE_GIVE_UP_AFTER = 40
 
+# NSE is polite-use only: at most this many requests in flight at once, however
+# many worker threads there are.
+NSE_MAX_CONNECTIONS = 5
+
 # Which way to trade when a match fires. The second-last candles (15m 15:00,
 # 3m 15:24, 1m 15:28) always share one trend - the "alignment trend" - so there
 # are only two choices:
@@ -634,10 +638,12 @@ def clean_yahoo_data(df):
 # NSE CHARTING SOURCE   (free, no API key)
 # =============================================================================
 #
-# NSE's own chart site serves candles through two JSON endpoints (the same ones
-# the open-source `openchart` package uses):
+# NSE's own chart site serves candles through two JSON endpoints, called with
+# plain GET requests (the symbol and range go in the URL query string):
 #   1) symbolsDynamic       : symbol -> scripcode (token)
 #   2) symbolHistoricalData : token + time range + interval -> candles
+# (An older method, POSTing a JSON body - used by the `openchart` package - no
+# longer works: NSE ignores the body and returns a default list of indices.)
 # It is unofficial and undocumented, so it can change or be blocked. Any
 # failure for a stock falls back to Yahoo when FALLBACK_TO_YAHOO is True.
 #
@@ -657,16 +663,22 @@ NSE_CHART_HEADERS = {
     "User-Agent":
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/120.0.0.0 Safari/537.36",
+        "Chrome/124.0.0.0 Safari/537.36",
     "Accept": "application/json, text/plain, */*",
-    "Accept-Language": "en-US,en;q=0.9",
-    "Content-Type": "application/json",
-    "Origin": "https://charting.nseindia.com",
+    "Accept-Language": "en-GB,en;q=0.5",
+    "Authority": "charting.nseindia.com",
     "Referer": "https://charting.nseindia.com/",
+}
+
+NSE_PAGE_HEADERS = {
+    "User-Agent": NSE_CHART_HEADERS["User-Agent"],
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-GB,en;q=0.5",
 }
 
 _nse_local = threading.local()
 _nse_lock = threading.Lock()
+_nse_slots = threading.BoundedSemaphore(NSE_MAX_CONNECTIONS)
 _nse_tokens = {}
 _nse_state = {"failures": 0, "blocked": False, "attempts": 0, "successes": 0}
 _nse_errors = Counter()
@@ -699,7 +711,8 @@ def snippet(value, limit=200):
 
 
 def nse_session(refresh=False):
-    """One requests session per worker thread, with NSE's cookies set."""
+    """One requests session per worker thread, holding the cookies NSE sets on
+    its main site and on the charting site."""
 
     session = getattr(_nse_local, "session", None)
 
@@ -707,20 +720,21 @@ def nse_session(refresh=False):
         session = requests.Session()
         session.headers.update(NSE_CHART_HEADERS)
 
-        try:
-            session.get(NSE_HOME_URL, timeout=REQUEST_TIMEOUT)
-        except Exception:
-            pass
+        for page in (NSE_HOME_URL + "/", "https://charting.nseindia.com/"):
+            try:
+                session.get(page, headers=NSE_PAGE_HEADERS, timeout=REQUEST_TIMEOUT)
+            except Exception:
+                pass
 
         _nse_local.session = session
 
     return session
 
 
-def nse_post(url, payload):
-    """POST JSON to NSE's chart API and return the parsed reply. Retries
-    rate limits and blocks with a fresh session; raises RuntimeError with a
-    readable reason if every attempt fails."""
+def nse_get(url, params):
+    """GET a JSON reply from NSE's chart API (parameters go in the query
+    string). Retries rate limits and blocks with a fresh session; raises
+    RuntimeError with a readable reason if every attempt fails."""
 
     last_error = "NSE request failed"
     refresh = False
@@ -728,9 +742,11 @@ def nse_post(url, payload):
     for attempt in range(MAX_RETRIES):
 
         try:
-            response = nse_session(refresh).post(
-                url, json=payload, timeout=REQUEST_TIMEOUT
-            )
+            with _nse_slots:
+                response = nse_session(refresh).get(
+                    url, params=params, timeout=REQUEST_TIMEOUT
+                )
+
             refresh = False
             status = response.status_code
 
@@ -774,24 +790,25 @@ def nse_lookup(symbol):
         if symbol in _nse_misses:
             raise NseNoData(_nse_misses[symbol])
 
-    result = nse_post(NSE_SEARCH_URL, {"symbol": symbol, "segment": "EQ"})
+    # segment is left empty: NSE then searches every segment, and the exact
+    # symbol match below picks the equity.
+    result = nse_get(NSE_SEARCH_URL, {"symbol": symbol, "segment": ""})
 
-    if not isinstance(result, dict) or "status" not in result:
-        raise RuntimeError(
-            f"NSE symbol search gave an unexpected reply | e.g. {symbol}: {snippet(result)}"
-        )
-
-    if not result.get("status"):
-        detail = (
-            f"NSE symbol search said status=false | e.g. {symbol}: {snippet(result)}"
-        )
+    if isinstance(result, list):
+        items = result
+    elif isinstance(result, dict) and isinstance(result.get("data"), list):
+        items = result["data"]
+    elif isinstance(result, dict) and result.get("status") is False:
+        detail = f"NSE symbol search said status=false | e.g. {symbol}: {snippet(result)}"
 
         with _nse_lock:
             _nse_misses[symbol] = detail
 
         raise NseNoData(detail)
-
-    items = result.get("data") or []
+    else:
+        raise RuntimeError(
+            f"NSE symbol search gave an unexpected reply | e.g. {symbol}: {snippet(result)}"
+        )
 
     if not items:
         detail = f"NSE symbol search returned no results | e.g. {symbol}"
@@ -802,22 +819,31 @@ def nse_lookup(symbol):
         raise NseNoData(detail)
 
     wanted = {symbol.upper(), f"{symbol.upper()}-EQ"}
+    matches = [
+        i for i in items
+        if isinstance(i, dict) and str(i.get("symbol", "")).upper() in wanted
+    ]
 
-    for item in items:
-        if isinstance(item, dict) and str(item.get("symbol", "")).upper() in wanted:
-            try:
-                found = (
-                    str(item["scripcode"]), str(item["symbol"]), str(item["type"])
-                )
-            except KeyError as e:
-                raise RuntimeError(
-                    f"NSE search result lacks field {e} | e.g. {symbol}: {snippet(item)}"
-                )
+    # Prefer a real equity over anything else that happens to share the name.
+    matches.sort(key=lambda i: str(i.get("type", "")).lower() != "equity")
 
-            with _nse_lock:
-                _nse_tokens[symbol] = found
+    if matches:
+        item = matches[0]
 
-            return found
+        try:
+            found = (
+                str(item["scripcode"]), str(item["symbol"]),
+                str(item.get("type") or "Equity"),
+            )
+        except KeyError as e:
+            raise RuntimeError(
+                f"NSE search result lacks field {e} | e.g. {symbol}: {snippet(item)}"
+            )
+
+        with _nse_lock:
+            _nse_tokens[symbol] = found
+
+        return found
 
     first = items[0] if isinstance(items[0], dict) else {}
     names = [str(i.get("symbol")) for i in items[:4] if isinstance(i, dict)]
@@ -909,7 +935,7 @@ def fetch_interval_nse(symbol, interval):
         minutes = NSE_INTERVAL_MINUTES[interval]
         now = int(time.time())
 
-        result = nse_post(NSE_HISTORY_URL, {
+        result = nse_get(NSE_HISTORY_URL, {
             "token": token,
             "fromDate": now - NSE_HISTORY_DAYS * 86400,
             "toDate": now,
@@ -919,16 +945,18 @@ def fetch_interval_nse(symbol, interval):
             "timeInterval": minutes,
         })
 
-        if not isinstance(result, dict) or "status" not in result:
+        if isinstance(result, list):
+            data, rest = result, {}
+        elif isinstance(result, dict):
+            data = result.get("data")
+            rest = {k: v for k, v in result.items() if k != "data"}
+        else:
             raise RuntimeError(
                 f"NSE history gave an unexpected reply | e.g. {symbol} {interval}: "
                 f"{snippet(result)}"
             )
 
-        data = result.get("data")
-
-        if not result.get("status") or not data:
-            rest = {k: v for k, v in result.items() if k != "data"}
+        if not isinstance(data, list) or not data or rest.get("status") is False:
             raise NseNoData(
                 f"NSE history returned no candles | e.g. {symbol} {interval}: "
                 f"{snippet(rest)}"
@@ -2585,26 +2613,20 @@ def nse_debug(symbols):
     print("=" * 78)
     print(f"NSE DEBUG for {symbol}")
     print("=" * 78)
+    print(f"1) cookies set after visiting NSE: {sorted(set(session.cookies.keys()))}")
 
     try:
-        reply = session.get(NSE_HOME_URL, timeout=REQUEST_TIMEOUT)
-        print(f"1) GET {NSE_HOME_URL}: HTTP {reply.status_code}, "
-              f"cookies set: {sorted(session.cookies.keys())}")
-    except Exception as e:
-        print(f"1) GET {NSE_HOME_URL} failed: {type(e).__name__}: {e}")
-
-    try:
-        reply = session.post(
-            NSE_SEARCH_URL, json={"symbol": symbol, "segment": "EQ"},
+        reply = session.get(
+            NSE_SEARCH_URL, params={"symbol": symbol, "segment": ""},
             timeout=REQUEST_TIMEOUT,
         )
     except Exception as e:
         print(f"2) symbol search failed: {type(e).__name__}: {e}")
         return
 
-    print(f"2) symbol search: HTTP {reply.status_code}, "
-          f"content-type {reply.headers.get('content-type')}")
-    print("   body:", snippet(reply.text, 500))
+    print(f"2) symbol search: GET {reply.url}")
+    print(f"   HTTP {reply.status_code}, content-type {reply.headers.get('content-type')}")
+    print("   body:", snippet(reply.text, 600))
 
     try:
         search = reply.json()
@@ -2612,7 +2634,9 @@ def nse_debug(symbols):
         print("   -> not JSON (probably a block page).")
         return
 
-    items = (search.get("data") or []) if isinstance(search, dict) else []
+    items = search if isinstance(search, list) else (
+        (search.get("data") or []) if isinstance(search, dict) else []
+    )
     match = next(
         (i for i in items if isinstance(i, dict)
          and str(i.get("symbol", "")).upper() in {symbol, f"{symbol}-EQ"}),
@@ -2627,18 +2651,18 @@ def nse_debug(symbols):
 
     for interval, minutes in (("1m", 1), ("15m", 15)):
         now = int(time.time())
-        payload = {
+        params = {
             "token": str(match["scripcode"]),
             "fromDate": now - NSE_HISTORY_DAYS * 86400,
             "toDate": now,
             "symbol": match["symbol"],
-            "symbolType": match["type"],
+            "symbolType": match.get("type") or "Equity",
             "chartType": "I",
             "timeInterval": minutes,
         }
 
         try:
-            reply = session.post(NSE_HISTORY_URL, json=payload, timeout=REQUEST_TIMEOUT)
+            reply = session.get(NSE_HISTORY_URL, params=params, timeout=REQUEST_TIMEOUT)
         except Exception as e:
             print(f"3) {interval} history failed: {type(e).__name__}: {e}")
             continue
@@ -2651,8 +2675,8 @@ def nse_debug(symbols):
             print("   body (not JSON):", snippet(reply.text, 500))
             continue
 
-        data = body.get("data") if isinstance(body, dict) else None
-        print("   reply fields:", snippet({k: v for k, v in body.items() if k != "data"}) if isinstance(body, dict) else snippet(body))
+        data = body if isinstance(body, list) else (body.get("data") if isinstance(body, dict) else None)
+        print("   reply fields:", snippet({k: v for k, v in body.items() if k != "data"}) if isinstance(body, dict) else "(bare list)")
 
         if not data:
             print("   -> no candles in the reply.")
