@@ -2,7 +2,8 @@ name: Daily NSE Scan
 
 on:
   schedule:
-    # 10:30 UTC = 16:00 IST — after the 15:30 IST market close.
+    # 10:30 UTC = 16:00 IST — after the 15:30 IST market close (the scanner
+    # treats today's session as complete from 15:40 IST).
     # GitHub Actions cron is UTC-only; Mon-Fri (1-5) only.
     - cron: '30 10 * * 1-5'
 
@@ -11,9 +12,18 @@ on:
 permissions:
   contents: write
 
+# Never run two scans at once (they would fight over index.html and hit NSE
+# twice as hard).
+concurrency:
+  group: nse-scan
+  cancel-in-progress: false
+
 jobs:
   scan:
     runs-on: ubuntu-latest
+    # A full ~2,300-stock scan can take a while because NSE requests are spaced
+    # out and pause when NSE rate-limits. This stops a stuck run from hanging.
+    timeout-minutes: 120
 
     steps:
 
@@ -30,8 +40,28 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install "yfinance==1.7.0" pandas requests curl_cffi
 
+      # The scanner saves each stock's NSE chart token in nse_token_cache.json so
+      # every symbol is looked up only once. GitHub runners start empty, so the
+      # file is restored from the previous run's cache and saved again at the end.
+      - name: Restore NSE token cache
+        uses: actions/cache/restore@v4
+        with:
+          path: nse_token_cache.json
+          key: nse-token-cache-${{ github.run_id }}
+          restore-keys: |
+            nse-token-cache-
+
       - name: Run the scan
         run: python nse_daily_scanner.py
+
+      # Runs even if the scan or a later step fails, so the lookups done so far
+      # are not lost. (The cache file is not committed to the repository.)
+      - name: Save NSE token cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: nse_token_cache.json
+          key: nse-token-cache-${{ github.run_id }}
 
       - name: Commit updated results
         run: |
@@ -42,4 +72,5 @@ jobs:
 
           git diff --quiet --cached || git commit -m "Daily scan results"
 
+          git pull --rebase
           git push
