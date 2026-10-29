@@ -173,17 +173,26 @@ NSE_HISTORY_DAYS = 8
 # Stock -> NSE chart token, saved between runs so each symbol is looked up once.
 NSE_TOKEN_CACHE_FILE = "nse_token_cache.json"
 
-# After this many NSE failures in a row (not "no data"), NSE is considered
-# blocked for the rest of the run and the scanner goes straight to the fallback.
-NSE_MAX_CONSECUTIVE_FAILURES = 20
+# NSE answers a burst of requests with HTTP 403/429, so requests are spaced out
+# and only a few run at once, however many worker threads there are:
+NSE_MAX_CONNECTIONS = 3
+
+# Minimum gap (seconds) between any two NSE requests, all threads together.
+NSE_MIN_INTERVAL = 0.4
+
+# If NSE refuses this many requests in a row, NSE is PAUSED: every worker waits
+# NSE_COOLDOWN_SECONDS and then carries on. Each further pause without a success
+# in between doubles the wait (up to NSE_COOLDOWN_MAX). After NSE_MAX_COOLDOWNS
+# such pauses in a row with no success in between, NSE is given up for the rest
+# of the run and the remaining stocks come from Yahoo.
+NSE_REFUSALS_BEFORE_COOLDOWN = 4
+NSE_COOLDOWN_SECONDS = 45
+NSE_COOLDOWN_MAX = 600
+NSE_MAX_COOLDOWNS = 4
 
 # If NSE has served NOTHING usable after this many stocks, stop trying it for
 # the rest of the run (it is not working from this network / the API changed).
 NSE_GIVE_UP_AFTER = 40
-
-# NSE is polite-use only: at most this many requests in flight at once, however
-# many worker threads there are.
-NSE_MAX_CONNECTIONS = 5
 
 # Which way to trade when a match fires. The second-last candles (15m 15:00,
 # 3m 15:24, 1m 15:28) always share one trend - the "alignment trend" - so there
@@ -474,6 +483,8 @@ def load_nse_equity_list():
     except Exception:
         pass
 
+    candidate = None
+
     for url in NSE_EQUITY_URLS:
 
         try:
@@ -492,21 +503,35 @@ def load_nse_equity_list():
             if symbol_column is None:
                 raise ValueError("NSE Symbol column not found")
 
-            if series_column is not None:
-                df = df[
-                    df[series_column].astype(str).str.strip().str.upper() == "EQ"
-                ]
+            if series_column is None:
+                # Keep it as a last resort, but try the next list first: one
+                # with a SERIES column lets non-EQ (SME etc.) stocks be dropped.
+                if candidate is None:
+                    candidate = normalize_symbols(df[symbol_column].dropna().tolist())
+
+                raise ValueError("no SERIES column, so non-EQ stocks cannot be filtered out")
+
+            df = df[
+                df[series_column].astype(str).str.strip().str.upper() == "EQ"
+            ]
 
             symbols = normalize_symbols(df[symbol_column].dropna().tolist())
 
             if len(symbols) < 300:
                 raise ValueError(f"Only {len(symbols)} EQ symbols returned")
 
-            print(f"NSE official equity list loaded: {len(symbols)} symbols")
+            print(f"NSE official equity list loaded: {len(symbols)} EQ symbols")
             return symbols
 
         except Exception as e:
             print(f"NSE equity list unavailable ({url.rsplit('/', 1)[-1]}): {e}")
+
+    if candidate and len(candidate) >= 300:
+        print(
+            f"Using the equity list without a SERIES filter: {len(candidate)} symbols "
+            f"(may include SME / non-EQ stocks, which are skipped during the scan)"
+        )
+        return candidate
 
     return None
 
@@ -700,7 +725,13 @@ _nse_local = threading.local()
 _nse_lock = threading.Lock()
 _nse_slots = threading.BoundedSemaphore(NSE_MAX_CONNECTIONS)
 _nse_tokens = {}
-_nse_state = {"failures": 0, "blocked": False, "attempts": 0, "successes": 0}
+_nse_state = {
+    "failures": 0, "blocked": False, "attempts": 0, "successes": 0,
+    "pause_until": 0.0, "cooldowns": 0, "cooldown_s": NSE_COOLDOWN_SECONDS,
+    "pauses": 0, "paused_seconds": 0.0,
+}
+_nse_rate_lock = threading.Lock()
+_nse_next = [0.0]
 _nse_errors = Counter()
 _nse_examples = {}
 _nse_misses = {}
@@ -733,6 +764,19 @@ def snippet(value, limit=200):
     return text if len(text) <= limit else text[:limit] + "..."
 
 
+def nse_throttle():
+    """Space NSE requests at least NSE_MIN_INTERVAL seconds apart, across all
+    worker threads."""
+
+    with _nse_rate_lock:
+        now = time.monotonic()
+        wait = _nse_next[0] - now
+        _nse_next[0] = max(now, _nse_next[0]) + NSE_MIN_INTERVAL
+
+    if wait > 0:
+        time.sleep(wait)
+
+
 def nse_session(refresh=False):
     """One requests session per worker thread, holding the cookies NSE sets on
     its main site and on the charting site."""
@@ -745,6 +789,7 @@ def nse_session(refresh=False):
 
         for page in (NSE_HOME_URL + "/", "https://charting.nseindia.com/"):
             try:
+                nse_throttle()
                 session.get(page, headers=NSE_PAGE_HEADERS, timeout=REQUEST_TIMEOUT)
             except Exception:
                 pass
@@ -756,8 +801,8 @@ def nse_session(refresh=False):
 
 def nse_get(url, params):
     """GET a JSON reply from NSE's chart API (parameters go in the query
-    string). Retries rate limits and blocks with a fresh session; raises
-    RuntimeError with a readable reason if every attempt fails."""
+    string). Requests are throttled; rate limits and blocks are retried after a
+    wait; raises RuntimeError with a readable reason if every attempt fails."""
 
     last_error = "NSE request failed"
     refresh = False
@@ -765,6 +810,8 @@ def nse_get(url, params):
     for attempt in range(MAX_RETRIES):
 
         try:
+            nse_throttle()
+
             with _nse_slots:
                 response = nse_session(refresh).get(
                     url, params=params, timeout=REQUEST_TIMEOUT
@@ -776,9 +823,12 @@ def nse_get(url, params):
             if status in (401, 403):
                 last_error = (
                     f"NSE refused the request (HTTP {status}); "
-                    f"NSE may be blocking this network"
+                    f"NSE is probably rate-limiting this network"
                 )
-                refresh = True
+                # One fresh session at most per call: opening many new sessions
+                # while NSE is refusing us only makes the block worse.
+                refresh = attempt == 0
+                time.sleep(3.0 * (attempt + 1))
             elif status == 429:
                 last_error = "NSE rate limit (HTTP 429)"
                 time.sleep(4.0 * (2 ** attempt))
@@ -789,11 +839,11 @@ def nse_get(url, params):
                     return response.json()
                 except ValueError:
                     last_error = "NSE returned a non-JSON reply (probably a block page)"
-                    refresh = True
+                    refresh = attempt == 0
 
         except requests.RequestException as e:
             last_error = f"NSE network error: {type(e).__name__}"
-            refresh = True
+            refresh = attempt == 0
 
         if attempt < MAX_RETRIES - 1:
             time.sleep(1.0 * (2 ** attempt) + random.uniform(0.2, 1.0))
@@ -867,6 +917,24 @@ def nse_lookup(symbol):
             _nse_tokens[symbol] = found
 
         return found
+
+    other_series = [
+        str(i.get("symbol")) for i in items
+        if isinstance(i, dict)
+        and str(i.get("symbol", "")).upper().startswith(symbol.upper() + "-")
+        and not str(i.get("symbol", "")).upper().endswith("-EQ")
+    ]
+
+    if other_series:
+        detail = (
+            f"not an EQ-series stock (NSE lists it as {other_series[:2]}) "
+            f"| e.g. {symbol}"
+        )
+
+        with _nse_lock:
+            _nse_misses[symbol] = detail
+
+        raise NseNoData(detail)
 
     first = items[0] if isinstance(items[0], dict) else {}
     names = [str(i.get("symbol")) for i in items[:4] if isinstance(i, dict)]
@@ -1257,37 +1325,81 @@ def nse_note_failure(message):
             _nse_examples[reason] = example[:260]
 
 
+def nse_wait_if_paused():
+    """Block while NSE is cooling down after refusals (every worker waits)."""
+
+    while True:
+        with _nse_lock:
+            remaining = _nse_state["pause_until"] - time.time()
+            blocked = _nse_state["blocked"]
+
+        if blocked or remaining <= 0:
+            return
+
+        time.sleep(min(remaining, 5.0))
+
+
 def nse_record(outcome):
-    """Circuit breaker. outcome: "ok"; "soft" (NSE answered but had no data for
-    that stock); "hard" (an error). NSE is treated as unusable for the rest of
-    the run after NSE_MAX_CONSECUTIVE_FAILURES hard failures in a row, or if it
-    has served nothing at all after NSE_GIVE_UP_AFTER stocks."""
+    """Rate-limit handling. outcome: "ok"; "soft" (NSE answered but had no data
+    for that stock); "hard" (an error, e.g. HTTP 403). NSE_REFUSALS_BEFORE_COOLDOWN
+    hard failures in a row pause NSE for a while; repeated pauses with no success
+    in between give NSE up for the run. NSE is also given up if it has served
+    nothing at all after NSE_GIVE_UP_AFTER stocks."""
+
+    message = None
 
     with _nse_lock:
-        _nse_state["attempts"] += 1
+        state = _nse_state
+        state["attempts"] += 1
 
         if outcome == "ok":
-            _nse_state["successes"] += 1
-            _nse_state["failures"] = 0
+            state["successes"] += 1
+            state["failures"] = 0
+            state["cooldowns"] = 0
+            state["cooldown_s"] = NSE_COOLDOWN_SECONDS
             return
 
-        if outcome == "hard":
-            _nse_state["failures"] += 1
-
-        if _nse_state["blocked"]:
+        if state["blocked"]:
             return
 
-        reason = None
+        if outcome == "hard" and time.time() >= state["pause_until"]:
+            state["failures"] += 1
 
-        if _nse_state["failures"] >= NSE_MAX_CONSECUTIVE_FAILURES:
-            reason = f"NSE failed {NSE_MAX_CONSECUTIVE_FAILURES} times in a row"
-        elif _nse_state["successes"] == 0 and _nse_state["attempts"] >= NSE_GIVE_UP_AFTER:
-            reason = f"NSE gave nothing usable for the first {_nse_state['attempts']} stocks"
+            if state["failures"] >= NSE_REFUSALS_BEFORE_COOLDOWN:
+                state["failures"] = 0
+                state["cooldowns"] += 1
 
-        if reason:
-            _nse_state["blocked"] = True
-            print()
-            print(f"NOTE: {reason} - not using NSE for the rest of this run.")
+                if state["cooldowns"] > NSE_MAX_COOLDOWNS:
+                    state["blocked"] = True
+                    message = (
+                        f"NSE kept refusing requests after {NSE_MAX_COOLDOWNS} pauses "
+                        f"- not using NSE for the rest of this run."
+                    )
+                else:
+                    pause = state["cooldown_s"]
+                    state["cooldown_s"] = min(pause * 2, NSE_COOLDOWN_MAX)
+                    state["pause_until"] = time.time() + pause
+                    state["pauses"] += 1
+                    state["paused_seconds"] += pause
+                    message = (
+                        f"NSE refused {NSE_REFUSALS_BEFORE_COOLDOWN} requests in a row "
+                        f"(rate limit) - pausing NSE for {pause:.0f}s, then carrying on."
+                    )
+
+        if (
+            message is None
+            and state["successes"] == 0
+            and state["attempts"] >= NSE_GIVE_UP_AFTER
+        ):
+            state["blocked"] = True
+            message = (
+                f"NSE gave nothing usable for the first {state['attempts']} stocks "
+                f"- not using NSE for the rest of this run."
+            )
+
+    if message:
+        print()
+        print("NOTE:", message)
 
 
 # =============================================================================
@@ -1437,11 +1549,12 @@ def fetch_symbol_rows(symbol):
         rows, info = fetch_all_timeframes(symbol, fetch_interval)
         return rows, info, "Yahoo"
 
-    nse_info = (
-        "NSE skipped: its candle times could not be verified against Yahoo"
-        if _nse_calibration["ok"] is False
-        else "NSE skipped (not used for the rest of this run)"
-    )
+    nse_wait_if_paused()
+
+    if _nse_calibration["ok"] is False:
+        nse_info = "NSE skipped: its candle times could not be verified against Yahoo"
+    else:
+        nse_info = "NSE skipped (given up for the rest of this run after repeated refusals)"
 
     if not _nse_state["blocked"]:
         rows, nse_info = fetch_all_timeframes(symbol, fetch_interval_nse)
@@ -1453,6 +1566,11 @@ def fetch_symbol_rows(symbol):
         nse_record("soft" if is_no_data(nse_info) else "hard")
 
     nse_note_failure(nse_info)
+
+    # NSE lists it under another series (SME, trade-to-trade...): not a stock
+    # the strategy covers, so there is nothing to fall back to.
+    if str(nse_info).startswith("NO_DATA: not an EQ-series"):
+        return None, "NO_DATA", "NSE"
 
     if not FALLBACK_TO_YAHOO:
         return None, ("NO_DATA" if is_no_data(nse_info) else nse_info), "NSE"
@@ -2275,6 +2393,15 @@ def source_health(results):
 
     if _nse_calibration["detail"]:
         lines.append(_nse_calibration["detail"])
+
+    if _nse_state["pauses"]:
+        lines.append(
+            f"NSE rate-limited this scan {_nse_state['pauses']} time(s); the scanner "
+            f"paused NSE for {_nse_state['paused_seconds']:.0f}s in total and carried on."
+        )
+
+    if _nse_state["blocked"] and _nse_calibration["ok"] is not False:
+        lines.append("NSE was given up for the rest of the run after repeated refusals.")
 
     if nse == 0 and fallback > 0:
         level = "bad"
