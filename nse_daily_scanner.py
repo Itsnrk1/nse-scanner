@@ -157,6 +157,26 @@ CONFLICT_WARN_SHARE = 0.10
 #            (alignment, and the 3m same-trend rule).
 MISSING_LAST_CANDLE_IS_ZERO_VOLUME = False
 
+# A short description of the rules, shown at the top of every report and in the
+# console so a result can always be tied to the rule set that produced it.
+# (Keep it in step with the rules above if they ever change.)
+STRATEGY_RULES = (
+    "15m volume | 3m volume + same trend | 1m volume | "
+    "aligned second-last trend | morning (09:15) trend"
+)
+
+# No stock may be lost to a technical failure. After the main scan, stocks that
+# ERRORED are retried (waiting first, with fewer workers), and stocks that fell
+# back to Yahoo only because NSE failed temporarily are tried on NSE again.
+RETRY_ROUNDS = 2
+RETRY_WAIT_SECONDS = (30, 60)
+RETRY_WORKERS = 3
+
+# Every signal, and every stock that failed by a single rule, is checked on the
+# OTHER data source for the same session, so a result never rests on one
+# source alone. At most this many stocks are cross-checked.
+CROSS_CHECK_MAX = 150
+
 # Where the candles come from (both are free and need no API key):
 #   "NSE"   -> NSE's own charting feed (charting.nseindia.com): the exchange's
 #              data. Unofficial, so NSE may rate-limit or block it (cloud
@@ -218,8 +238,8 @@ MARKET_CLOSE_MINUTES = 15 * 60 + 30
 
 # After the 15:30 close, Yahoo needs a few minutes to publish the final
 # candles. Today's session is only treated as complete this many minutes after
-# the close (default 15:40); before that the scanner still reads yesterday.
-DATA_READY_BUFFER_MINUTES = 10
+# the close (default 15:50); before that the scanner still reads yesterday.
+DATA_READY_BUFFER_MINUTES = 20
 
 
 # =============================================================================
@@ -737,6 +757,7 @@ _nse_next = [0.0]
 _nse_errors = Counter()
 _nse_examples = {}
 _nse_misses = {}
+_nse_transient = set()
 _nse_convention = {"labels": None}
 _nse_minute_cache = {}
 _nse_calibration = {"done": False, "ok": None, "shift": 0, "detail": ""}
@@ -1569,6 +1590,12 @@ def fetch_symbol_rows(symbol):
 
     nse_note_failure(nse_info)
 
+    # A temporary NSE failure (not "no data"): this stock is tried on NSE again
+    # after the scan, so it does not stay on the Yahoo fallback for good.
+    if not is_no_data(nse_info) and _nse_calibration["ok"] is not False:
+        with _nse_lock:
+            _nse_transient.add(symbol)
+
     # NSE lists it under another series (SME, trade-to-trade...): not a stock
     # the strategy covers, so there is nothing to fall back to.
     if str(nse_info).startswith("NO_DATA: not an EQ-series"):
@@ -1780,7 +1807,7 @@ def derive_15m_from_1m(day_1m, start_hm):
     }
 
 
-def evaluate_rows(rows_by_tf):
+def evaluate_rows(rows_by_tf, session_day=None):
     """15m / 3m / 1m closing-candle strategy, read on the previous day
     (P = the latest completed session). Entry day = the next trading day.
 
@@ -1794,6 +1821,9 @@ def evaluate_rows(rows_by_tf):
 
     Before a signal is allowed, the 15m candles are cross-checked against the
     1m candles inside them; a disagreement gives status CONFLICT, not a signal.
+
+    session_day: read this session instead of the latest one (used to check the
+    same session on a second data source).
     """
 
     if not rows_by_tf:
@@ -1809,7 +1839,19 @@ def evaluate_rows(rows_by_tf):
     excluded = set() if ctx["today_complete"] else {ctx["today"]}
     dates = sorted({d for days in by_tf.values() for d in days} - excluded)
 
-    if not dates:
+    if session_day is not None:
+        if session_day not in {d for days in by_tf.values() for d in days}:
+            return {
+                "status": "INCOMPLETE",
+                "date": session_day,
+                "previous_day": session_day,
+                "entry_day": entry,
+                "missing": [slot_label(k) for k in SLOT_KEYS],
+                "note": "this data source has no data for that session",
+            }
+
+        previous_day = session_day
+    elif not dates:
         return {
             "status": "INCOMPLETE",
             "date": None,
@@ -1818,8 +1860,8 @@ def evaluate_rows(rows_by_tf):
             "missing": [slot_label(k) for k in SLOT_KEYS],
             "note": "no completed trading day of data before today",
         }
-
-    previous_day = dates[-1]
+    else:
+        previous_day = dates[-1]
 
     # 3-minute candles are built from the previous day's 1-minute candles only.
     rows_1m = rows_by_tf.get("1m")
@@ -2235,6 +2277,13 @@ h1 { margin-bottom: 5px; }
     background: #fff3cd; border: 1px solid #e0c36a; color: #6b5200;
     border-radius: 8px; padding: 12px 16px; margin: 18px 0;
 }
+.tag {
+    display: inline-block; margin-left: 8px; padding: 2px 6px; border-radius: 4px;
+    font-size: 11px; font-weight: bold;
+}
+.tag.ok { background: #dff5e5; color: #08752f; }
+.tag.warn { background: #fff3cd; color: #6b5200; }
+.tag.none { background: #ededed; color: #555; }
 .note {
     background: #e8f1fb; border: 1px solid #9bbbe0; color: #1d3f66;
     border-radius: 8px; padding: 12px 16px; margin: 18px 0;
@@ -2737,6 +2786,7 @@ def generate_html_report(results, elapsed, universe_source, run_note=None):
     warning_html = (
         (f'<div class="note">{esc(run_note)}</div>' if run_note else "")
         + health_html
+        + unscanned_html(results)
         + (f'<div class="warn">{esc(warning)}</div>' if warning else "")
     )
 
@@ -2747,7 +2797,8 @@ def generate_html_report(results, elapsed, universe_source, run_note=None):
             f'{esc(r["direction"])}</span>'
             f'<b>{esc(r["symbol"])}</b>'
             f'<span class="date">Previous day: {esc(r.get("previous_day", ""))}</span>'
-            '</div>'
+            + cross_tag(r)
+            + '</div>'
             for r in matches
         )
     else:
@@ -2813,6 +2864,7 @@ def generate_html_report(results, elapsed, universe_source, run_note=None):
 Generated: {esc(scan_time)}<br>
 Universe: {esc(universe_source)}<br>
 Data: {esc(source_text)} - 15-minute and 1-minute candles (3-minute built from 1-minute)<br>
+Rules: {esc(STRATEGY_RULES)}<br>
 Previous day: {esc(fmt_day(previous_day))}<br>
 Entry: {esc(fmt_day(entry_day))} at the 09:15 open &nbsp;|&nbsp; Exit: {esc(EXIT_TIME_LABEL)}
 </div>
@@ -2827,6 +2879,8 @@ Entry: {esc(fmt_day(entry_day))} at the 09:15 open &nbsp;|&nbsp; Exit: {esc(EXIT
 <h2>Matches</h2>
 <div class="matches">{match_html}</div>
 </div>
+
+{cross_html(results)}
 
 <div class="table-wrap">
 <table>
@@ -3151,6 +3205,417 @@ def nse_debug(symbols):
         print(f"   could not compare: {type(e).__name__}: {e}")
 
 
+# =============================================================================
+# COMPLETENESS AND CROSS-CHECK
+# =============================================================================
+#
+# No stock may be lost to a technical problem, and no result may rest on one
+# data source alone:
+#   * stocks that ERRORED are retried; stocks that fell back to Yahoo only
+#     because NSE failed for a moment are tried on NSE again;
+#   * every signal, and every stock that failed by a single rule, is re-tested
+#     on the OTHER data source for the same session, and any disagreement is
+#     shown instead of being decided silently;
+#   * anything that still could not be scanned is listed by name.
+
+RULE_NAMES = (
+    ("vol_15m", "15m volume (15:00 > 15:15)"),
+    ("vol_3m", "3m volume (15:24 > 15:27)"),
+    ("trend_3m", "3m trend (15:24 and 15:27 same)"),
+    ("vol_1m", "1m volume (15:28 > 15:29)"),
+    ("cond_align", "alignment (15m 15:00 = 3m 15:24 = 1m 15:28)"),
+    ("cond_morning", "morning 09:15 candles"),
+)
+
+
+def failed_rules(result):
+    """Names of the rules a result fails (plus data problems)."""
+
+    if "cond_15m" not in result:
+        return ["no usable data"]
+
+    failed = [label for key, label in RULE_NAMES if not result.get(key)]
+
+    allowed = LAST_CANDLES if MISSING_LAST_CANDLE_IS_ZERO_VOLUME else set()
+    missing = [m for m in result.get("missing") or [] if m not in allowed]
+
+    if missing:
+        failed.append("missing candles: " + ", ".join(missing))
+
+    if result.get("conflicts"):
+        failed.append("15m/1m data conflict")
+
+    return failed
+
+
+def scan_one_symbol_nse(symbol):
+    """NSE-only scan of one stock. None if NSE still cannot serve it."""
+
+    try:
+        rows, info = fetch_all_timeframes(symbol, fetch_interval_nse)
+
+        if rows is None:
+            return None
+
+        result = evaluate_rows(rows)
+        result["symbol"] = symbol
+        result["data_status"] = info
+        result["source"] = "NSE"
+
+        return result
+
+    except Exception:
+        return None
+
+
+def retry_failed(results):
+    """Retry stocks that errored, and put stocks that fell back to Yahoo only
+    because NSE failed temporarily back on NSE. Returns the updated results."""
+
+    global MAX_WORKERS
+
+    by_symbol = {r["symbol"]: r for r in results}
+
+    for round_number in range(1, RETRY_ROUNDS + 1):
+        errored = sorted(s_ for s_, r in by_symbol.items() if r.get("status") == "ERROR")
+
+        with _nse_lock:
+            transient = set(_nse_transient)
+
+        fallbacks = sorted(
+            s_ for s_ in transient
+            if by_symbol.get(s_, {}).get("source") == "Yahoo (fallback)"
+            and s_ not in errored
+        )
+
+        if not errored and not fallbacks:
+            break
+
+        wait = RETRY_WAIT_SECONDS[min(round_number - 1, len(RETRY_WAIT_SECONDS) - 1)]
+
+        print()
+        print("=" * 70)
+        print(
+            f"RETRY {round_number}/{RETRY_ROUNDS}: {len(errored)} stocks errored, "
+            f"{len(fallbacks)} stocks are on the Yahoo fallback only because NSE "
+            f"failed. Waiting {wait}s, then trying again with {RETRY_WORKERS} workers."
+        )
+        print("=" * 70)
+
+        time.sleep(wait)
+
+        # NSE gets a fresh start after the wait (unless its times were never verified).
+        with _nse_lock:
+            _nse_state.update(
+                failures=0, pause_until=0.0, cooldowns=0,
+                cooldown_s=NSE_COOLDOWN_SECONDS,
+                blocked=_nse_calibration["ok"] is False,
+            )
+
+        jobs = [(sym, "full") for sym in errored] + [(sym, "nse") for sym in fallbacks]
+
+        def work(job):
+            sym, mode = job
+            return sym, (scan_one_symbol(sym) if mode == "full" else scan_one_symbol_nse(sym))
+
+        recovered = moved = 0
+
+        with ThreadPoolExecutor(max_workers=RETRY_WORKERS) as executor:
+            for sym, result in executor.map(work, jobs):
+                if result is None:
+                    continue
+
+                was_error = by_symbol[sym].get("status") == "ERROR"
+
+                if was_error and result.get("status") != "ERROR":
+                    recovered += 1
+                elif not was_error and result.get("source") == "NSE":
+                    moved += 1
+                    with _nse_lock:
+                        _nse_transient.discard(sym)
+
+                by_symbol[sym] = result
+
+        print(f"Retry {round_number}: {recovered} stocks recovered, {moved} moved back to NSE.")
+
+    return sorted(by_symbol.values(), key=lambda r: r.get("symbol", ""))
+
+
+def other_source_name(result):
+    return "NSE" if str(result.get("source", "")).startswith("Yahoo") else "Yahoo"
+
+
+def check_other_source(result):
+    """Re-test one stock, for the same session, on the data source that was NOT
+    used for it. Returns a dict (see cross_status)."""
+
+    other = other_source_name(result)
+
+    if other == "NSE":
+        if _nse_calibration["ok"] is not True:
+            return {"source": other, "checked": False, "note": "NSE candle times were not verified"}
+
+        if _nse_state["blocked"]:
+            return {"source": other, "checked": False, "note": "NSE is blocked in this run"}
+
+        fetcher = fetch_interval_nse
+    else:
+        if yf is None:
+            return {"source": other, "checked": False, "note": "yfinance is not installed"}
+
+        fetcher = fetch_interval
+
+    try:
+        rows, info = fetch_all_timeframes(result["symbol"], fetcher)
+    except Exception as e:
+        return {"source": other, "checked": False, "note": f"{type(e).__name__}: {e}"[:120]}
+
+    if rows is None:
+        return {"source": other, "checked": False, "note": str(info)[:120]}
+
+    other_result = evaluate_rows(rows, session_day=result.get("previous_day"))
+
+    if "cond_15m" not in other_result:
+        return {
+            "source": other, "checked": False,
+            "note": other_result.get("note") or f"{other} has no usable data for that session",
+        }
+
+    return {
+        "source": other,
+        "checked": True,
+        "passes": other_result.get("status") == "PASS",
+        "status": other_result.get("status"),
+        "direction": other_result.get("direction"),
+        "failed": failed_rules(other_result),
+    }
+
+
+def cross_status(result):
+    """How the other source relates to this result:
+    CONFIRMED (a signal on both), DIRECTION DIFFERS, ONE SOURCE ONLY (a signal
+    here, not on the other source), OTHER SOURCE ONLY (not a signal here, but
+    the other source says it is), NOT CHECKED, or None (nothing to report)."""
+
+    check = result.get("confirm")
+
+    if not check:
+        return None
+
+    primary_pass = result.get("status") == "PASS"
+
+    if not check["checked"]:
+        return "NOT CHECKED" if primary_pass else None
+
+    if primary_pass and check["passes"]:
+        return "CONFIRMED" if check.get("direction") == result.get("direction") else "DIRECTION DIFFERS"
+
+    if primary_pass:
+        return "ONE SOURCE ONLY"
+
+    return "OTHER SOURCE ONLY" if check["passes"] else None
+
+
+def confirm_candidates(results):
+    """Cross-check every signal and every single-rule near-miss on the other
+    source (at most CROSS_CHECK_MAX stocks); stores the outcome in
+    result["confirm"]."""
+
+    by_symbol = {r["symbol"]: r for r in results}
+    chosen = [r["symbol"] for r in results if r.get("status") == "PASS"]
+
+    for sym, _ in closest_misses(results, limit=CROSS_CHECK_MAX):
+        if sym not in chosen:
+            chosen.append(sym)
+
+    for sym, _ in near_miss_list(results):
+        if sym not in chosen:
+            chosen.append(sym)
+
+    chosen = chosen[:CROSS_CHECK_MAX]
+
+    if not chosen:
+        return
+
+    print()
+    print(f"CROSS-CHECK: re-testing {len(chosen)} signals / near-misses on the other data source...")
+
+    def work(sym):
+        return sym, check_other_source(by_symbol[sym])
+
+    with ThreadPoolExecutor(max_workers=min(MAX_WORKERS, 4)) as executor:
+        for sym, check in executor.map(work, chosen):
+            by_symbol[sym]["confirm"] = check
+
+
+def cross_groups(results):
+    groups = {
+        "CONFIRMED": [], "ONE SOURCE ONLY": [], "DIRECTION DIFFERS": [],
+        "OTHER SOURCE ONLY": [], "NOT CHECKED": [],
+    }
+
+    for r in results:
+        status = cross_status(r)
+
+        if status in groups:
+            groups[status].append(r)
+
+    return groups
+
+
+def cross_detail(result):
+    """One readable sentence about a disagreement."""
+
+    check = result["confirm"]
+    mine = result.get("source", "?")
+    other = check["source"]
+
+    if cross_status(result) == "OTHER SOURCE ONLY":
+        return (
+            f"passes on {other} ({check.get('direction')}); fails on {mine}: "
+            + ", ".join(failed_rules(result))
+        )
+
+    if cross_status(result) == "DIRECTION DIFFERS":
+        return f"{mine} says {result.get('direction')}, {other} says {check.get('direction')}"
+
+    if not check["checked"]:
+        return f"not checked on {other}: {check.get('note')}"
+
+    return f"signal on {mine}; fails on {other}: " + ", ".join(check.get("failed") or ["?"])
+
+
+def cross_check_console(results):
+    groups = cross_groups(results)
+    total = sum(len(v) for v in groups.values())
+
+    if not total:
+        return "  (nothing to cross-check)"
+
+    lines = []
+
+    def names(items):
+        return ", ".join(r["symbol"] for r in items) or "none"
+
+    lines.append(f"  Signals confirmed on both sources : {names(groups['CONFIRMED'])}")
+
+    for key, title in (
+        ("ONE SOURCE ONLY", "Signals on ONE source only"),
+        ("DIRECTION DIFFERS", "Signals with different directions"),
+        ("OTHER SOURCE ONLY", "PASS on the OTHER source only"),
+        ("NOT CHECKED", "Signals not cross-checked"),
+    ):
+        if groups[key]:
+            lines.append(f"  {title}:")
+
+            for r in groups[key]:
+                lines.append(f"    {r['symbol']:<14} {cross_detail(r)}")
+
+    return "\n".join(lines)
+
+
+def cross_tag(result):
+    """Small HTML tag next to a signal showing its cross-check outcome."""
+
+    status = cross_status(result)
+
+    if status is None:
+        return ""
+
+    kind, text = {
+        "CONFIRMED": ("ok", "both sources agree"),
+        "ONE SOURCE ONLY": ("warn", f"only on {result.get('source')}"),
+        "DIRECTION DIFFERS": ("warn", "sources disagree on direction"),
+        "NOT CHECKED": ("none", "second source not checked"),
+    }.get(status, ("none", ""))
+
+    return f'<span class="tag {kind}" title="{esc(cross_detail(result))}">{esc(text)}</span>'
+
+
+def cross_html(results):
+    groups = cross_groups(results)
+    total = sum(len(v) for v in groups.values())
+
+    if not total:
+        return ""
+
+    confirmed = len(groups["CONFIRMED"])
+    problems = [
+        r for key in ("ONE SOURCE ONLY", "DIRECTION DIFFERS", "OTHER SOURCE ONLY", "NOT CHECKED")
+        for r in groups[key]
+    ]
+
+    body = "".join(
+        f"<tr><td class=\"symbol\">{esc(r['symbol'])}</td>"
+        f"<td>{esc(cross_status(r))}</td><td>{esc(cross_detail(r))}</td></tr>"
+        for r in problems
+    )
+
+    summary = (
+        f"{confirmed} signal(s) confirmed on both data sources."
+        if confirmed else "No signal was confirmed on both data sources."
+    )
+
+    table = (
+        '<div class="table-wrap"><table><thead><tr><th>Symbol</th><th>Result</th>'
+        f'<th>Detail</th></tr></thead><tbody>{body}</tbody></table></div>'
+        if body else ""
+    )
+
+    return (
+        '<div class="match-box"><h2>Cross-check on the other data source</h2>'
+        f'<p>Every signal and every stock that failed by a single rule was re-tested on the '
+        f'other data source, for the same session. {esc(summary)}</p>{table}</div>'
+    )
+
+
+def unscanned_report(results, limit=40):
+    """Stocks whose result cannot be trusted, by name: technical ERRORs,
+    DATA CONFLICTs and STALE sessions."""
+
+    def pick(status):
+        return sorted(
+            (r["symbol"], (r.get("error") or "")[:110])
+            for r in results if r.get("status") == status
+        )
+
+    return {
+        "ERROR": pick("ERROR"),
+        "CONFLICT": pick("CONFLICT"),
+        "STALE": pick("STALE"),
+        "limit": limit,
+    }
+
+
+def unscanned_lines(results):
+    report = unscanned_report(results)
+    limit = report["limit"]
+    lines = []
+
+    for key, meaning in (
+        ("ERROR", "could NOT be scanned (technical failure) and may hide a signal"),
+        ("CONFLICT", "have a 15m/1m DATA CONFLICT and were blocked"),
+        ("STALE", "were read on a different session than most stocks"),
+    ):
+        items = report[key]
+
+        if items:
+            shown = ", ".join(sym for sym, _ in items[:limit])
+            more = f" ... and {len(items) - limit} more" if len(items) > limit else ""
+            lines.append(f"{len(items)} stocks {meaning}: {shown}{more}")
+
+    return lines
+
+
+def unscanned_html(results):
+    lines = unscanned_lines(results)
+
+    if not lines:
+        return ""
+
+    return '<div class="warn">' + "<br>".join(esc(line) for line in lines) + "</div>"
+
+
 def main():
 
     if len(sys.argv) > 1 and sys.argv[1] == "--check":
@@ -3217,7 +3682,13 @@ def main():
     results, elapsed = scan_all_symbols(universe)
     save_nse_token_cache()
 
+    # No stock may be lost to a technical failure: retry, then cross-check.
+    results = retry_failed(results)
+    save_nse_token_cache()
+
     reference_date = mark_stale(results)
+
+    confirm_candidates(results)
 
     matches = [r for r in results if r.get("status") == "PASS"]
 
@@ -3227,6 +3698,7 @@ def main():
     print("=" * 70)
     print(f"Universe    : {len(universe)}")
     print(f"Previous day: {reference_date}   Entry day: {context['entry']}")
+    print(f"Rules       : {STRATEGY_RULES}")
     print(f"Matches     : {len(matches)}")
     print(f"Time        : {elapsed:.1f} seconds")
     print()
@@ -3241,6 +3713,18 @@ def main():
             )
     else:
         print("NO MATCHES.")
+
+    print()
+    print("CROSS-CHECK ON THE OTHER DATA SOURCE:")
+    print(cross_check_console(results))
+
+    unscanned = unscanned_lines(results)
+
+    if unscanned:
+        print()
+        print("STOCKS WITHOUT A RELIABLE RESULT:")
+        for line in unscanned:
+            print("  " + line)
 
     print()
 
