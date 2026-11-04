@@ -19,6 +19,13 @@ h1 { margin-bottom: 5px; }
     background: #fff3cd; border: 1px solid #e0c36a; color: #6b5200;
     border-radius: 8px; padding: 12px 16px; margin: 18px 0;
 }
+.tag {
+    display: inline-block; margin-left: 8px; padding: 2px 6px; border-radius: 4px;
+    font-size: 11px; font-weight: bold;
+}
+.tag.ok { background: #dff5e5; color: #08752f; }
+.tag.warn { background: #fff3cd; color: #6b5200; }
+.tag.none { background: #ededed; color: #555; }
 .note {
     background: #e8f1fb; border: 1px solid #9bbbe0; color: #1d3f66;
     border-radius: 8px; padding: 12px 16px; margin: 18px 0;
@@ -78,23 +85,26 @@ small { color: #777; font-size: 10px; }
 <h1>NSE Momentum Scanner</h1>
 
 <div class="subtitle">
-Generated: 2026-11-03 23:44:32 IST<br>
+Generated: 2026-11-04 09:03:28 IST<br>
 Universe: NSE official equity list (all EQ)<br>
-Data: NSE: 2390 stocks, Yahoo (fallback): 1 stocks - 15-minute and 1-minute candles (3-minute built from 1-minute)<br>
+Data: NSE: 2389 stocks, Yahoo (fallback): 1 stocks - 15-minute and 1-minute candles (3-minute built from 1-minute)<br>
+Rules: 15m volume | 3m volume + same trend | 1m volume | aligned second-last trend | morning (09:15) trend<br>
 Previous day: Tue 3 Nov 2026<br>
 Entry: Wed 4 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 </div>
 
-<div class="note">The market has closed, so today&#x27;s session (Tue 3 Nov 2026) is used as the latest completed session. Entry is the next trading day, Wed 4 Nov 2026.</div><div class="note">NSE served 2390 stocks; Yahoo fallback served 1 stocks.<br>NSE candle times verified against Yahoo (RELIANCE, 728 candles): correction +0 min, 95% of minutes match<br>NSE is working: only a few stocks (thin or unlisted symbols) fell back.<br>Why NSE failed for those stocks (top reasons):<br>1 x no data: NSE history returned no candles<br>      e.g. DCMFINSERV: {&quot;status&quot;: true}</div>
+<div class="note">NSE served 2389 stocks; Yahoo fallback served 1 stocks.<br>NSE candle times verified against Yahoo (RELIANCE, 728 candles): correction +0 min, 95% of minutes match<br>NSE is working: only a few stocks (thin or unlisted symbols) fell back.<br>Why NSE failed for those stocks (top reasons):<br>2 x no data: NSE symbol search returned no results<br>      e.g. EVONILE<br>1 x no data: NSE history returned no candles<br>      e.g. DCMFINSERV: {&quot;status&quot;: true}</div><div class="warn">1 stocks were read on a different session than most stocks: THAKDEV</div>
 
-<div class="stats"><div class="stat"><b>2391</b>Stocks scanned</div><div class="stat"><b>3</b>Matches</div><div class="stat"><b>1</b>Long</div><div class="stat"><b>2</b>Short</div><div class="stat"><b>2361</b>No match</div><div class="stat"><b>0</b>Data conflict</div><div class="stat"><b>26</b>Incomplete</div><div class="stat"><b>1</b>Stale</div><div class="stat"><b>0</b>No data</div><div class="stat"><b>0</b>Errors</div><div class="stat"><b>963.3s</b>Scan time</div></div>
+<div class="stats"><div class="stat"><b>2392</b>Stocks scanned</div><div class="stat"><b>3</b>Matches</div><div class="stat"><b>1</b>Long</div><div class="stat"><b>2</b>Short</div><div class="stat"><b>2360</b>No match</div><div class="stat"><b>0</b>Data conflict</div><div class="stat"><b>26</b>Incomplete</div><div class="stat"><b>1</b>Stale</div><div class="stat"><b>2</b>No data</div><div class="stat"><b>0</b>Errors</div><div class="stat"><b>963.7s</b>Scan time</div></div>
 
-<div class="match-box"><h2>Where stocks dropped out</h2><div class="table-wrap"><table class="funnel"><tbody><tr><td>Stocks scanned</td><td>2391</td><td class="lost"></td></tr><tr><td>Data downloaded (no error / no-data)</td><td>2391</td><td class="lost"></td></tr><tr><td>A completed session found</td><td>2365</td><td class="lost">-26</td></tr><tr><td>All nine candles present</td><td>1506</td><td class="lost">-859</td></tr><tr><td>15m: 15:00 volume &gt; 15:15 volume</td><td>585</td><td class="lost">-921</td></tr><tr><td>3m: 15:24 volume &gt; 15:27 volume</td><td>331</td><td class="lost">-254</td></tr><tr><td>3m: 15:24 and 15:27 candles same trend</td><td>141</td><td class="lost">-190</td></tr><tr><td>1m: 15:28 volume &gt; 15:29 volume</td><td>86</td><td class="lost">-55</td></tr><tr><td>Same trend: 15m 15:00 = 3m 15:24 = 1m 15:28</td><td>22</td><td class="lost">-64</td></tr><tr><td>Morning 09:15 candles (15m, 3m, 1m) share that trend</td><td>3</td><td class="lost">-19</td></tr><tr><td>No 15m/1m data conflict</td><td>3</td><td class="lost"></td></tr><tr><td>Same session as most stocks (SIGNALS)</td><td>3</td><td class="lost"></td></tr></tbody></table></div><h2 style="margin-top:22px">Stocks missing each candle (of 2365 with a session)</h2><div class="table-wrap"><table class="funnel"><tbody><tr><td>15m 09:15</td><td>121</td></tr><tr><td>3m 09:15</td><td>374</td></tr><tr><td>1m 09:15</td><td>587</td></tr><tr><td>15m 15:00</td><td>76</td></tr><tr><td>15m 15:15</td><td>42</td></tr><tr><td>3m 15:24</td><td>318</td></tr><tr><td>3m 15:27</td><td>178</td></tr><tr><td>1m 15:28</td><td>530</td></tr><tr><td>1m 15:29</td><td>273</td></tr><tr><td>Missing ONLY the last 3m/1m candle (MISSING_LAST_CANDLE_IS_ZERO_VOLUME = False)</td><td>13</td></tr></tbody></table></div><h2 style="margin-top:22px">Closest misses (fail exactly one condition)</h2><p class="none">Not signals: each of these passed every condition except the one in brackets.</p><p>AAVAS [morning candles], ALKYLAMINE [morning candles], BELRISE [morning candles], BLKASHYAP [morning candles], BOSCH-HCIL [3m trend], CESC [3m volume], CORDELIA [3m trend], EIHOTEL [15m volume], ELGIEQUIP [3m volume], EQUITASBNK [3m volume], GALAXYSURF [morning candles], GARFIBRES [3m volume], GKSL [morning candles], GUJENERGY [1m volume], HCC [morning candles], HNDFDS [morning candles], INDIACEM [1m volume], INFOBEAN [morning candles], INNOVACAP [morning candles], JKPAPER [1m volume], MAHSEAMLES [morning candles], MAPMYINDIA [1m volume], MRPL [morning candles], NETWEB [morning candles], REDINGTON [morning candles]</p></div>
+<div class="match-box"><h2>Where stocks dropped out</h2><div class="table-wrap"><table class="funnel"><tbody><tr><td>Stocks scanned</td><td>2392</td><td class="lost"></td></tr><tr><td>Data downloaded (no error / no-data)</td><td>2390</td><td class="lost">-2</td></tr><tr><td>A completed session found</td><td>2364</td><td class="lost">-26</td></tr><tr><td>All nine candles present</td><td>1505</td><td class="lost">-859</td></tr><tr><td>15m: 15:00 volume &gt; 15:15 volume</td><td>585</td><td class="lost">-920</td></tr><tr><td>3m: 15:24 volume &gt; 15:27 volume</td><td>331</td><td class="lost">-254</td></tr><tr><td>3m: 15:24 and 15:27 candles same trend</td><td>141</td><td class="lost">-190</td></tr><tr><td>1m: 15:28 volume &gt; 15:29 volume</td><td>86</td><td class="lost">-55</td></tr><tr><td>Same trend: 15m 15:00 = 3m 15:24 = 1m 15:28</td><td>22</td><td class="lost">-64</td></tr><tr><td>Morning 09:15 candles (15m, 3m, 1m) share that trend</td><td>3</td><td class="lost">-19</td></tr><tr><td>No 15m/1m data conflict</td><td>3</td><td class="lost"></td></tr><tr><td>Same session as most stocks (SIGNALS)</td><td>3</td><td class="lost"></td></tr></tbody></table></div><h2 style="margin-top:22px">Stocks missing each candle (of 2364 with a session)</h2><div class="table-wrap"><table class="funnel"><tbody><tr><td>15m 09:15</td><td>121</td></tr><tr><td>3m 09:15</td><td>374</td></tr><tr><td>1m 09:15</td><td>587</td></tr><tr><td>15m 15:00</td><td>76</td></tr><tr><td>15m 15:15</td><td>42</td></tr><tr><td>3m 15:24</td><td>318</td></tr><tr><td>3m 15:27</td><td>178</td></tr><tr><td>1m 15:28</td><td>530</td></tr><tr><td>1m 15:29</td><td>273</td></tr><tr><td>Missing ONLY the last 3m/1m candle (MISSING_LAST_CANDLE_IS_ZERO_VOLUME = False)</td><td>13</td></tr></tbody></table></div><h2 style="margin-top:22px">Closest misses (fail exactly one condition)</h2><p class="none">Not signals: each of these passed every condition except the one in brackets.</p><p>AAVAS [morning candles], ALKYLAMINE [morning candles], BELRISE [morning candles], BLKASHYAP [morning candles], BOSCH-HCIL [3m trend], CESC [3m volume], CORDELIA [3m trend], EIHOTEL [15m volume], ELGIEQUIP [3m volume], EQUITASBNK [3m volume], GALAXYSURF [morning candles], GARFIBRES [3m volume], GKSL [morning candles], GUJENERGY [1m volume], HCC [morning candles], HNDFDS [morning candles], INDIACEM [1m volume], INFOBEAN [morning candles], INNOVACAP [morning candles], JKPAPER [1m volume], MAHSEAMLES [morning candles], MAPMYINDIA [1m volume], MRPL [morning candles], NETWEB [morning candles], REDINGTON [morning candles]</p></div>
 
 <div class="match-box">
 <h2>Matches</h2>
-<div class="matches"><div class="match"><span class="direction long">LONG</span><b>MVELECTRO</b><span class="date">Previous day: 2026-11-03</span></div><div class="match"><span class="direction short">SHORT</span><b>AEGISLOG</b><span class="date">Previous day: 2026-11-03</span></div><div class="match"><span class="direction short">SHORT</span><b>RKFORGE</b><span class="date">Previous day: 2026-11-03</span></div></div>
+<div class="matches"><div class="match"><span class="direction long">LONG</span><b>MVELECTRO</b><span class="date">Previous day: 2026-11-03</span><span class="tag warn" title="signal on NSE; fails on Yahoo: morning 09:15 candles, missing candles: 1m 09:15">only on NSE</span></div><div class="match"><span class="direction short">SHORT</span><b>AEGISLOG</b><span class="date">Previous day: 2026-11-03</span><span class="tag warn" title="signal on NSE; fails on Yahoo: morning 09:15 candles, missing candles: 1m 09:15, 15m/1m data conflict">only on NSE</span></div><div class="match"><span class="direction short">SHORT</span><b>RKFORGE</b><span class="date">Previous day: 2026-11-03</span><span class="tag warn" title="signal on NSE; fails on Yahoo: morning 09:15 candles, missing candles: 1m 09:15, 15m/1m data conflict">only on NSE</span></div></div>
 </div>
+
+<div class="match-box"><h2>Cross-check on the other data source</h2><p>Every signal and every stock that failed by a single rule was re-tested on the other data source, for the same session. No signal was confirmed on both data sources.</p><div class="table-wrap"><table><thead><tr><th>Symbol</th><th>Result</th><th>Detail</th></tr></thead><tbody><tr><td class="symbol">AEGISLOG</td><td>ONE SOURCE ONLY</td><td>signal on NSE; fails on Yahoo: morning 09:15 candles, missing candles: 1m 09:15, 15m/1m data conflict</td></tr><tr><td class="symbol">MVELECTRO</td><td>ONE SOURCE ONLY</td><td>signal on NSE; fails on Yahoo: morning 09:15 candles, missing candles: 1m 09:15</td></tr><tr><td class="symbol">RKFORGE</td><td>ONE SOURCE ONLY</td><td>signal on NSE; fails on Yahoo: morning 09:15 candles, missing candles: 1m 09:15, 15m/1m data conflict</td></tr></tbody></table></div></div>
 
 <div class="table-wrap">
 <table>
@@ -6111,11 +6121,11 @@ Entry: Wed 4 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td class="symbol">CONCORDBIO</td>
 <td>2026-11-03</td>
 <td>&mdash;</td>
-<td><span class="badge pass">PASS</span><br><small>15:00 Up (1219.00&rarr;1232.40) vol 44,768<br>15:15 Up (1232.50&rarr;1234.00) vol 19,183<br>volume PASS</small></td>
-<td><span class="badge fail">FAIL</span><br><small>15:24 Down (1232.60&rarr;1231.80) vol 6,682<br>15:27 Up (1231.80&rarr;1234.00) vol 5,515<br>trend FAIL / volume PASS</small></td>
-<td><span class="badge fail">FAIL</span><br><small>15:28 Up (1230.00&rarr;1233.00) vol 976<br>15:29 Down (1236.00&rarr;1234.00) vol 1,677<br>volume FAIL</small></td>
+<td><span class="badge pass">PASS</span><br><small>15:00 Up (609.50&rarr;616.20) vol 44,768<br>15:15 Up (616.25&rarr;617.00) vol 19,183<br>volume PASS</small></td>
+<td><span class="badge fail">FAIL</span><br><small>15:24 Down (616.30&rarr;615.90) vol 6,682<br>15:27 Up (615.90&rarr;617.00) vol 5,515<br>trend FAIL / volume PASS</small></td>
+<td><span class="badge fail">FAIL</span><br><small>15:28 Up (615.00&rarr;616.50) vol 976<br>15:29 Down (618.00&rarr;617.00) vol 1,677<br>volume FAIL</small></td>
 <td><span class="badge fail">FAIL</span><br><small>15m 15:00 Up / 3m 15:24 Down / 1m 15:28 Up</small></td>
-<td><span class="badge fail">FAIL</span><br><small>15m 09:15 Up (1173.40&rarr;1182.10) vol 25,649<br>3m 09:15 Up (1173.40&rarr;1182.10) vol 14,743<br>1m 09:15 Up (1173.40&rarr;1176.70) vol 3,935</small></td>
+<td><span class="badge fail">FAIL</span><br><small>15m 09:15 Up (586.70&rarr;591.05) vol 25,649<br>3m 09:15 Up (586.70&rarr;591.05) vol 14,743<br>1m 09:15 Up (586.70&rarr;588.35) vol 3,935</small></td>
 <td class="fail">FAIL</td>
 <td>OK (NSE)</td>
 </tr>
@@ -19199,19 +19209,6 @@ Entry: Wed 4 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 </tr>
 
 <tr>
-<td class="symbol">NOVARTIND</td>
-<td>2026-11-03</td>
-<td>&mdash;</td>
-<td><span class="badge fail">FAIL</span><br><small>15:00 Down (1723.80&rarr;1723.20) vol 1,455<br>15:15 Down (1722.90&rarr;1717.90) vol 2,545<br>volume FAIL</small></td>
-<td><span class="badge fail">FAIL</span><br><small>15:24 Flat (1722.00&rarr;1722.00) vol 261<br>15:27 Down (1725.00&rarr;1717.90) vol 1,136<br>trend FAIL / volume FAIL</small></td>
-<td><span class="badge pass">PASS</span><br><small>15:28 Up (1720.00&rarr;1724.90) vol 455<br>15:29 Down (1724.90&rarr;1717.90) vol 236<br>volume PASS</small></td>
-<td><span class="badge fail">FAIL</span><br><small>15m 15:00 Down / 3m 15:24 Flat / 1m 15:28 Up</small></td>
-<td><span class="badge fail">FAIL</span><br><small>15m 09:15 Down (1739.10&rarr;1724.20) vol 3,273<br>3m 09:15 Down (1739.10&rarr;1738.80) vol 1,053<br>1m 09:15 Up (1739.10&rarr;1741.20) vol 378</small></td>
-<td class="fail">FAIL</td>
-<td>OK (NSE)</td>
-</tr>
-
-<tr>
 <td class="symbol">NPST</td>
 <td>2026-11-03</td>
 <td>&mdash;</td>
@@ -26625,11 +26622,11 @@ Entry: Wed 4 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td class="symbol">SUVIDHAA</td>
 <td>2026-11-03</td>
 <td>&mdash;</td>
-<td><span class="badge fail">FAIL</span><br><small>15:00 Up (2.02&rarr;2.03) vol 2,281<br>15:15 Flat (2.03&rarr;2.03) vol 37,015<br>volume FAIL</small></td>
-<td><span class="badge fail">FAIL</span><br><small>15:24 Flat (2.03&rarr;2.03) vol 45<br>15:27 Flat (2.03&rarr;2.03) vol 34,860<br>trend FAIL / volume FAIL</small></td>
-<td><span class="badge pass">PASS</span><br><small>15:28 Flat (2.03&rarr;2.03) vol 24,537<br>15:29 Flat (2.03&rarr;2.03) vol 265<br>volume PASS</small></td>
+<td><span class="badge fail">FAIL</span><br><small>15:00 Up (1.89&rarr;1.90) vol 2,281<br>15:15 Flat (1.90&rarr;1.90) vol 37,015<br>volume FAIL</small></td>
+<td><span class="badge fail">FAIL</span><br><small>15:24 Flat (1.90&rarr;1.90) vol 45<br>15:27 Flat (1.90&rarr;1.90) vol 34,860<br>trend FAIL / volume FAIL</small></td>
+<td><span class="badge pass">PASS</span><br><small>15:28 Flat (1.90&rarr;1.90) vol 24,537<br>15:29 Flat (1.90&rarr;1.90) vol 265<br>volume PASS</small></td>
 <td><span class="badge fail">FAIL</span><br><small>15m 15:00 Up / 3m 15:24 Flat / 1m 15:28 Flat</small></td>
-<td><span class="badge fail">FAIL</span><br><small>15m 09:15 Up (2.02&rarr;2.05) vol 18,959<br>3m 09:15 Up (2.02&rarr;2.03) vol 631<br>1m 09:15 missing</small></td>
+<td><span class="badge fail">FAIL</span><br><small>15m 09:15 Up (1.89&rarr;1.92) vol 18,959<br>3m 09:15 Up (1.89&rarr;1.90) vol 631<br>1m 09:15 missing</small></td>
 <td class="fail">FAIL</td>
 <td>OK (NSE)<br><small>missing: 1m 09:15</small></td>
 </tr>
@@ -31195,6 +31192,32 @@ Entry: Wed 4 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>15m 09:15 Flat (131.10&rarr;131.10) vol 50<br>3m 09:15 missing<br>1m 09:15 missing</small></td>
 <td class="skip">STALE</td>
 <td>OK (NSE)<br><small>missing: 3m 09:15, 1m 09:15, 15m 15:00, 3m 15:24, 3m 15:27, 1m 15:28, 1m 15:29</small></td>
+</tr>
+
+<tr>
+<td class="symbol">EVONILE</td>
+<td>&mdash;</td>
+<td>&mdash;</td>
+<td>&mdash;<br><small></small></td>
+<td>&mdash;<br><small></small></td>
+<td>&mdash;<br><small></small></td>
+<td>&mdash;<br><small></small></td>
+<td>&mdash;<br><small></small></td>
+<td class="skip">NO DATA</td>
+<td>No data (NSE)</td>
+</tr>
+
+<tr>
+<td class="symbol">MKJEWELS</td>
+<td>&mdash;</td>
+<td>&mdash;</td>
+<td>&mdash;<br><small></small></td>
+<td>&mdash;<br><small></small></td>
+<td>&mdash;<br><small></small></td>
+<td>&mdash;<br><small></small></td>
+<td>&mdash;<br><small></small></td>
+<td class="skip">NO DATA</td>
+<td>No data (NSE)</td>
 </tr>
 
 </tbody>
