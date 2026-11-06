@@ -35,18 +35,23 @@
 #
 # ALL of these must hold:
 #   1) 5m volume: the 15:20 candle's volume is HIGHER than the 15:25 candle's.
-#   2) 3m volume: the 15:24 candle's volume is HIGHER than the 15:27 candle's.
-#   3) 3m trend:  the last two 3m candles (15:24, 15:27) have the SAME trend.
-#   4) 1m volume: the 15:28 candle's volume is HIGHER than the 15:29 candle's.
-#   5) The second-last candles of all three timeframes (5m 15:20, 3m 15:24,
+#   2) 3m volume:  the 15:24 candle's volume is HIGHER than the 15:27 candle's.
+#   3) 3m trend:   the last two 3m candles (15:24, 15:27) have the SAME trend.
+#   4) 1m volume:  the 15:28 candle's volume is HIGHER than the 15:29 candle's.
+#   5) 1m trend:   the last two 1m candles (15:28, 15:29) have the SAME trend.
+#   6) The second-last candles of all three timeframes (5m 15:20, 3m 15:24,
 #      1m 15:28) have the SAME trend (the "aligned trend").
-#   6) The morning candles (09:15) of all three timeframes (5m 09:15, 3m 09:15,
+#   7) The morning candles (09:15) of all three timeframes (5m 09:15, 3m 09:15,
 #      1m 09:15) have that SAME aligned trend too.
 #
-# The 5m and 1m timeframes have no opposite-trend rule: their last two candles
-# may have the same or opposite trends; only their volume order matters (and
-# the second-last candle's trend, for the alignment in 5). Only the 3m
-# timeframe requires its last two candles to share a trend (rule 3).
+# The 5m timeframe has no opposite-trend rule: its last two candles may have
+# the same or opposite trends; only their volume order matters (and the
+# second-last candle's trend, for the alignment in 6). The 3m and 1m
+# timeframes also require their last two candles to share a trend (rules 3, 5).
+#
+# DATA SOURCES: every stock is scanned on NSE, and every stock that does not
+# pass on NSE is ALSO scanned on Yahoo for the same session. A stock that passes
+# on EITHER source is shown as a signal, tagged with the source(s) it passed on.
 #
 # "Trend" = candle colour (close > open is Up, close < open is Down). A flat
 # candle (close == open) has no trend, so it can never be "the same" as another.
@@ -58,8 +63,8 @@
 #
 # A candle with no trades is absent from the data. By default a missing
 # candle can only BLOCK a match, never create one. Optionally
-# MISSING_LAST_CANDLE_IS_ZERO_VOLUME treats a missing LAST candle (5m 15:25 or
-# 1m 15:29) as volume 0 (see CONFIGURATION).
+# MISSING_LAST_CANDLE_IS_ZERO_VOLUME treats a missing 5m 15:25 candle as
+# volume 0 (see CONFIGURATION).
 #
 # DATA-ACCURACY SAFEGUARDS
 #   * Prices are rounded to 2 decimals, so Yahoo's float noise can never turn a
@@ -150,12 +155,35 @@ CONFLICT_WARN_SHARE = 0.10
 # 0, so:
 #   False -> a missing last candle BLOCKS the match (default, strictest)
 #   True  -> a missing last candle counts as volume 0: the rule passes whenever
-#            the second-last candle traded. More stocks qualify, but it admits
-#            thin stocks that did not trade in the final 5 minutes (5m 15:25) or
-#            the final minute (1m 15:29). The second-last candles and the 3m
-#            15:27 candle must always exist, because their trends are needed
-#            (alignment, and the 3m same-trend rule).
+#            the second-last candle traded. This can only apply to the 5m
+#            15:25 candle: the 3m 15:27 and 1m 15:29 candles need a trend (the
+#            3m / 1m same-trend rules), and the second-last candles need one
+#            too (alignment).
+#   NOTE: because the 3m 15:27 and 1m 15:29 candles must exist and lie INSIDE
+#   the 5m 15:25 candle, whenever the 5m 15:25 candle is missing they are
+#   missing too - so this switch no longer changes any result.
 MISSING_LAST_CANDLE_IS_ZERO_VOLUME = False
+
+# A short description of the rules, shown at the top of every report and in the
+# console so a result can always be tied to the rule set that produced it.
+# (Keep it in step with the rules above if they ever change.)
+STRATEGY_RULES = (
+    "5m volume | 3m volume + same trend | 1m volume + same trend | "
+    "aligned second-last trend | morning (09:15) trend"
+)
+
+# No stock may be lost to a technical failure. After the main scan, stocks that
+# ERRORED are retried (waiting first, with fewer workers), and stocks that fell
+# back to Yahoo only because NSE failed temporarily are tried on NSE again.
+RETRY_ROUNDS = 2
+RETRY_WAIT_SECONDS = (30, 60)
+RETRY_WORKERS = 3
+
+# EVERY stock that does not pass on NSE is also scanned on Yahoo, for the same
+# session, and every NSE signal is confirmed on Yahoo. A stock that passes on
+# EITHER source is shown as a signal. (Stocks that only had Yahoo data are
+# confirmed on NSE if they pass.) This many stocks are checked at a time.
+CROSS_CHECK_WORKERS = 6
 
 # Where the candles come from (both are free and need no API key):
 #   "NSE"   -> NSE's own charting feed (charting.nseindia.com): the exchange's
@@ -218,8 +246,8 @@ MARKET_CLOSE_MINUTES = 15 * 60 + 30
 
 # After the 15:30 close, Yahoo needs a few minutes to publish the final
 # candles. Today's session is only treated as complete this many minutes after
-# the close (default 15:40); before that the scanner still reads yesterday.
-DATA_READY_BUFFER_MINUTES = 10
+# the close (default 15:50); before that the scanner still reads yesterday.
+DATA_READY_BUFFER_MINUTES = 20
 
 
 # =============================================================================
@@ -737,6 +765,7 @@ _nse_next = [0.0]
 _nse_errors = Counter()
 _nse_examples = {}
 _nse_misses = {}
+_nse_transient = set()
 _nse_convention = {"labels": None}
 _nse_minute_cache = {}
 _nse_calibration = {"done": False, "ok": None, "shift": 0, "detail": ""}
@@ -1569,6 +1598,12 @@ def fetch_symbol_rows(symbol):
 
     nse_note_failure(nse_info)
 
+    # A temporary NSE failure (not "no data"): this stock is tried on NSE again
+    # after the scan, so it does not stay on the Yahoo fallback for good.
+    if not is_no_data(nse_info) and _nse_calibration["ok"] is not False:
+        with _nse_lock:
+            _nse_transient.add(symbol)
+
     # NSE lists it under another series (SME, trade-to-trade...): not a stock
     # the strategy covers, so there is nothing to fall back to.
     if str(nse_info).startswith("NO_DATA: not an EQ-series"):
@@ -1780,7 +1815,7 @@ def derive_5m_from_1m(day_1m, start_hm):
     }
 
 
-def evaluate_rows(rows_by_tf):
+def evaluate_rows(rows_by_tf, session_day=None):
     """5m / 3m / 1m closing-candle strategy, read on the previous day
     (P = the latest completed session). Entry day = the next trading day.
 
@@ -1788,12 +1823,16 @@ def evaluate_rows(rows_by_tf):
     2) 3m 15:24 volume is higher than 3m 15:27 volume.
     3) 3m 15:24 and 3m 15:27 candles have the same trend.
     4) 1m 15:28 volume is higher than 1m 15:29 volume.
-    5) 5m 15:20, 3m 15:24 and 1m 15:28 candles all have the same trend.
-    6) 5m 09:15, 3m 09:15 and 1m 09:15 candles have that same trend too.
-    (The 5m and 1m timeframes do not require their last two candles to be opposite.)
+    5) 1m 15:28 and 1m 15:29 candles have the same trend.
+    6) 5m 15:20, 3m 15:24 and 1m 15:28 candles all have the same trend.
+    7) 5m 09:15, 3m 09:15 and 1m 09:15 candles have that same trend too.
+    (The 5m timeframe does not require its last two candles to be opposite.)
 
     Before a signal is allowed, the 5m candles are cross-checked against the
     1m candles inside them; a disagreement gives status CONFLICT, not a signal.
+
+    session_day: read this session instead of the latest one (used to check the
+    same session on a second data source).
     """
 
     if not rows_by_tf:
@@ -1809,7 +1848,19 @@ def evaluate_rows(rows_by_tf):
     excluded = set() if ctx["today_complete"] else {ctx["today"]}
     dates = sorted({d for days in by_tf.values() for d in days} - excluded)
 
-    if not dates:
+    if session_day is not None:
+        if session_day not in {d for days in by_tf.values() for d in days}:
+            return {
+                "status": "INCOMPLETE",
+                "date": session_day,
+                "previous_day": session_day,
+                "entry_day": entry,
+                "missing": [slot_label(k) for k in SLOT_KEYS],
+                "note": "this data source has no data for that session",
+            }
+
+        previous_day = session_day
+    elif not dates:
         return {
             "status": "INCOMPLETE",
             "date": None,
@@ -1818,8 +1869,8 @@ def evaluate_rows(rows_by_tf):
             "missing": [slot_label(k) for k in SLOT_KEYS],
             "note": "no completed trading day of data before today",
         }
-
-    previous_day = dates[-1]
+    else:
+        previous_day = dates[-1]
 
     # 3-minute candles are built from the previous day's 1-minute candles only.
     rows_1m = rows_by_tf.get("1m")
@@ -1881,17 +1932,18 @@ def evaluate_rows(rows_by_tf):
 
         return first > second
 
-    # 5m and 1m: volume only (their last two candles may have the same or
-    # opposite trends). 3m: volume AND the last two candles must have the same
+    # 5m: volume only (its last two candles may have the same or opposite
+    # trends). 3m and 1m: volume AND the last two candles must have the same
     # trend (a flat or missing candle has trend 0, so it is never "the same").
     vol_5m = higher(v5_20, v5_25)
     vol_3m = higher(v3_24, v3_27)
     vol_1m = higher(v1_28, v1_29)
     trend_3m = t3_24 != 0 and t3_24 == t3_27
+    trend_1m = t1_28 != 0 and t1_28 == t1_29
 
     cond_5m = vol_5m
     cond_3m = vol_3m and trend_3m
-    cond_1m = vol_1m
+    cond_1m = vol_1m and trend_1m
 
     # Second-last candles of all three timeframes share one (non-flat) trend.
     cond_align = t5_20 != 0 and t5_20 == t3_24 == t1_28
@@ -1979,6 +2031,7 @@ def evaluate_rows(rows_by_tf):
         "vol_3m": vol_3m,
         "trend_3m": trend_3m,
         "vol_1m": vol_1m,
+        "trend_1m": trend_1m,
         "missing": missing,
         "conflicts": conflicts,
         "candles": candles,
@@ -2235,6 +2288,13 @@ h1 { margin-bottom: 5px; }
     background: #fff3cd; border: 1px solid #e0c36a; color: #6b5200;
     border-radius: 8px; padding: 12px 16px; margin: 18px 0;
 }
+.tag {
+    display: inline-block; margin-left: 8px; padding: 2px 6px; border-radius: 4px;
+    font-size: 11px; font-weight: bold;
+}
+.tag.ok { background: #dff5e5; color: #08752f; }
+.tag.warn { background: #fff3cd; color: #6b5200; }
+.tag.none { background: #ededed; color: #555; }
 .note {
     background: #e8f1fb; border: 1px solid #9bbbe0; color: #1d3f66;
     border-radius: 8px; padding: 12px 16px; margin: 18px 0;
@@ -2313,16 +2373,17 @@ def part_badge(value):
     return "PASS" if value else "FAIL"
 
 
-# The "last" candle of each timeframe: only its volume is used, so with
-# MISSING_LAST_CANDLE_IS_ZERO_VOLUME it may be missing.
-LAST_CANDLES = {"5m 15:25", "1m 15:29"}
+# The only "last" candle whose volume alone is used (every other last candle
+# needs a trend too): with MISSING_LAST_CANDLE_IS_ZERO_VOLUME it may be missing.
+LAST_CANDLES = {"5m 15:25"}
 
 
 def build_funnel(results):
-    """Where stocks drop out, step by step. Returns [(label, count), ...];
-    each line counts only the stocks that survived every line above it, so the
-    last line is the number of signals. It separates data problems (download,
-    missing candles, conflicts) from the strategy simply being strict."""
+    """Where stocks drop out, step by step (on each stock's own data source).
+    Returns [(label, count), ...]; each line counts only the stocks that
+    survived every line above it. It separates data problems (download, missing
+    candles, conflicts) from the strategy simply being strict. The last lines
+    show the signals actually shown: a pass on NSE or on Yahoo."""
 
     got_data = [r for r in results if r.get("status") not in ("NO_DATA", "ERROR")]
     evaluated = [r for r in results if "cond_5m" in r]
@@ -2334,10 +2395,14 @@ def build_funnel(results):
     step_2 = [r for r in step_1 if r.get("vol_3m")]
     step_3 = [r for r in step_2 if r.get("trend_3m")]
     step_4 = [r for r in step_3 if r.get("vol_1m")]
-    step_5 = [r for r in step_4 if r.get("cond_align")]
-    step_6 = [r for r in step_5 if r.get("cond_morning")]
-    step_7 = [r for r in step_6 if r.get("status") != "CONFLICT"]
-    step_8 = [r for r in step_7 if r.get("status") != "STALE"]
+    step_5 = [r for r in step_4 if r.get("trend_1m")]
+    step_6 = [r for r in step_5 if r.get("cond_align")]
+    step_7 = [r for r in step_6 if r.get("cond_morning")]
+    step_8 = [r for r in step_7 if r.get("status") != "CONFLICT"]
+    step_9 = [r for r in step_8 if r.get("status") != "STALE"]
+
+    signals = final_signals(results)
+    other_only = [x for x in signals if len(x["sources"]) == 1 and x.get("only_other")]
 
     return [
         ("Stocks scanned", len(results)),
@@ -2345,23 +2410,26 @@ def build_funnel(results):
         ("A completed session found", len(evaluated)),
         (
             "All nine candles present"
-            + (" (5m 15:25 / 1m 15:29 may be missing)" if allowed_missing else ""),
+            + (" (5m 15:25 may be missing)" if allowed_missing else ""),
             len(full),
         ),
         ("5m: 15:20 volume > 15:25 volume", len(step_1)),
         ("3m: 15:24 volume > 15:27 volume", len(step_2)),
         ("3m: 15:24 and 15:27 candles same trend", len(step_3)),
         ("1m: 15:28 volume > 15:29 volume", len(step_4)),
-        ("Same trend: 5m 15:20 = 3m 15:24 = 1m 15:28", len(step_5)),
-        ("Morning 09:15 candles (5m, 3m, 1m) share that trend", len(step_6)),
-        ("No 5m/1m data conflict", len(step_7)),
-        ("Same session as most stocks (SIGNALS)", len(step_8)),
+        ("1m: 15:28 and 15:29 candles same trend", len(step_5)),
+        ("Same trend: 5m 15:20 = 3m 15:24 = 1m 15:28", len(step_6)),
+        ("Morning 09:15 candles (5m, 3m, 1m) share that trend", len(step_7)),
+        ("No 5m/1m data conflict", len(step_8)),
+        ("Same session as most stocks (pass on the primary source)", len(step_9)),
+        ("SIGNALS SHOWN (pass on NSE or on Yahoo)", len(signals)),
+        ("   of which found only by the other source", len(other_only)),
     ]
 
 
 def missing_summary(results):
     """How many stocks lack each of the nine candles, and how many lack ONLY a
-    last candle (5m 15:25 / 1m 15:29) (the ones MISSING_LAST_CANDLE_IS_ZERO_VOLUME would
+    last candle (5m 15:25) (the ones MISSING_LAST_CANDLE_IS_ZERO_VOLUME would
     recover). Returns (per_slot, only_last, evaluated_count)."""
 
     evaluated = [r for r in results if "cond_5m" in r]
@@ -2449,31 +2517,27 @@ def source_health(results):
 
 
 def near_miss_list(results):
-    """Stocks that failed ONLY because their last 3m (15:27) and/or last 1m
-    (15:29) or last 5m (15:25) candle is missing - every other condition holds. With
-    MISSING_LAST_CANDLE_IS_ZERO_VOLUME = True they would be signals. Returns
-    [(symbol, direction)]. Empty when the switch is already on."""
+    """Stocks that failed ONLY because their last 5m (15:25) candle is missing.
+    With MISSING_LAST_CANDLE_IS_ZERO_VOLUME = True they would be signals.
+    (In practice the 3m 15:27 and 1m 15:29 candles, which lie inside it, are then
+    missing too, so this list is normally empty.) Returns [(symbol, direction)]."""
 
     if MISSING_LAST_CANDLE_IS_ZERO_VOLUME:
         return []
 
-    allowed = LAST_CANDLES
     found = []
 
     for r in results:
         missing = set(r.get("missing") or [])
 
-        if r.get("status") != "FAIL" or not missing or not missing <= allowed:
+        if r.get("status") != "FAIL" or not missing or not missing <= LAST_CANDLES:
             continue
 
         c = r.get("candles") or {}
 
-        # A missing last candle has volume 0, so it passes if the second-last
-        # candle exists (and traded).
         ok_5m = r.get("vol_5m") or (c.get("5m_1525") is None and c.get("5m_1520") is not None)
-        ok_1m = r.get("vol_1m") or (c.get("1m_1529") is None and c.get("1m_1528") is not None)
 
-        if ok_5m and r.get("cond_3m") and ok_1m and r.get("cond_align") and r.get("cond_morning"):
+        if ok_5m and r.get("cond_3m") and r.get("cond_1m") and r.get("cond_align") and r.get("cond_morning"):
             side = r["details"]["t5_20"] * DIRECTION_RULES[DIRECTION_RULE]
             found.append((r["symbol"], "LONG" if side == 1 else "SHORT"))
 
@@ -2482,7 +2546,8 @@ def near_miss_list(results):
 
 def closest_misses(results, limit=25):
     """When signals are few (or none): stocks that failed exactly ONE condition
-    (every candle present, no data conflict). Returns [(symbol, failed)]."""
+    on their own data source (every candle present, no data conflict) and are
+    not already a signal on the other source. Returns [(symbol, failed)]."""
 
     allowed_missing = (
         LAST_CANDLES if MISSING_LAST_CANDLE_IS_ZERO_VOLUME else set()
@@ -2491,6 +2556,9 @@ def closest_misses(results, limit=25):
 
     for r in results:
         if r.get("status") != "FAIL" or "cond_5m" not in r:
+            continue
+
+        if cross_status(r) == "OTHER SOURCE ONLY":
             continue
 
         if not set(r.get("missing") or []) <= allowed_missing:
@@ -2502,6 +2570,7 @@ def closest_misses(results, limit=25):
                 ("3m volume", r.get("vol_3m")),
                 ("3m trend", r.get("trend_3m")),
                 ("1m volume", r.get("vol_1m")),
+                ("1m trend", r.get("trend_1m")),
                 ("alignment", r.get("cond_align")),
                 ("morning candles", r.get("cond_morning")),
             ) if not ok
@@ -2531,7 +2600,7 @@ def funnel_console(results):
         lines.append(f"  {count:>5}  {label}")
 
     lines.append(
-        f"  {last_only:>5}  missing ONLY a last candle (5m 15:25 / 1m 15:29) "
+        f"  {last_only:>5}  missing ONLY a last candle (5m 15:25) "
         f"(MISSING_LAST_CANDLE_IS_ZERO_VOLUME = {MISSING_LAST_CANDLE_IS_ZERO_VOLUME})"
     )
 
@@ -2540,7 +2609,7 @@ def funnel_console(results):
     if near:
         lines.append("")
         lines.append(
-            f"  {len(near)} stock(s) fail ONLY because a last candle (5m 15:25 / 1m 15:29) had no trades."
+            f"  {len(near)} stock(s) fail ONLY because a last candle (5m 15:25) had no trades."
         )
         lines.append(
             "  They would be signals with MISSING_LAST_CANDLE_IS_ZERO_VOLUME = True:"
@@ -2641,7 +2710,8 @@ def build_table_row(r):
         note_1m = (
             candle_text(candles.get("1m_1528"), "15:28") + "<br>"
             + candle_text(candles.get("1m_1529"), "15:29") + "<br>"
-            + f'volume {part_badge(r.get("vol_1m"))}'
+            + f'trend {part_badge(r.get("trend_1m"))} / '
+            f'volume {part_badge(r.get("vol_1m"))}'
         )
         note_align = (
             f'5m 15:20 {trend_name(details["t5_20"])} / '
@@ -2677,17 +2747,36 @@ def build_table_row(r):
     if r.get("error"):
         data_text += f"<br><small>{esc(r['error'][:120])}</small>"
 
+    check = r.get("confirm")
+
+    if check and check["checked"]:
+        verdict = (
+            f"PASS {check.get('direction')}" if check["passes"]
+            else "fails: " + ", ".join(check.get("failed") or ["?"])[:90]
+        )
+        data_text += f"<br><small>{esc(check['source'])} check: {esc(verdict)}</small>"
+    elif check:
+        data_text += f"<br><small>{esc(check['source'])} check not done: {esc(check.get('note', ''))}</small>"
+
+    direction_value = r.get("direction")
+    result_label = STATUS_LABEL.get(status, status)
+
+    if cross_status(r) == "OTHER SOURCE ONLY":
+        direction_value = check.get("direction")
+        result_label = f"{status} on {source_name(r)}, PASS on {check['source']}"
+        status_class = "pass"
+
     return f"""
 <tr>
 <td class="symbol">{esc(r.get('symbol', ''))}</td>
 <td>{esc(r['previous_day']) if r.get('previous_day') else DASH}</td>
-<td>{cell(r.get('direction'))}</td>
+<td>{cell(direction_value)}</td>
 <td>{badge(r.get('cond_5m'))}<br><small>{note_5m}</small></td>
 <td>{badge(r.get('cond_3m'))}<br><small>{note_3m}</small></td>
 <td>{badge(r.get('cond_1m'))}<br><small>{note_1m}</small></td>
 <td>{badge(r.get('cond_align'))}<br><small>{note_align}</small></td>
 <td>{badge(r.get('cond_morning'))}<br><small>{note_morning}</small></td>
-<td class="{status_class}">{esc(STATUS_LABEL.get(status, status))}</td>
+<td class="{status_class}">{esc(result_label)}</td>
 <td>{data_text}</td>
 </tr>
 """
@@ -2702,7 +2791,7 @@ def generate_html_report(results, elapsed, universe_source, run_note=None):
     def count(name):
         return sum(1 for r in results if r.get("status") == name)
 
-    matches = [r for r in results if r.get("status") == "PASS"]
+    matches = final_signals(results)
     matches.sort(key=lambda r: (r.get("direction") != "LONG", r.get("symbol", "")))
 
     longs = sum(1 for r in matches if r.get("direction") == "LONG")
@@ -2737,25 +2826,27 @@ def generate_html_report(results, elapsed, universe_source, run_note=None):
     warning_html = (
         (f'<div class="note">{esc(run_note)}</div>' if run_note else "")
         + health_html
+        + unscanned_html(results)
         + (f'<div class="warn">{esc(warning)}</div>' if warning else "")
     )
 
     if matches:
         match_html = "".join(
             '<div class="match">'
-            f'<span class="direction {"long" if r["direction"] == "LONG" else "short"}">'
-            f'{esc(r["direction"])}</span>'
-            f'<b>{esc(r["symbol"])}</b>'
-            f'<span class="date">Previous day: {esc(r.get("previous_day", ""))}</span>'
-            '</div>'
-            for r in matches
+            f'<span class="direction {"long" if sig["direction"] == "LONG" else "short"}">'
+            f'{esc(sig["direction"])}</span>'
+            f'<b>{esc(sig["symbol"])}</b>'
+            f'<span class="date">Previous day: {esc(sig.get("previous_day", ""))}</span>'
+            + signal_tag(sig)
+            + '</div>'
+            for sig in matches
         )
     else:
         match_html = '<div class="none">No stocks matched.</div>'
 
     sorted_results = sorted(
         results,
-        key=lambda x: (STATUS_RANK.get(x.get("status"), 9), x.get("symbol", "")),
+        key=lambda x: (0 if signal_info(x) else 1 + STATUS_RANK.get(x.get("status"), 9), x.get("symbol", "")),
     )
 
     table_rows = "".join(build_table_row(r) for r in sorted_results)
@@ -2779,7 +2870,7 @@ def generate_html_report(results, elapsed, universe_source, run_note=None):
     )
 
     zero_note = (
-        " A last candle (5m 15:25 / 1m 15:29) with no trades counts as volume 0."
+        " A last candle (5m 15:25) with no trades counts as volume 0."
         if MISSING_LAST_CANDLE_IS_ZERO_VOLUME else ""
     )
 
@@ -2813,6 +2904,7 @@ def generate_html_report(results, elapsed, universe_source, run_note=None):
 Generated: {esc(scan_time)}<br>
 Universe: {esc(universe_source)}<br>
 Data: {esc(source_text)} - 5-minute and 1-minute candles (3-minute built from 1-minute)<br>
+Rules: {esc(STRATEGY_RULES)}<br>
 Previous day: {esc(fmt_day(previous_day))}<br>
 Entry: {esc(fmt_day(entry_day))} at the 09:15 open &nbsp;|&nbsp; Exit: {esc(EXIT_TIME_LABEL)}
 </div>
@@ -2828,6 +2920,8 @@ Entry: {esc(fmt_day(entry_day))} at the 09:15 open &nbsp;|&nbsp; Exit: {esc(EXIT
 <div class="matches">{match_html}</div>
 </div>
 
+{cross_html(results)}
+
 <div class="table-wrap">
 <table>
 <thead>
@@ -2837,7 +2931,7 @@ Entry: {esc(fmt_day(entry_day))} at the 09:15 open &nbsp;|&nbsp; Exit: {esc(EXIT
 <th>Direction</th>
 <th>5m condition<br><small>15:20 vol &gt; 15:25 vol</small></th>
 <th>3m condition<br><small>15:24 &amp; 15:27 same trend; 15:24 vol &gt; 15:27 vol</small></th>
-<th>1m condition<br><small>15:28 vol &gt; 15:29 vol</small></th>
+<th>1m condition<br><small>15:28 &amp; 15:29 same trend; 15:28 vol &gt; 15:29 vol</small></th>
 <th>Alignment<br><small>5m 15:20 = 3m 15:24 = 1m 15:28 trend</small></th>
 <th>Morning candles<br><small>09:15 candles (5m, 3m, 1m) = that same trend</small></th>
 <th>Result</th>
@@ -2859,12 +2953,16 @@ and 1m 15:29 (second last 15:28). A stock matches only when ALL of these hold:<b
 2) 3m volume: the 15:24 candle's volume is higher than the 15:27 candle's.<br>
 3) 3m trend: the 15:24 and 15:27 candles have the same trend.<br>
 4) 1m volume: the 15:28 candle's volume is higher than the 15:29 candle's.<br>
-5) The 5m 15:20, 3m 15:24 and 1m 15:28 candles all have the same trend.<br>
-6) The morning candles (09:15) of the 5m, 3m and 1m timeframes have that same trend too.<br>
-Only the 3m timeframe requires its last two candles to share a trend; the 5m and 1m last
-two candles may have the same or opposite trends.<br>
+5) 1m trend: the 15:28 and 15:29 candles have the same trend.<br>
+6) The 5m 15:20, 3m 15:24 and 1m 15:28 candles all have the same trend.<br>
+7) The morning candles (09:15) of the 5m, 3m and 1m timeframes have that same trend too.<br>
+The 5m timeframe has no opposite-trend rule: its last two candles may have the same or
+opposite trends.<br>
 Trend = candle colour (close vs open); a flat candle has no trend, so it is never
-the same as another.
+the same as another.<br>
+<b>Data sources:</b> every stock is scanned on NSE; every stock that does not pass on NSE is
+also scanned on Yahoo for the same session. A stock that passes on either source is shown as
+a signal, tagged with the source(s) it passed on.<br>
 {esc(direction_text)}<br>
 <b>Entry:</b> the 09:15 open on entry day. <b>Exit:</b> {esc(EXIT_TIME_LABEL)}.<br><br>
 <b>Data notes:</b> 5-minute and 1-minute candles come straight from the data source's own
@@ -2944,6 +3042,7 @@ def print_audit(r):
         print(f"  3m  15:24 vol > 15:27 vol  : {r['vol_3m']}")
         print(f"  3m  15:24 and 15:27 same trend: {r['trend_3m']}")
         print(f"  1m  15:28 vol > 15:29 vol  : {r['vol_1m']}")
+        print(f"  1m  15:28 and 15:29 same trend: {r['trend_1m']}")
         print(f"  5m 15:20 = 3m 15:24 = 1m 15:28 trend: {r['cond_align']}")
         print(f"  09:15 candles (5m, 3m, 1m) share that trend: {r['cond_morning']}")
 
@@ -3151,6 +3250,501 @@ def nse_debug(symbols):
         print(f"   could not compare: {type(e).__name__}: {e}")
 
 
+# =============================================================================
+# COMPLETENESS AND CROSS-CHECK
+# =============================================================================
+#
+# No stock may be lost to a technical problem, and no result may rest on one
+# data source alone:
+#   * stocks that ERRORED are retried; stocks that fell back to Yahoo only
+#     because NSE failed for a moment are tried on NSE again;
+#   * every signal, and every stock that failed by a single rule, is re-tested
+#     on the OTHER data source for the same session, and any disagreement is
+#     shown instead of being decided silently;
+#   * anything that still could not be scanned is listed by name.
+
+RULE_NAMES = (
+    ("vol_5m", "5m volume (15:20 > 15:25)"),
+    ("vol_3m", "3m volume (15:24 > 15:27)"),
+    ("trend_3m", "3m trend (15:24 and 15:27 same)"),
+    ("vol_1m", "1m volume (15:28 > 15:29)"),
+    ("trend_1m", "1m trend (15:28 and 15:29 same)"),
+    ("cond_align", "alignment (5m 15:20 = 3m 15:24 = 1m 15:28)"),
+    ("cond_morning", "morning 09:15 candles"),
+)
+
+
+def failed_rules(result):
+    """Names of the rules a result fails (plus data problems)."""
+
+    if "cond_5m" not in result:
+        return ["no usable data"]
+
+    failed = [label for key, label in RULE_NAMES if not result.get(key)]
+
+    allowed = LAST_CANDLES if MISSING_LAST_CANDLE_IS_ZERO_VOLUME else set()
+    missing = [m for m in result.get("missing") or [] if m not in allowed]
+
+    if missing:
+        failed.append("missing candles: " + ", ".join(missing))
+
+    if result.get("conflicts"):
+        failed.append("5m/1m data conflict")
+
+    return failed
+
+
+def scan_one_symbol_nse(symbol):
+    """NSE-only scan of one stock. None if NSE still cannot serve it."""
+
+    try:
+        rows, info = fetch_all_timeframes(symbol, fetch_interval_nse)
+
+        if rows is None:
+            return None
+
+        result = evaluate_rows(rows)
+        result["symbol"] = symbol
+        result["data_status"] = info
+        result["source"] = "NSE"
+
+        return result
+
+    except Exception:
+        return None
+
+
+def retry_failed(results):
+    """Retry stocks that errored, and put stocks that fell back to Yahoo only
+    because NSE failed temporarily back on NSE. Returns the updated results."""
+
+    global MAX_WORKERS
+
+    by_symbol = {r["symbol"]: r for r in results}
+
+    for round_number in range(1, RETRY_ROUNDS + 1):
+        errored = sorted(s_ for s_, r in by_symbol.items() if r.get("status") == "ERROR")
+
+        with _nse_lock:
+            transient = set(_nse_transient)
+
+        fallbacks = sorted(
+            s_ for s_ in transient
+            if by_symbol.get(s_, {}).get("source") == "Yahoo (fallback)"
+            and s_ not in errored
+        )
+
+        if not errored and not fallbacks:
+            break
+
+        wait = RETRY_WAIT_SECONDS[min(round_number - 1, len(RETRY_WAIT_SECONDS) - 1)]
+
+        print()
+        print("=" * 70)
+        print(
+            f"RETRY {round_number}/{RETRY_ROUNDS}: {len(errored)} stocks errored, "
+            f"{len(fallbacks)} stocks are on the Yahoo fallback only because NSE "
+            f"failed. Waiting {wait}s, then trying again with {RETRY_WORKERS} workers."
+        )
+        print("=" * 70)
+
+        time.sleep(wait)
+
+        # NSE gets a fresh start after the wait (unless its times were never verified).
+        with _nse_lock:
+            _nse_state.update(
+                failures=0, pause_until=0.0, cooldowns=0,
+                cooldown_s=NSE_COOLDOWN_SECONDS,
+                blocked=_nse_calibration["ok"] is False,
+            )
+
+        jobs = [(sym, "full") for sym in errored] + [(sym, "nse") for sym in fallbacks]
+
+        def work(job):
+            sym, mode = job
+            return sym, (scan_one_symbol(sym) if mode == "full" else scan_one_symbol_nse(sym))
+
+        recovered = moved = 0
+
+        with ThreadPoolExecutor(max_workers=RETRY_WORKERS) as executor:
+            for sym, result in executor.map(work, jobs):
+                if result is None:
+                    continue
+
+                was_error = by_symbol[sym].get("status") == "ERROR"
+
+                if was_error and result.get("status") != "ERROR":
+                    recovered += 1
+                elif not was_error and result.get("source") == "NSE":
+                    moved += 1
+                    with _nse_lock:
+                        _nse_transient.discard(sym)
+
+                by_symbol[sym] = result
+
+        print(f"Retry {round_number}: {recovered} stocks recovered, {moved} moved back to NSE.")
+
+    return sorted(by_symbol.values(), key=lambda r: r.get("symbol", ""))
+
+
+def other_source_name(result):
+    return "NSE" if str(result.get("source", "")).startswith("Yahoo") else "Yahoo"
+
+
+def source_name(result):
+    return "Yahoo" if str(result.get("source", "")).startswith("Yahoo") else "NSE"
+
+
+def check_other_source(result, session_day):
+    """Re-test one stock, for the given session, on the data source that was
+    NOT used for it. Returns a dict (see cross_status)."""
+
+    other = other_source_name(result)
+
+    time.sleep(random.uniform(0.05, 0.25))
+
+    if other == "NSE":
+        if _nse_calibration["ok"] is not True:
+            return {"source": other, "checked": False, "note": "NSE candle times were not verified"}
+
+        if _nse_state["blocked"]:
+            return {"source": other, "checked": False, "note": "NSE is blocked in this run"}
+
+        fetcher = fetch_interval_nse
+    else:
+        if yf is None:
+            return {"source": other, "checked": False, "note": "yfinance is not installed"}
+
+        fetcher = fetch_interval
+
+    try:
+        rows, info = fetch_all_timeframes(result["symbol"], fetcher)
+    except Exception as e:
+        return {"source": other, "checked": False, "note": f"{type(e).__name__}: {e}"[:120]}
+
+    if rows is None:
+        return {"source": other, "checked": False, "note": str(info)[:120]}
+
+    other_result = evaluate_rows(rows, session_day=session_day)
+
+    if "cond_5m" not in other_result:
+        return {
+            "source": other, "checked": False,
+            "note": other_result.get("note") or f"{other} has no usable data for that session",
+        }
+
+    return {
+        "source": other,
+        "checked": True,
+        "passes": other_result.get("status") == "PASS",
+        "status": other_result.get("status"),
+        "direction": other_result.get("direction"),
+        "failed": failed_rules(other_result),
+        "previous_day": session_day,
+    }
+
+
+def cross_status(result):
+    """How the other source relates to this stock:
+    CONFIRMED (a signal on both sources), DIRECTION DIFFERS (a signal on both,
+    but they disagree on the direction), ONE SOURCE ONLY (a signal on this
+    source, failing on the other), OTHER SOURCE ONLY (failing on this source but
+    a signal on the other), NOT CHECKED (a signal that could not be re-tested),
+    or None (nothing to report)."""
+
+    check = result.get("confirm")
+
+    if not check:
+        return None
+
+    primary_pass = result.get("status") == "PASS"
+
+    if not check["checked"]:
+        return "NOT CHECKED" if primary_pass else None
+
+    if primary_pass and check["passes"]:
+        return "CONFIRMED" if check.get("direction") == result.get("direction") else "DIRECTION DIFFERS"
+
+    if primary_pass:
+        return "ONE SOURCE ONLY"
+
+    return "OTHER SOURCE ONLY" if check["passes"] else None
+
+
+def cross_detail(result):
+    """One readable sentence about how the two sources compare."""
+
+    check = result["confirm"]
+    mine = source_name(result)
+    other = check["source"]
+    status = cross_status(result)
+
+    if status == "OTHER SOURCE ONLY":
+        if result.get("status") == "STALE":
+            reasons = [f"its data is from another session ({result.get('previous_day')})"]
+        else:
+            reasons = failed_rules(result) or [f"status {result.get('status')}"]
+
+        return (
+            f"passes on {other} ({check.get('direction')}); fails on {mine}: "
+            + ", ".join(reasons)
+        )
+
+    if status == "DIRECTION DIFFERS":
+        return f"{mine} says {result.get('direction')}, {other} says {check.get('direction')}"
+
+    if not check["checked"]:
+        return f"not checked on {other}: {check.get('note')}"
+
+    if status == "CONFIRMED":
+        return f"passes on both {mine} and {other}"
+
+    return f"passes on {mine}; fails on {other}: " + ", ".join(check.get("failed") or ["?"])
+
+
+def signal_info(result):
+    """None, or the signal this stock gives: it passes on its own source, or on
+    the other source (a pass on EITHER source is a signal)."""
+
+    status = cross_status(result)
+    mine = source_name(result)
+
+    if result.get("status") == "PASS":
+        check = result.get("confirm") or {}
+        sources = [mine]
+
+        if status in ("CONFIRMED", "DIRECTION DIFFERS"):
+            sources.append(check["source"])
+
+        return {
+            "symbol": result["symbol"],
+            "direction": result["direction"],
+            "previous_day": result.get("previous_day"),
+            "sources": sources,
+            "only_other": False,
+            "note": cross_detail(result) if status == "DIRECTION DIFFERS" else "",
+            "detail": cross_detail(result) if check else "",
+        }
+
+    if status == "OTHER SOURCE ONLY":
+        check = result["confirm"]
+
+        return {
+            "symbol": result["symbol"],
+            "direction": check["direction"],
+            "previous_day": check.get("previous_day"),
+            "sources": [check["source"]],
+            "only_other": True,
+            "note": "",
+            "detail": cross_detail(result),
+        }
+
+    return None
+
+
+def final_signals(results):
+    """Every signal to show: a pass on NSE or a pass on Yahoo."""
+
+    signals = [x for x in (signal_info(r) for r in results) if x]
+    signals.sort(key=lambda x: (x["direction"] != "LONG", x["symbol"]))
+
+    return signals
+
+
+def confirm_candidates(results, session_day):
+    """Scan, on the OTHER data source and for the market's session, every stock
+    that did not pass on NSE (and confirm every signal). Stores the outcome in
+    result["confirm"]."""
+
+    if not session_day:
+        return
+
+    by_symbol = {r["symbol"]: r for r in results}
+
+    chosen = [
+        r["symbol"] for r in results
+        if r.get("status") not in ("ERROR", "NO_DATA")
+        and (source_name(r) == "NSE" or r.get("status") == "PASS")
+    ]
+
+    if not chosen:
+        return
+
+    print()
+    print("=" * 70)
+    print(
+        f"SECOND SOURCE: scanning {len(chosen)} stocks on the other data source "
+        f"(every stock that did not pass on NSE, plus every signal)..."
+    )
+    print("=" * 70)
+
+    done = 0
+
+    with ThreadPoolExecutor(max_workers=max(1, min(CROSS_CHECK_WORKERS, MAX_WORKERS))) as executor:
+        futures = {
+            executor.submit(check_other_source, by_symbol[sym], session_day): sym
+            for sym in chosen
+        }
+
+        for future in as_completed(futures):
+            sym = futures[future]
+
+            try:
+                check = future.result()
+            except Exception as e:
+                check = {
+                    "source": other_source_name(by_symbol[sym]),
+                    "checked": False,
+                    "note": f"{type(e).__name__}: {e}"[:120],
+                }
+
+            by_symbol[sym]["confirm"] = check
+            done += 1
+
+            if done % 100 == 0 or done == len(chosen):
+                print(f"Second source: {done}/{len(chosen)}")
+
+
+def cross_groups(results):
+    groups = {
+        "CONFIRMED": [], "ONE SOURCE ONLY": [], "DIRECTION DIFFERS": [],
+        "OTHER SOURCE ONLY": [], "NOT CHECKED": [],
+    }
+
+    for r in results:
+        status = cross_status(r)
+
+        if status in groups:
+            groups[status].append(r)
+
+    return groups
+
+
+def cross_check_console(results):
+    groups = cross_groups(results)
+
+    if not any(groups.values()):
+        return "  (nothing to cross-check)"
+
+    def names(items):
+        return ", ".join(r["symbol"] for r in items) or "none"
+
+    lines = [f"  Signals on BOTH sources           : {names(groups['CONFIRMED'])}"]
+
+    for key, title in (
+        ("ONE SOURCE ONLY", "Signals on ONE source only (the other source fails)"),
+        ("OTHER SOURCE ONLY", "Signals found ONLY by the second source (failed on the first)"),
+        ("DIRECTION DIFFERS", "Signals where the sources disagree on direction"),
+        ("NOT CHECKED", "Signals not re-tested on the other source"),
+    ):
+        if groups[key]:
+            lines.append(f"  {title}:")
+
+            for r in groups[key]:
+                lines.append(f"    {r['symbol']:<14} {cross_detail(r)}")
+
+    return "\n".join(lines)
+
+
+def signal_tag(signal):
+    """Small HTML tag next to a signal showing which source(s) it passed on."""
+
+    sources = signal["sources"]
+
+    if signal.get("note"):
+        kind, text = "warn", "sources disagree on direction"
+    elif len(sources) == 2:
+        kind, text = "ok", "NSE + Yahoo"
+    else:
+        kind, text = "warn", f"{sources[0]} only"
+
+    return f'<span class="tag {kind}" title="{esc(signal.get("detail", ""))}">{esc(text)}</span>'
+
+
+def cross_html(results):
+    groups = cross_groups(results)
+
+    if not any(groups.values()):
+        return ""
+
+    problems = [
+        r for key in ("ONE SOURCE ONLY", "OTHER SOURCE ONLY", "DIRECTION DIFFERS", "NOT CHECKED")
+        for r in groups[key]
+    ]
+
+    body = "".join(
+        f'<tr><td class="symbol">{esc(r["symbol"])}</td>'
+        f'<td>{esc(cross_status(r))}</td><td>{esc(cross_detail(r))}</td></tr>'
+        for r in problems
+    )
+
+    summary = (
+        f"{len(groups['CONFIRMED'])} signal(s) pass on both sources; "
+        f"{len(groups['ONE SOURCE ONLY'])} pass on one source only (the other fails); "
+        f"{len(groups['OTHER SOURCE ONLY'])} were found only by the second source."
+    )
+
+    table = (
+        '<div class="table-wrap"><table><thead><tr><th>Symbol</th><th>Result</th>'
+        f'<th>Detail</th></tr></thead><tbody>{body}</tbody></table></div>'
+        if body else ""
+    )
+
+    return (
+        '<div class="match-box"><h2>Both data sources</h2>'
+        '<p>Every stock that did not pass on NSE was also scanned on Yahoo for the same '
+        'session, and every signal was confirmed on the other source. A pass on either '
+        f'source is shown as a signal. {esc(summary)}</p>{table}</div>'
+    )
+
+
+def unscanned_report(results, limit=40):
+    """Stocks whose result cannot be trusted, by name: technical ERRORs,
+    DATA CONFLICTs and STALE sessions."""
+
+    def pick(status):
+        return sorted(
+            (r["symbol"], (r.get("error") or "")[:110])
+            for r in results if r.get("status") == status
+        )
+
+    return {
+        "ERROR": pick("ERROR"),
+        "CONFLICT": pick("CONFLICT"),
+        "STALE": pick("STALE"),
+        "limit": limit,
+    }
+
+
+def unscanned_lines(results):
+    report = unscanned_report(results)
+    limit = report["limit"]
+    lines = []
+
+    for key, meaning in (
+        ("ERROR", "could NOT be scanned (technical failure) and may hide a signal"),
+        ("CONFLICT", "have a 5m/1m DATA CONFLICT and were blocked"),
+        ("STALE", "were read on a different session than most stocks"),
+    ):
+        items = report[key]
+
+        if items:
+            shown = ", ".join(sym for sym, _ in items[:limit])
+            more = f" ... and {len(items) - limit} more" if len(items) > limit else ""
+            lines.append(f"{len(items)} stocks {meaning}: {shown}{more}")
+
+    return lines
+
+
+def unscanned_html(results):
+    lines = unscanned_lines(results)
+
+    if not lines:
+        return ""
+
+    return '<div class="warn">' + "<br>".join(esc(line) for line in lines) + "</div>"
+
+
 def main():
 
     if len(sys.argv) > 1 and sys.argv[1] == "--check":
@@ -3217,9 +3811,15 @@ def main():
     results, elapsed = scan_all_symbols(universe)
     save_nse_token_cache()
 
+    # No stock may be lost to a technical failure: retry, then cross-check.
+    results = retry_failed(results)
+    save_nse_token_cache()
+
     reference_date = mark_stale(results)
 
-    matches = [r for r in results if r.get("status") == "PASS"]
+    confirm_candidates(results, reference_date)
+
+    matches = final_signals(results)
 
     print()
     print("=" * 70)
@@ -3227,20 +3827,33 @@ def main():
     print("=" * 70)
     print(f"Universe    : {len(universe)}")
     print(f"Previous day: {reference_date}   Entry day: {context['entry']}")
+    print(f"Rules       : {STRATEGY_RULES}")
     print(f"Matches     : {len(matches)}")
     print(f"Time        : {elapsed:.1f} seconds")
     print()
 
     if matches:
-        print("MATCHES:")
-        for result in matches:
+        print("MATCHES (a pass on NSE or on Yahoo):")
+        for sig in matches:
             print(
-                f"  {result['symbol']:<15}"
-                f"{result['direction']:<7}"
-                f"{result['date']}"
+                f"  {sig['symbol']:<15}"
+                f"{sig['direction']:<7}"
+                f"{sig['previous_day']}   [{' + '.join(sig['sources'])}]"
             )
     else:
         print("NO MATCHES.")
+
+    print()
+    print("BOTH DATA SOURCES:")
+    print(cross_check_console(results))
+
+    unscanned = unscanned_lines(results)
+
+    if unscanned:
+        print()
+        print("STOCKS WITHOUT A RELIABLE RESULT:")
+        for line in unscanned:
+            print("  " + line)
 
     print()
 
