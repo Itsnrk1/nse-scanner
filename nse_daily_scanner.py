@@ -88,6 +88,7 @@
 # INSTALL:
 #   python -m pip install pandas requests
 #   (plus: yfinance curl_cffi - only needed for Yahoo / the Yahoo fallback)
+#   (plus: websocket-client   - only needed for DATA_SOURCE = "TRADINGVIEW")
 #
 # =============================================================================
 
@@ -1465,6 +1466,8 @@ def nse_record(outcome):
 #   2. messages are framed as  ~m~<length>~m~<json>  with json {"m": name, "p": params}
 #   3. send set_auth_token("unauthorized_user_token"), create a chart session,
 #      resolve_symbol("NSE:RELIANCE") and create_series(<interval>, <bars>)
+#      (No quote session is used: its quote_add_symbols message is now rejected
+#      by TradingView with "invalid_parameters", and the candles do not need it.)
 #   4. read timescale_update messages (bars as [time, open, high, low, close,
 #      volume], time = the bar's OPEN time in UTC epoch seconds) until
 #      series_completed; answer heartbeats (~h~N) by echoing them.
@@ -1579,23 +1582,17 @@ def tv_fetch_bars(tv_symbol, n_bars, interval="1"):
             raise RuntimeError(f"TradingView connection failed: {type(e).__name__}: {e}"[:200])
 
         try:
-            chart, quote = tv_session("cs_"), tv_session("qs_")
+            chart = tv_session("cs_")
 
             def send(function, params):
                 ws.send(tv_pack(function, params))
 
+            # Only a chart session is needed for candles. (The quote session
+            # used by older clients - quote_create_session / quote_add_symbols -
+            # is now rejected with "invalid_parameters", so it is not used.)
             send("set_auth_token", ["unauthorized_user_token"])
             send("chart_create_session", [chart, ""])
-            send("quote_create_session", [quote])
-            send("quote_set_fields", [
-                quote, "ch", "chp", "current_session", "description",
-                "local_description", "language", "exchange", "fractional",
-                "is_tradable", "lp", "lp_time", "minmov", "minmove2",
-                "original_name", "pricescale", "pro_name", "short_name", "type",
-                "update_mode", "volume", "currency_code", "rchp", "rtc",
-            ])
-            send("quote_add_symbols", [quote, tv_symbol, {"flags": ["force_permission"]}])
-            send("quote_fast_symbols", [quote, tv_symbol])
+            send("switch_timezone", [chart, "exchange"])
             send("resolve_symbol", [
                 chart, "symbol_1",
                 "=" + json.dumps(
@@ -1604,7 +1601,6 @@ def tv_fetch_bars(tv_symbol, n_bars, interval="1"):
                 ),
             ])
             send("create_series", [chart, "s1", "s1", "symbol_1", interval, n_bars])
-            send("switch_timezone", [chart, "exchange"])
 
             bars = {}
             completed = False
