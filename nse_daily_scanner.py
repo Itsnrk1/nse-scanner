@@ -2,13 +2,13 @@
 # NSE DAILY MOMENTUM SCANNER - 5-MIN / 3-MIN / 1-MIN CLOSING-CANDLE VERSION
 # =============================================================================
 #
-# Downloads 1-minute candles (one download per symbol) from a free source that
-# needs no API key or login, and builds the 5-minute and 3-minute candles from
-# them on the 09:15 grid:
+# Downloads candles from a free source that needs no API key or login:
 #   * TradingView's chart feed (default; see DATA_SOURCE) - the same candles
-#     you see on a TradingView chart. Unofficial: TradingView has no free public
-#     data API, this uses the same websocket feed its own web charts use.
-#   * or NSE's own charting feed, or Yahoo Finance (see DATA_SOURCE).
+#     you see on a TradingView chart. The 5m, 3m and 1m candles are TradingView's
+#     OWN native candles (nothing is rebuilt). Unofficial: TradingView has no
+#     free public data API, this uses the same websocket feed its web charts use.
+#   * or NSE's own charting feed (1m candles; 5m and 3m are built from them on
+#     the 09:15 grid), or Yahoo Finance (native 5m and 1m; 3m built from 1m).
 #   * Yahoo Finance is also the automatic per-stock fallback (FALLBACK_TO_YAHOO)
 #     and the second source every stock is checked on.
 # Universe: Nifty 500 CSV -> NSE equity list -> built-in fallback.
@@ -78,8 +78,8 @@
 #     candles are rebuilt from the 1m candles inside them (volume = sum of the
 #     1m volumes). If the two feeds disagree on the 09:15 or 15:20 candle's
 #     trend, or on which of the 15:20 / 15:25 candles has more volume, the
-#     symbol is marked DATA CONFLICT and never produces a signal. (The 3m candles come from the 1m feed, so they have no
-#     independent second source.)
+#     symbol is marked DATA CONFLICT and never produces a signal. (Yahoo has no 3m feed, so its 3m candles are built from
+#     the 1m candles; TradingView's 3m candles are its own native ones.)
 #   * Every row in the report shows each candle's open -> close and volume, so
 #     any signal can be checked against a chart in seconds.
 #   * Single-stock audit:  python scanner.py --check RELIANCE TCS
@@ -790,6 +790,7 @@ _nse_misses = {}
 _nse_transient = set()
 _nse_convention = {"labels": None}
 _nse_minute_cache = {}
+_tv_bundle_cache = {}
 _nse_calibration = {"done": False, "ok": None, "shift": 0, "detail": ""}
 
 
@@ -1173,7 +1174,38 @@ def fetch_interval_nse(symbol, interval):
     """One timeframe for one stock from NSE: (rows, info) like fetch_interval.
     "1m" is NSE's own 1-minute data; "5m" is built from those same 1-minute
     candles on the 09:15 grid. The 1-minute download is shared between the two
-    calls for a stock (one history request per stock)."""
+    calls for a stock (one history request per stock).
+
+    With DATA_SOURCE = "TRADINGVIEW" all three timeframes (5m, 3m, 1m) are
+    TradingView's own native candles, fetched once per stock and handed out one
+    timeframe at a time."""
+
+    if DATA_SOURCE == "TRADINGVIEW":
+        with _nse_lock:
+            entry = _tv_bundle_cache.get(symbol)
+
+        if entry is None:
+            rows_by_tf, info = tv_fetch_all(symbol, _nse_calibration["shift"])
+
+            if rows_by_tf is None:
+                return None, info
+
+            entry = {"rows": rows_by_tf, "left": set(rows_by_tf)}
+
+            with _nse_lock:
+                _tv_bundle_cache[symbol] = entry
+
+        with _nse_lock:
+            rows = entry["rows"].get(interval)
+            entry["left"].discard(interval)
+
+            if not entry["left"]:
+                _tv_bundle_cache.pop(symbol, None)
+
+        if rows is None:
+            return None, f"NO_DATA: TradingView gave no {interval} candles | e.g. {symbol}"
+
+        return rows, "OK"
 
     with _nse_lock:
         rows = _nse_minute_cache.pop(symbol, None)
@@ -1472,16 +1504,30 @@ def nse_record(outcome):
 #      volume], time = the bar's OPEN time in UTC epoch seconds) until
 #      series_completed; answer heartbeats (~h~N) by echoing them.
 # It is unofficial, may break or be blocked, and is not covered by TradingView's
-# terms of use - use is at your own risk. Only 1-minute bars are downloaded; the
-# 5-minute and 3-minute candles are built from them on the 09:15 grid (a stock
-# needs one connection, not three). Every failure carries a specific reason and
-# falls back to Yahoo for that stock.
+# terms of use - use is at your own risk. The 5-minute, 3-minute and 1-minute
+# bars are all TradingView's own native bars (they start on the 09:15 session
+# grid); they are requested over ONE connection per stock, as three chart
+# sessions. Every failure carries a specific reason and falls back to Yahoo for
+# that stock.
 
 TV_WS_URL = "wss://data.tradingview.com/socket.io/websocket"
 TV_ORIGIN = "https://data.tradingview.com"
 
 # 1-minute bars requested per stock (about 8 sessions; TradingView allows 5000).
 TV_BARS = 3000
+
+# The timeframes read from TradingView are its OWN native candles (not built
+# from 1-minute ones). TradingView's name for each interval (minutes) and the
+# number of bars requested per timeframe (about 8 sessions each):
+TV_TIMEFRAMES = ("5m", "3m", "1m")
+TV_INTERVALS = {"5m": "5", "3m": "3", "1m": "1"}
+TV_BARS_BY_TF = {"5m": 700, "3m": 1100, "1m": TV_BARS}
+
+# True  -> the three timeframes of a stock are requested over ONE websocket
+#          connection (three chart sessions);
+# False -> one connection per timeframe (slower; use it if the one-connection
+#          mode ever misbehaves).
+TV_ONE_CONNECTION_PER_STOCK = True
 
 # At most this many connections at once, and at least this many seconds between
 # connection attempts (all threads together).
@@ -1560,9 +1606,11 @@ def tv_symbol_candidates(symbol):
     return [f"NSE:{name}" for name in dict.fromkeys([mapped, upper])]
 
 
-def tv_fetch_bars(tv_symbol, n_bars, interval="1"):
-    """Download bars for one TradingView ticker. Returns a list of
-    [time, open, high, low, close, volume] (time = bar open, UTC epoch seconds),
+def tv_fetch_series(tv_symbol, wanted):
+    """Download several series for one TradingView ticker over ONE websocket
+    connection (one chart session per series). wanted = {name: (interval,
+    n_bars)}, interval = minutes as text ("1", "3", "5"). Returns {name: [[time,
+    open, high, low, close, volume], ...]} (time = bar open, UTC epoch seconds),
     oldest first. Raises NseNoData if TradingView has no such symbol / no bars,
     and RuntimeError (with a readable reason) for connection problems."""
 
@@ -1582,34 +1630,40 @@ def tv_fetch_bars(tv_symbol, n_bars, interval="1"):
             raise RuntimeError(f"TradingView connection failed: {type(e).__name__}: {e}"[:200])
 
         try:
-            chart = tv_session("cs_")
-
             def send(function, params):
                 ws.send(tv_pack(function, params))
 
-            # Only a chart session is needed for candles. (The quote session
+            # Only chart sessions are needed for candles. (The quote session
             # used by older clients - quote_create_session / quote_add_symbols -
             # is now rejected with "invalid_parameters", so it is not used.)
             send("set_auth_token", ["unauthorized_user_token"])
-            send("chart_create_session", [chart, ""])
-            send("switch_timezone", [chart, "exchange"])
-            send("resolve_symbol", [
-                chart, "symbol_1",
-                "=" + json.dumps(
-                    {"symbol": tv_symbol, "adjustment": "splits", "session": "regular"},
-                    separators=(",", ":"),
-                ),
-            ])
-            send("create_series", [chart, "s1", "s1", "symbol_1", interval, n_bars])
 
-            bars = {}
-            completed = False
+            owners = {}     # chart session id -> series name
+
+            for name, (interval, n_bars) in wanted.items():
+                chart = tv_session("cs_")
+                owners[chart] = name
+
+                send("chart_create_session", [chart, ""])
+                send("switch_timezone", [chart, "exchange"])
+                send("resolve_symbol", [
+                    chart, "symbol_1",
+                    "=" + json.dumps(
+                        {"symbol": tv_symbol, "adjustment": "splits", "session": "regular"},
+                        separators=(",", ":"),
+                    ),
+                ])
+                send("create_series", [chart, "s1", "s1", "symbol_1", interval, n_bars])
+
+            bars = {name: {} for name in wanted}
+            pending = set(owners)
             deadline = time.time() + TV_TOTAL_TIMEOUT
 
-            while not completed:
+            while pending:
                 if time.time() > deadline:
                     raise RuntimeError(
-                        f"TradingView did not finish within {TV_TOTAL_TIMEOUT}s"
+                        f"TradingView did not finish within {TV_TOTAL_TIMEOUT}s "
+                        f"(still waiting for {sorted(owners[c] for c in pending)})"
                     )
 
                 try:
@@ -1636,11 +1690,21 @@ def tv_fetch_bars(tv_symbol, n_bars, interval="1"):
                     except ValueError:
                         continue
 
-                    kind = message.get("m") if isinstance(message, dict) else None
+                    if not isinstance(message, dict):
+                        continue
 
-                    if kind == "timescale_update":
+                    kind = message.get("m")
+                    params = message.get("p")
+                    session = (
+                        params[0]
+                        if isinstance(params, list) and params and isinstance(params[0], str)
+                        else None
+                    )
+                    name = owners.get(session)
+
+                    if kind == "timescale_update" and name is not None:
                         try:
-                            series = message["p"][1]["s1"]["s"]
+                            series = params[1]["s1"]["s"]
                         except (KeyError, IndexError, TypeError):
                             continue
 
@@ -1648,25 +1712,25 @@ def tv_fetch_bars(tv_symbol, n_bars, interval="1"):
                             values = item.get("v") if isinstance(item, dict) else None
 
                             if values and len(values) >= 5:
-                                bars[item.get("i", len(bars))] = values
+                                bars[name][item.get("i", len(bars[name]))] = values
 
                     elif kind == "symbol_error":
                         raise NseNoData(
                             f"TradingView does not know the symbol {tv_symbol} "
-                            f"| e.g. {snippet(message.get('p'))}"
+                            f"| e.g. {snippet(params)}"
                         )
 
                     elif kind == "series_error":
                         raise NseNoData(
                             f"TradingView could not build the series for {tv_symbol} "
-                            f"| e.g. {snippet(message.get('p'))}"
+                            f"| e.g. {snippet(params)}"
                         )
 
                     elif kind in ("critical_error", "protocol_error"):
-                        raise RuntimeError(f"TradingView {kind}: {snippet(message.get('p'))}")
+                        raise RuntimeError(f"TradingView {kind}: {snippet(params)}")
 
-                    elif kind == "series_completed":
-                        completed = True
+                    elif kind == "series_completed" and name is not None:
+                        pending.discard(session)
 
         finally:
             try:
@@ -1674,10 +1738,41 @@ def tv_fetch_bars(tv_symbol, n_bars, interval="1"):
             except Exception:
                 pass
 
-    if not bars:
-        raise NseNoData(f"TradingView returned no bars for {tv_symbol} | e.g. {tv_symbol}")
+    result = {}
 
-    return sorted((list(v) for v in bars.values()), key=lambda v: v[0])
+    for name, (interval, _) in wanted.items():
+        if not bars[name]:
+            raise NseNoData(
+                f"TradingView returned no {interval}-minute bars for {tv_symbol} "
+                f"| e.g. {tv_symbol}"
+            )
+
+        result[name] = sorted((list(v) for v in bars[name].values()), key=lambda v: v[0])
+
+    return result
+
+
+def tv_fetch_bars(tv_symbol, n_bars, interval="1"):
+    """One series for one TradingView ticker: a list of [time, open, high, low,
+    close, volume], oldest first (see tv_fetch_series)."""
+
+    return tv_fetch_series(tv_symbol, {"bars": (interval, n_bars)})["bars"]
+
+
+def tv_fetch_timeframes(tv_symbol):
+    """TradingView's own 5m, 3m and 1m bars for one ticker: {timeframe: bars}."""
+
+    wanted = {tf: (TV_INTERVALS[tf], TV_BARS_BY_TF[tf]) for tf in TV_TIMEFRAMES}
+
+    if TV_ONE_CONNECTION_PER_STOCK:
+        return tv_fetch_series(tv_symbol, wanted)
+
+    result = {}
+
+    for tf, spec in wanted.items():
+        result.update(tv_fetch_series(tv_symbol, {tf: spec}))
+
+    return result
 
 
 def tv_bars_to_frame(bars, shift=0):
@@ -1744,6 +1839,64 @@ def tv_fetch_minutes(symbol, shift):
             )
 
         return cleaned, "OK"
+
+    except NseNoData as e:
+        return None, f"NO_DATA: {e}"[:300]
+
+    except Exception as e:
+        return None, f"{type(e).__name__}: {e}"[:300]
+
+
+def tv_fetch_all(symbol, shift):
+    """5m, 3m and 1m candles for one stock, all TradingView's own native
+    candles: (rows_by_timeframe, info) like fetch_all_timeframes. Each frame is
+    cleaned the same way as every other source (start-labelled minutes).
+
+    If the alignment check found that TradingView's minutes are offset (shift is
+    not 0), the native 5m/3m bars cannot simply be shifted onto the 09:15 grid,
+    so in that case only the 1-minute bars are used and the 5m and 3m candles
+    are built from them."""
+
+    try:
+        if shift != 0:
+            rows, info = tv_fetch_minutes(symbol, shift)
+
+            if rows is None:
+                return None, info
+
+            return {
+                "5m": resample_from_1m(rows, 5),
+                "3m": resample_from_1m(rows, 3),
+                "1m": rows,
+            }, "OK"
+
+        series, note = None, ""
+
+        for candidate in tv_symbol_candidates(symbol):
+            try:
+                series = tv_fetch_timeframes(candidate)
+                break
+            except NseNoData as e:
+                note = str(e)
+
+        if series is None:
+            raise NseNoData(note or f"TradingView has no data for {symbol}")
+
+        rows_by_tf = {}
+
+        for tf in TV_TIMEFRAMES:
+            frame = tv_bars_to_frame(series[tf], 0)
+            cleaned = clean_yahoo_data(frame) if frame is not None else None
+
+            if cleaned is None or cleaned.empty:
+                raise RuntimeError(
+                    f"all TradingView {tf} candles were dropped by cleaning "
+                    f"| e.g. {symbol}: {len(series[tf])} bars"
+                )
+
+            rows_by_tf[tf] = cleaned
+
+        return rows_by_tf, "OK"
 
     except NseNoData as e:
         return None, f"NO_DATA: {e}"[:300]
@@ -1868,14 +2021,26 @@ def fetch_interval(symbol, interval):
     return None, error
 
 
+def timeframes_for(fetcher):
+    """The timeframes downloaded for a symbol from one source: TradingView gives
+    native 5m, 3m and 1m candles; NSE and Yahoo give 5m and 1m (their 3m candles
+    are built from the 1m ones)."""
+
+    if fetcher is fetch_interval_nse and DATA_SOURCE == "TRADINGVIEW":
+        return TV_TIMEFRAMES
+
+    return TIMEFRAMES
+
+
 def fetch_all_timeframes(symbol, fetcher):
-    """Both timeframes for one symbol from one source (fetcher). Returns
+    """All timeframes for one symbol from one source (fetcher). Returns
     (rows_by_timeframe, info); rows_by_timeframe is None unless every timeframe
     came back, and then info is "NO_DATA[: reason]" or an error message."""
 
     rows_by_tf, infos, errors = {}, [], []
+    timeframes = timeframes_for(fetcher)
 
-    for tf in TIMEFRAMES:
+    for tf in timeframes:
         rows, info = fetcher(symbol, tf)
 
         if rows is None:
@@ -1884,7 +2049,7 @@ def fetch_all_timeframes(symbol, fetcher):
             rows_by_tf[tf] = rows
             infos.append(info)
 
-    if len(rows_by_tf) == len(TIMEFRAMES):
+    if len(rows_by_tf) == len(timeframes):
         return rows_by_tf, ("FALLBACK" if "FALLBACK" in infos else "OK")
 
     real_errors = [e for e in errors if not is_no_data(e)]
@@ -2203,15 +2368,18 @@ def evaluate_rows(rows_by_tf, session_day=None):
     else:
         previous_day = dates[-1]
 
-    # 3-minute candles are built from the previous day's 1-minute candles only.
-    rows_1m = rows_by_tf.get("1m")
-    by_tf["3m"] = {}
+    # 3-minute candles: TradingView supplies its own native 3m candles (already
+    # in by_tf). Other sources have no 3m feed, so the 3m candles are built from
+    # the previous day's 1-minute candles only.
+    if "3m" not in rows_by_tf:
+        rows_1m = rows_by_tf.get("1m")
+        by_tf["3m"] = {}
 
-    if rows_1m is not None and not rows_1m.empty:
-        rows_3m = resample_to_3m(rows_1m[rows_1m["date"] == previous_day])
+        if rows_1m is not None and not rows_1m.empty:
+            rows_3m = resample_to_3m(rows_1m[rows_1m["date"] == previous_day])
 
-        if rows_3m is not None and not rows_3m.empty:
-            by_tf["3m"] = day_map(rows_3m)
+            if rows_3m is not None and not rows_3m.empty:
+                by_tf["3m"] = day_map(rows_3m)
 
     candles, missing = {}, []
 
@@ -3301,9 +3469,10 @@ is shown as a signal, tagged with the source(s) it passed on.<br>
 <b>Entry:</b> the 09:15 open on entry day. <b>Exit:</b> {esc(EXIT_TIME_LABEL)}.<br><br>
 <b>Data notes:</b> candles come from the primary source ({esc(primary_label())} - the DATA_SOURCE
 setting) with Yahoo as the fallback and second source; the source of each stock is shown in
-the Data column. The primary source's 1-minute candles are downloaded and the 5-minute and
-3-minute candles are built from them on a 09:15 grid (open = first, close = last, volume =
-sum); a stock read from Yahoo uses Yahoo's own 5-minute feed. Prices are rounded to 2
+the Data column. TradingView supplies its own native 5-minute, 3-minute and 1-minute candles;
+for NSE's feed the 5-minute and 3-minute candles are built from 1-minute candles on a 09:15
+grid (open = first, close = last, volume = sum); a stock read from Yahoo uses Yahoo's own
+5-minute and 1-minute feeds, with its 3-minute candles built from the 1-minute ones. Prices are rounded to 2
 decimals; zero-volume and corrupt candles are dropped and count as missing, which can only
 block a match.{zero_note} DATA CONFLICT means a native 5m candle's trend, or which 5m candle has more
 volume, disagrees with the same candles rebuilt from the 1m candles inside them, so the
@@ -3426,8 +3595,9 @@ def compare_sources(symbols):
 
         for label, fetcher in ((primary_label(), fetch_interval_nse), ("Yahoo", fetch_interval)):
             rows_by_tf, errors = {}, []
+            timeframes = timeframes_for(fetcher)
 
-            for tf in TIMEFRAMES:
+            for tf in timeframes:
                 rows, info = fetcher(symbol, tf)
 
                 if rows is None:
@@ -3435,7 +3605,7 @@ def compare_sources(symbols):
                 else:
                     rows_by_tf[tf] = rows
 
-            if len(rows_by_tf) == len(TIMEFRAMES):
+            if len(rows_by_tf) == len(timeframes):
                 evaluated[label] = (evaluate_rows(rows_by_tf), [])
             else:
                 evaluated[label] = (None, errors)
