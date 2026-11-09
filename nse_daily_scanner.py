@@ -2,13 +2,15 @@
 # NSE DAILY MOMENTUM SCANNER - 5-MIN / 3-MIN / 1-MIN CLOSING-CANDLE VERSION
 # =============================================================================
 #
-# Downloads NATIVE 5-minute and 1-minute candles (two downloads per symbol)
-# from a free source that needs no API key:
-#   * NSE's own charting feed (charting.nseindia.com) - the exchange's data
-#     (default; see DATA_SOURCE), with
-#   * Yahoo Finance as an automatic per-stock fallback (FALLBACK_TO_YAHOO).
-# Neither has a 3-minute feed, so the 3-minute candles are built from the
-# 1-minute candles.
+# Downloads 1-minute candles (one download per symbol) from a free source that
+# needs no API key or login, and builds the 5-minute and 3-minute candles from
+# them on the 09:15 grid:
+#   * TradingView's chart feed (default; see DATA_SOURCE) - the same candles
+#     you see on a TradingView chart. Unofficial: TradingView has no free public
+#     data API, this uses the same websocket feed its own web charts use.
+#   * or NSE's own charting feed, or Yahoo Finance (see DATA_SOURCE).
+#   * Yahoo Finance is also the automatic per-stock fallback (FALLBACK_TO_YAHOO)
+#     and the second source every stock is checked on.
 # Universe: Nifty 500 CSV -> NSE equity list -> built-in fallback.
 # Output: index.html (a plain dashboard)
 #
@@ -49,9 +51,10 @@
 # second-last candle's trend, for the alignment in 6). The 3m and 1m
 # timeframes also require their last two candles to share a trend (rules 3, 5).
 #
-# DATA SOURCES: every stock is scanned on NSE, and every stock that does not
-# pass on NSE is ALSO scanned on Yahoo for the same session. A stock that passes
-# on EITHER source is shown as a signal, tagged with the source(s) it passed on.
+# DATA SOURCES: every stock is scanned on the primary source (DATA_SOURCE), and
+# every stock that does not pass there is ALSO scanned on Yahoo for the same
+# session. A stock that passes on EITHER source is shown as a signal, tagged with
+# the source(s) it passed on.
 #
 # "Trend" = candle colour (close > open is Up, close < open is Down). A flat
 # candle (close == open) has no trend, so it can never be "the same" as another.
@@ -90,6 +93,8 @@
 
 import html
 import json
+import re
+import string
 import logging
 import random
 import sys
@@ -111,6 +116,12 @@ try:
     import yfinance as yf
 except ImportError:
     yf = None
+
+# websocket-client is only needed for DATA_SOURCE = "TRADINGVIEW".
+try:
+    import websocket
+except ImportError:
+    websocket = None
 
 # yfinance logs every failed ticker; we report those ourselves.
 logging.getLogger("yfinance").setLevel(logging.CRITICAL)
@@ -174,25 +185,35 @@ STRATEGY_RULES = (
 
 # No stock may be lost to a technical failure. After the main scan, stocks that
 # ERRORED are retried (waiting first, with fewer workers), and stocks that fell
-# back to Yahoo only because NSE failed temporarily are tried on NSE again.
+# back to Yahoo only because the primary source failed temporarily are tried there again.
 RETRY_ROUNDS = 2
 RETRY_WAIT_SECONDS = (30, 60)
 RETRY_WORKERS = 3
 
-# EVERY stock that does not pass on NSE is also scanned on Yahoo, for the same
+# EVERY stock that does not pass on the primary source is also scanned on Yahoo, for the same
 # session, and every NSE signal is confirmed on Yahoo. A stock that passes on
 # EITHER source is shown as a signal. (Stocks that only had Yahoo data are
-# confirmed on NSE if they pass.) This many stocks are checked at a time.
+# confirmed on the primary source if they pass.) This many stocks are checked at a time.
 CROSS_CHECK_WORKERS = 6
 
-# Where the candles come from (both are free and need no API key):
-#   "NSE"   -> NSE's own charting feed (charting.nseindia.com): the exchange's
-#              data. Unofficial, so NSE may rate-limit or block it (cloud
-#              servers such as GitHub Actions are often blocked).
-#   "YAHOO" -> Yahoo Finance via yfinance.
-DATA_SOURCE = "NSE"
+# Where the candles come from (all free, none needs an API key or login):
+#   "TRADINGVIEW" -> TradingView's chart feed (default): the candles you see on
+#                    a TradingView chart. Unofficial and against TradingView's
+#                    terms of use; it may be rate-limited or blocked (cloud
+#                    servers such as GitHub Actions sometimes are). Needs the
+#                    websocket-client package.
+#   "NSE"         -> NSE's own charting feed (charting.nseindia.com): the
+#                    exchange's data. Also unofficial; also blocked at times.
+#   "YAHOO"       -> Yahoo Finance via yfinance.
+DATA_SOURCE = "TRADINGVIEW"
 
-# If a stock cannot be fetched from NSE (blocked, odd format, no data), try
+
+def primary_label():
+    """Display name of the primary source (the one DATA_SOURCE selects)."""
+
+    return {"NSE": "NSE", "TRADINGVIEW": "TradingView"}.get(DATA_SOURCE, "NSE")
+
+# If a stock cannot be fetched from the primary source (blocked, odd format, no data), try
 # Yahoo for that stock. The Data column of the report shows which source each
 # stock came from. Set False to use NSE only (yfinance is then not needed).
 FALLBACK_TO_YAHOO = True
@@ -210,7 +231,7 @@ NSE_MAX_CONNECTIONS = 3
 # Minimum gap (seconds) between any two NSE requests, all threads together.
 NSE_MIN_INTERVAL = 0.4
 
-# If NSE refuses this many requests in a row, NSE is PAUSED: every worker waits
+# If the primary source refuses this many requests in a row, it is PAUSED: every worker waits
 # NSE_COOLDOWN_SECONDS and then carries on. Each further pause without a success
 # in between doubles the wait (up to NSE_COOLDOWN_MAX). After NSE_MAX_COOLDOWNS
 # such pauses in a row with no success in between, NSE is given up for the rest
@@ -1157,7 +1178,7 @@ def fetch_interval_nse(symbol, interval):
         rows = _nse_minute_cache.pop(symbol, None)
 
     if rows is None:
-        rows, info = nse_fetch_minutes(symbol, _nse_calibration["shift"])
+        rows, info = primary_fetch_minutes(symbol, _nse_calibration["shift"])
 
         if rows is None:
             return None, info
@@ -1213,10 +1234,10 @@ def nse_alignment(symbol):
     volume match the Yahoo candle at that minute. Returns a dict with the best
     correction ("shift") and how clearly it beat the runner-up."""
 
-    nse_rows, nse_info = nse_fetch_minutes(symbol, 0)
+    nse_rows, nse_info = primary_fetch_minutes(symbol, 0)
 
     if nse_rows is None:
-        raise RuntimeError(f"NSE gave no usable data: {nse_info}")
+        raise RuntimeError(f"{primary_label()} gave no usable data: {nse_info}")
 
     yahoo_rows, yahoo_info = fetch_interval(symbol, "1m")
 
@@ -1230,7 +1251,7 @@ def nse_alignment(symbol):
     days = sorted(full_days(nse_rows) & full_days(yahoo_rows))
 
     if not days:
-        raise RuntimeError("no complete session in both NSE and Yahoo data to compare")
+        raise RuntimeError(f"no complete session in both {primary_label()} and Yahoo data to compare")
 
     days = days[-2:]
 
@@ -1289,7 +1310,7 @@ def nse_preflight():
     Yahoo's (see nse_alignment). Sets the correction to apply, or marks NSE as
     unusable (every stock then comes from Yahoo)."""
 
-    if DATA_SOURCE != "NSE" or _nse_calibration["done"]:
+    if DATA_SOURCE not in ("NSE", "TRADINGVIEW") or _nse_calibration["done"]:
         return
 
     _nse_calibration["done"] = True
@@ -1307,13 +1328,13 @@ def nse_preflight():
                 ok=True,
                 shift=result["shift"],
                 detail=(
-                    f"NSE candle times verified against Yahoo ({symbol}, "
+                    f"{primary_label()} candle times verified against Yahoo ({symbol}, "
                     f"{result['candles']} candles): correction {result['shift']:+d} min, "
                     f"{result['share']:.0%} of minutes match"
                 ),
             )
             print()
-            print("NSE CHECK:", _nse_calibration["detail"])
+            print(f"{primary_label().upper()} CHECK:", _nse_calibration["detail"])
             return
 
         problems.append(
@@ -1325,14 +1346,14 @@ def nse_preflight():
 
     _nse_calibration.update(
         ok=False,
-        detail="NSE candle times could not be verified against Yahoo: " + detail,
+        detail=f"{primary_label()} candle times could not be verified against Yahoo: " + detail,
     )
 
     with _nse_lock:
         _nse_state["blocked"] = True
 
     print()
-    print("NSE CHECK FAILED - NSE will not be used in this run.")
+    print(f"{primary_label().upper()} CHECK FAILED - {primary_label()} will not be used in this run.")
     print("  " + detail)
 
 
@@ -1403,8 +1424,8 @@ def nse_record(outcome):
                 if state["cooldowns"] > NSE_MAX_COOLDOWNS:
                     state["blocked"] = True
                     message = (
-                        f"NSE kept refusing requests after {NSE_MAX_COOLDOWNS} pauses "
-                        f"- not using NSE for the rest of this run."
+                        f"{primary_label()} kept refusing requests after {NSE_MAX_COOLDOWNS} pauses "
+                        f"- not using {primary_label()} for the rest of this run."
                     )
                 else:
                     pause = state["cooldown_s"]
@@ -1413,8 +1434,8 @@ def nse_record(outcome):
                     state["pauses"] += 1
                     state["paused_seconds"] += pause
                     message = (
-                        f"NSE refused {NSE_REFUSALS_BEFORE_COOLDOWN} requests in a row "
-                        f"(rate limit) - pausing NSE for {pause:.0f}s, then carrying on."
+                        f"{primary_label()} refused {NSE_REFUSALS_BEFORE_COOLDOWN} requests in a row "
+                        f"(rate limit) - pausing {primary_label()} for {pause:.0f}s, then carrying on."
                     )
 
         if (
@@ -1424,13 +1445,326 @@ def nse_record(outcome):
         ):
             state["blocked"] = True
             message = (
-                f"NSE gave nothing usable for the first {state['attempts']} stocks "
-                f"- not using NSE for the rest of this run."
+                f"{primary_label()} gave nothing usable for the first {state['attempts']} stocks "
+                f"- not using {primary_label()} for the rest of this run."
             )
 
     if message:
         print()
         print("NOTE:", message)
+
+
+# =============================================================================
+# TRADINGVIEW CHART FEED   (free, no API key, no login)
+# =============================================================================
+#
+# TradingView has no free public data API. Its own web charts get their candles
+# over a websocket, and community libraries (tvdatafeed and forks) speak the same
+# protocol without logging in; this is a small client for it:
+#   1. connect to wss://data.tradingview.com/socket.io/websocket
+#   2. messages are framed as  ~m~<length>~m~<json>  with json {"m": name, "p": params}
+#   3. send set_auth_token("unauthorized_user_token"), create a chart session,
+#      resolve_symbol("NSE:RELIANCE") and create_series(<interval>, <bars>)
+#   4. read timescale_update messages (bars as [time, open, high, low, close,
+#      volume], time = the bar's OPEN time in UTC epoch seconds) until
+#      series_completed; answer heartbeats (~h~N) by echoing them.
+# It is unofficial, may break or be blocked, and is not covered by TradingView's
+# terms of use - use is at your own risk. Only 1-minute bars are downloaded; the
+# 5-minute and 3-minute candles are built from them on the 09:15 grid (a stock
+# needs one connection, not three). Every failure carries a specific reason and
+# falls back to Yahoo for that stock.
+
+TV_WS_URL = "wss://data.tradingview.com/socket.io/websocket"
+TV_ORIGIN = "https://data.tradingview.com"
+
+# 1-minute bars requested per stock (about 8 sessions; TradingView allows 5000).
+TV_BARS = 3000
+
+# At most this many connections at once, and at least this many seconds between
+# connection attempts (all threads together).
+TV_MAX_CONNECTIONS = 3
+TV_MIN_INTERVAL = 0.5
+
+# Seconds to wait for each reply, and for one whole stock.
+TV_RECV_TIMEOUT = 15
+TV_TOTAL_TIMEOUT = 40
+
+_tv_slots = threading.BoundedSemaphore(TV_MAX_CONNECTIONS)
+_tv_rate_lock = threading.Lock()
+_tv_next = [0.0]
+
+
+def tv_throttle():
+    """Space TradingView connections at least TV_MIN_INTERVAL seconds apart,
+    across all worker threads."""
+
+    with _tv_rate_lock:
+        now = time.monotonic()
+        wait = _tv_next[0] - now
+        _tv_next[0] = max(now, _tv_next[0]) + TV_MIN_INTERVAL
+
+    if wait > 0:
+        time.sleep(wait)
+
+
+def tv_pack(function, params):
+    """One websocket message in TradingView's framing."""
+
+    payload = json.dumps({"m": function, "p": params}, separators=(",", ":"))
+
+    return f"~m~{len(payload)}~m~{payload}"
+
+
+def tv_unpack(raw):
+    """The payloads inside one websocket frame (a frame can hold several
+    messages: ~m~<length>~m~<payload>~m~<length>~m~<payload>...)."""
+
+    payloads, i = [], 0
+
+    while True:
+        j = raw.find("~m~", i)
+
+        if j < 0:
+            break
+
+        k = raw.find("~m~", j + 3)
+
+        if k < 0:
+            break
+
+        try:
+            length = int(raw[j + 3:k])
+        except ValueError:
+            break
+
+        payloads.append(raw[k + 3:k + 3 + length])
+        i = k + 3 + length
+
+    return payloads
+
+
+def tv_session(prefix):
+    return prefix + "".join(random.choice(string.ascii_lowercase) for _ in range(12))
+
+
+def tv_symbol_candidates(symbol):
+    """TradingView tickers to try for an NSE symbol: punctuation becomes an
+    underscore on TradingView (M&M -> M_M, BAJAJ-AUTO -> BAJAJ_AUTO)."""
+
+    upper = symbol.upper()
+    mapped = re.sub(r"[^A-Z0-9]", "_", upper)
+
+    return [f"NSE:{name}" for name in dict.fromkeys([mapped, upper])]
+
+
+def tv_fetch_bars(tv_symbol, n_bars, interval="1"):
+    """Download bars for one TradingView ticker. Returns a list of
+    [time, open, high, low, close, volume] (time = bar open, UTC epoch seconds),
+    oldest first. Raises NseNoData if TradingView has no such symbol / no bars,
+    and RuntimeError (with a readable reason) for connection problems."""
+
+    if websocket is None:
+        raise RuntimeError(
+            "the websocket-client package is not installed (pip install websocket-client)"
+        )
+
+    tv_throttle()
+
+    with _tv_slots:
+        try:
+            ws = websocket.create_connection(
+                TV_WS_URL, origin=TV_ORIGIN, timeout=TV_RECV_TIMEOUT
+            )
+        except Exception as e:
+            raise RuntimeError(f"TradingView connection failed: {type(e).__name__}: {e}"[:200])
+
+        try:
+            chart, quote = tv_session("cs_"), tv_session("qs_")
+
+            def send(function, params):
+                ws.send(tv_pack(function, params))
+
+            send("set_auth_token", ["unauthorized_user_token"])
+            send("chart_create_session", [chart, ""])
+            send("quote_create_session", [quote])
+            send("quote_set_fields", [
+                quote, "ch", "chp", "current_session", "description",
+                "local_description", "language", "exchange", "fractional",
+                "is_tradable", "lp", "lp_time", "minmov", "minmove2",
+                "original_name", "pricescale", "pro_name", "short_name", "type",
+                "update_mode", "volume", "currency_code", "rchp", "rtc",
+            ])
+            send("quote_add_symbols", [quote, tv_symbol, {"flags": ["force_permission"]}])
+            send("quote_fast_symbols", [quote, tv_symbol])
+            send("resolve_symbol", [
+                chart, "symbol_1",
+                "=" + json.dumps(
+                    {"symbol": tv_symbol, "adjustment": "splits", "session": "regular"},
+                    separators=(",", ":"),
+                ),
+            ])
+            send("create_series", [chart, "s1", "s1", "symbol_1", interval, n_bars])
+            send("switch_timezone", [chart, "exchange"])
+
+            bars = {}
+            completed = False
+            deadline = time.time() + TV_TOTAL_TIMEOUT
+
+            while not completed:
+                if time.time() > deadline:
+                    raise RuntimeError(
+                        f"TradingView did not finish within {TV_TOTAL_TIMEOUT}s"
+                    )
+
+                try:
+                    raw = ws.recv()
+                except Exception as e:
+                    raise RuntimeError(
+                        f"TradingView stopped answering ({type(e).__name__})"
+                    )
+
+                if not raw:
+                    raise RuntimeError("TradingView closed the connection")
+
+                if isinstance(raw, bytes):
+                    raw = raw.decode("utf-8", "replace")
+
+                for payload in tv_unpack(raw):
+
+                    if payload.startswith("~h~"):
+                        ws.send(f"~m~{len(payload)}~m~{payload}")
+                        continue
+
+                    try:
+                        message = json.loads(payload)
+                    except ValueError:
+                        continue
+
+                    kind = message.get("m") if isinstance(message, dict) else None
+
+                    if kind == "timescale_update":
+                        try:
+                            series = message["p"][1]["s1"]["s"]
+                        except (KeyError, IndexError, TypeError):
+                            continue
+
+                        for item in series:
+                            values = item.get("v") if isinstance(item, dict) else None
+
+                            if values and len(values) >= 5:
+                                bars[item.get("i", len(bars))] = values
+
+                    elif kind == "symbol_error":
+                        raise NseNoData(
+                            f"TradingView does not know the symbol {tv_symbol} "
+                            f"| e.g. {snippet(message.get('p'))}"
+                        )
+
+                    elif kind == "series_error":
+                        raise NseNoData(
+                            f"TradingView could not build the series for {tv_symbol} "
+                            f"| e.g. {snippet(message.get('p'))}"
+                        )
+
+                    elif kind in ("critical_error", "protocol_error"):
+                        raise RuntimeError(f"TradingView {kind}: {snippet(message.get('p'))}")
+
+                    elif kind == "series_completed":
+                        completed = True
+
+        finally:
+            try:
+                ws.close()
+            except Exception:
+                pass
+
+    if not bars:
+        raise NseNoData(f"TradingView returned no bars for {tv_symbol} | e.g. {tv_symbol}")
+
+    return sorted((list(v) for v in bars.values()), key=lambda v: v[0])
+
+
+def tv_bars_to_frame(bars, shift=0):
+    """TradingView bars -> a Yahoo-style frame (Datetime index = the minute the
+    bar STARTS, in IST; Open/High/Low/Close/Volume) for clean_yahoo_data.
+    `shift` (minutes) is a correction found by the alignment check."""
+
+    rows = [list(v[:6]) + [0.0] * (6 - len(v[:6])) for v in bars]
+    df = pd.DataFrame(rows, columns=["time", "Open", "High", "Low", "Close", "Volume"])
+
+    stamp = pd.to_datetime(pd.to_numeric(df["time"], errors="coerce"), unit="s", utc=True)
+    keep = stamp.notna()
+    df = df.loc[keep].reset_index(drop=True)
+    stamp = stamp.loc[keep].reset_index(drop=True)
+
+    if df.empty:
+        return None
+
+    index = pd.DatetimeIndex(stamp).tz_convert("Asia/Kolkata") + pd.Timedelta(minutes=shift)
+    index.name = "Datetime"
+
+    out = df[["Open", "High", "Low", "Close", "Volume"]].apply(pd.to_numeric, errors="coerce")
+    out.index = index
+
+    return out
+
+
+def tv_fetch_minutes(symbol, shift):
+    """1-minute candles for one stock from TradingView: (rows, info) like
+    fetch_interval. rows is a cleaned DataFrame (start-labelled minutes), or
+    None with info "NO_DATA: <reason>" or an error message."""
+
+    try:
+        bars, note = None, ""
+
+        for candidate in tv_symbol_candidates(symbol):
+            try:
+                bars = tv_fetch_bars(candidate, TV_BARS, "1")
+                break
+            except NseNoData as e:
+                note = str(e)
+
+        if bars is None:
+            raise NseNoData(note or f"TradingView has no data for {symbol}")
+
+        frame = tv_bars_to_frame(bars, shift)
+
+        if frame is None:
+            raise NseNoData(f"TradingView bars had no usable times | e.g. {symbol}")
+
+        cleaned = clean_yahoo_data(frame)
+
+        if cleaned is None or cleaned.empty:
+            index = frame.index
+            minute_of_day = index.hour * 60 + index.minute
+            outside = int(((minute_of_day < 555) | (minute_of_day > 929)).sum())
+            zero_volume = int((frame["Volume"].fillna(0) <= 0).sum())
+            raise RuntimeError(
+                f"all TradingView candles were dropped by cleaning | e.g. {symbol}: "
+                f"{len(frame)} candles, {zero_volume} with zero volume, "
+                f"{outside} outside 09:15-15:29, first start "
+                f"{index[0].strftime('%Y-%m-%d %H:%M')}, last start "
+                f"{index[-1].strftime('%Y-%m-%d %H:%M')}"
+            )
+
+        return cleaned, "OK"
+
+    except NseNoData as e:
+        return None, f"NO_DATA: {e}"[:300]
+
+    except Exception as e:
+        return None, f"{type(e).__name__}: {e}"[:300]
+
+
+def primary_fetch_minutes(symbol, shift):
+    """1-minute candles from the primary source (DATA_SOURCE). The nse_*
+    names elsewhere (state, cache, rate-limit handling) serve whichever
+    primary source is selected."""
+
+    if DATA_SOURCE == "TRADINGVIEW":
+        return tv_fetch_minutes(symbol, shift)
+
+    return nse_fetch_minutes(symbol, shift)
 
 
 # =============================================================================
@@ -1566,12 +1900,12 @@ def fetch_all_timeframes(symbol, fetcher):
 
 
 def fetch_symbol_rows(symbol):
-    """Returns (rows_by_timeframe, info, source): native 5m and 1m candles.
-    Both timeframes always come from the SAME source. With DATA_SOURCE "NSE"
-    the stock falls back to Yahoo as a whole if NSE fails and
-    FALLBACK_TO_YAHOO is True. If rows_by_timeframe is None, info is "NO_DATA"
-    or an error message. Otherwise info is "OK" or "FALLBACK" (a longer Yahoo
-    window was needed)."""
+    """Returns (rows_by_timeframe, info, source): 5m and 1m candles. Both
+    timeframes always come from the SAME source. The stock is read from the
+    primary source (DATA_SOURCE) and falls back to Yahoo as a whole if that
+    fails and FALLBACK_TO_YAHOO is True. If rows_by_timeframe is None, info is
+    "NO_DATA" or an error message. Otherwise info is "OK" or "FALLBACK" (a longer
+    Yahoo window was needed)."""
 
     # Small random delay so the workers do not hit the source in one burst.
     time.sleep(random.uniform(0.05, 0.25))
@@ -1580,37 +1914,38 @@ def fetch_symbol_rows(symbol):
         rows, info = fetch_all_timeframes(symbol, fetch_interval)
         return rows, info, "Yahoo"
 
+    label = primary_label()
     nse_wait_if_paused()
 
     if _nse_calibration["ok"] is False:
-        nse_info = "NSE skipped: its candle times could not be verified against Yahoo"
+        nse_info = f"{label} skipped: its candle times could not be verified against Yahoo"
     else:
-        nse_info = "NSE skipped (given up for the rest of this run after repeated refusals)"
+        nse_info = f"{label} skipped (given up for the rest of this run after repeated refusals)"
 
     if not _nse_state["blocked"]:
         rows, nse_info = fetch_all_timeframes(symbol, fetch_interval_nse)
 
         if rows is not None:
             nse_record("ok")
-            return rows, nse_info, "NSE"
+            return rows, nse_info, label
 
         nse_record("soft" if is_no_data(nse_info) else "hard")
 
     nse_note_failure(nse_info)
 
-    # A temporary NSE failure (not "no data"): this stock is tried on NSE again
-    # after the scan, so it does not stay on the Yahoo fallback for good.
+    # A temporary failure (not "no data"): this stock is tried on the primary
+    # source again after the scan, so it does not stay on the Yahoo fallback.
     if not is_no_data(nse_info) and _nse_calibration["ok"] is not False:
         with _nse_lock:
             _nse_transient.add(symbol)
 
-    # NSE lists it under another series (SME, trade-to-trade...): not a stock
-    # the strategy covers, so there is nothing to fall back to.
+    # Listed under another series (SME, trade-to-trade...): not a stock the
+    # strategy covers, so there is nothing to fall back to.
     if str(nse_info).startswith("NO_DATA: not an EQ-series"):
-        return None, "NO_DATA", "NSE"
+        return None, "NO_DATA", label
 
     if not FALLBACK_TO_YAHOO:
-        return None, ("NO_DATA" if is_no_data(nse_info) else nse_info), "NSE"
+        return None, ("NO_DATA" if is_no_data(nse_info) else nse_info), label
 
     rows, yahoo_info = fetch_all_timeframes(symbol, fetch_interval)
 
@@ -1618,9 +1953,9 @@ def fetch_symbol_rows(symbol):
         return rows, yahoo_info, "Yahoo (fallback)"
 
     if is_no_data(nse_info) and is_no_data(yahoo_info):
-        return None, "NO_DATA", "NSE"
+        return None, "NO_DATA", label
 
-    return None, f"NSE: {nse_info} | Yahoo: {yahoo_info}"[:300], "NSE"
+    return None, f"{label}: {nse_info} | Yahoo: {yahoo_info}"[:300], label
 
 
 # =============================================================================
@@ -2383,7 +2718,7 @@ def build_funnel(results):
     Returns [(label, count), ...]; each line counts only the stocks that
     survived every line above it. It separates data problems (download, missing
     candles, conflicts) from the strategy simply being strict. The last lines
-    show the signals actually shown: a pass on NSE or on Yahoo."""
+    show the signals actually shown: a pass on the primary source or on Yahoo."""
 
     got_data = [r for r in results if r.get("status") not in ("NO_DATA", "ERROR")]
     evaluated = [r for r in results if "cond_5m" in r]
@@ -2422,7 +2757,7 @@ def build_funnel(results):
         ("Morning 09:15 candles (5m, 3m, 1m) share that trend", len(step_7)),
         ("No 5m/1m data conflict", len(step_8)),
         ("Same session as most stocks (pass on the primary source)", len(step_9)),
-        ("SIGNALS SHOWN (pass on NSE or on Yahoo)", len(signals)),
+        (f"SIGNALS SHOWN (pass on {primary_label()} or on Yahoo)", len(signals)),
         ("   of which found only by the other source", len(other_only)),
     ]
 
@@ -2458,54 +2793,57 @@ def source_health(results):
         if r.get("source") and r.get("status") not in ("NO_DATA", "ERROR")
     )
 
-    nse = counts.get("NSE", 0)
+    label = primary_label()
+    nse = counts.get(label, 0)
     fallback = counts.get("Yahoo (fallback)", 0)
     yahoo = counts.get("Yahoo", 0)
 
-    if DATA_SOURCE != "NSE":
+    if DATA_SOURCE == "YAHOO":
         return [f"Data source is Yahoo (DATA_SOURCE = YAHOO): {yahoo} stocks."], "ok"
 
-    lines = [f"NSE served {nse} stocks; Yahoo fallback served {fallback} stocks."]
+    lines = [f"{label} served {nse} stocks; Yahoo fallback served {fallback} stocks."]
 
     if _nse_calibration["detail"]:
         lines.append(_nse_calibration["detail"])
 
     if _nse_state["pauses"]:
         lines.append(
-            f"NSE rate-limited this scan {_nse_state['pauses']} time(s); the scanner "
-            f"paused NSE for {_nse_state['paused_seconds']:.0f}s in total and carried on."
+            f"{label} rate-limited this scan {_nse_state['pauses']} time(s); the scanner "
+            f"paused {label} for {_nse_state['paused_seconds']:.0f}s in total and carried on."
         )
 
     if _nse_state["blocked"] and _nse_calibration["ok"] is not False:
-        lines.append("NSE was given up for the rest of the run after repeated refusals.")
+        lines.append(f"{label} was given up for the rest of the run after repeated refusals.")
+
+    debug_command = "--tv-debug" if DATA_SOURCE == "TRADINGVIEW" else "--nse-debug"
 
     if nse == 0 and fallback > 0:
         level = "bad"
         lines.append(
-            "NSE served nothing: every stock came from Yahoo. The reasons are "
-            "below; run  python scanner.py --nse-debug RELIANCE  to see NSE's raw replies."
+            f"{label} served nothing: every stock came from Yahoo. The reasons are "
+            f"below; run  python scanner.py {debug_command} RELIANCE  to see what {label} sends back."
         )
     elif nse == 0:
         level = "bad"
-        lines.append("NSE served no stocks and neither did the fallback.")
+        lines.append(f"{label} served no stocks and neither did the fallback.")
     elif fallback == 0:
         level = "ok"
-        lines.append("NSE is working: no stock needed the Yahoo fallback.")
+        lines.append(f"{label} is working: no stock needed the Yahoo fallback.")
     elif fallback <= 0.10 * (nse + fallback):
         level = "ok"
         lines.append(
-            "NSE is working: only a few stocks (thin or unlisted symbols) fell back."
+            f"{label} is working: only a few stocks (thin or unlisted symbols) fell back."
         )
     else:
         level = "partial"
-        lines.append("NSE is only partly working: many stocks fell back to Yahoo.")
+        lines.append(f"{label} is only partly working: many stocks fell back to Yahoo.")
 
     with _nse_lock:
         reasons = _nse_errors.most_common(5)
         examples = dict(_nse_examples)
 
     if reasons:
-        lines.append("Why NSE failed for those stocks (top reasons):")
+        lines.append("Why the primary source failed for those stocks (top reasons):")
 
         for message, count in reasons:
             lines.append(f"{count} x {message}")
@@ -2903,7 +3241,7 @@ def generate_html_report(results, elapsed, universe_source, run_note=None):
 <div class="subtitle">
 Generated: {esc(scan_time)}<br>
 Universe: {esc(universe_source)}<br>
-Data: {esc(source_text)} - 5-minute and 1-minute candles (3-minute built from 1-minute)<br>
+Data: {esc(source_text)} - 5-minute, 3-minute and 1-minute candles on the 09:15 grid<br>
 Rules: {esc(STRATEGY_RULES)}<br>
 Previous day: {esc(fmt_day(previous_day))}<br>
 Entry: {esc(fmt_day(entry_day))} at the 09:15 open &nbsp;|&nbsp; Exit: {esc(EXIT_TIME_LABEL)}
@@ -2960,17 +3298,18 @@ The 5m timeframe has no opposite-trend rule: its last two candles may have the s
 opposite trends.<br>
 Trend = candle colour (close vs open); a flat candle has no trend, so it is never
 the same as another.<br>
-<b>Data sources:</b> every stock is scanned on NSE; every stock that does not pass on NSE is
-also scanned on Yahoo for the same session. A stock that passes on either source is shown as
-a signal, tagged with the source(s) it passed on.<br>
+<b>Data sources:</b> every stock is scanned on {esc(primary_label())}; every stock that does not
+pass there is also scanned on Yahoo for the same session. A stock that passes on either source
+is shown as a signal, tagged with the source(s) it passed on.<br>
 {esc(direction_text)}<br>
 <b>Entry:</b> the 09:15 open on entry day. <b>Exit:</b> {esc(EXIT_TIME_LABEL)}.<br><br>
-<b>Data notes:</b> 5-minute and 1-minute candles come straight from the data source's own
-feeds (NSE's charting feed, or Yahoo as a fallback - shown per stock in the Data column);
-there is no 3-minute feed, so 3-minute candles are built from the 1-minute candles on a
-09:15 grid (open = first, close = last, volume = sum). Prices are rounded to 2 decimals;
-zero-volume and corrupt candles are dropped and count as missing, which can only block a
-match.{zero_note} DATA CONFLICT means a native 5m candle's trend, or which 5m candle has more
+<b>Data notes:</b> candles come from the primary source ({esc(primary_label())} - the DATA_SOURCE
+setting) with Yahoo as the fallback and second source; the source of each stock is shown in
+the Data column. The primary source's 1-minute candles are downloaded and the 5-minute and
+3-minute candles are built from them on a 09:15 grid (open = first, close = last, volume =
+sum); a stock read from Yahoo uses Yahoo's own 5-minute feed. Prices are rounded to 2
+decimals; zero-volume and corrupt candles are dropped and count as missing, which can only
+block a match.{zero_note} DATA CONFLICT means a native 5m candle's trend, or which 5m candle has more
 volume, disagrees with the same candles rebuilt from the 1m candles inside them, so the
 symbol is blocked rather than trusted. INCOMPLETE means no completed session (or none of
 the nine candles) came back. STALE means the previous day differs from most other symbols.
@@ -3089,7 +3428,7 @@ def compare_sources(symbols):
         symbol = symbol.strip().upper()
         evaluated = {}
 
-        for label, fetcher in (("NSE", fetch_interval_nse), ("Yahoo", fetch_interval)):
+        for label, fetcher in ((primary_label(), fetch_interval_nse), ("Yahoo", fetch_interval)):
             rows_by_tf, errors = {}, []
 
             for tf in TIMEFRAMES:
@@ -3108,7 +3447,7 @@ def compare_sources(symbols):
         print("=" * 78)
         print(symbol)
 
-        for label in ("NSE", "Yahoo"):
+        for label in (primary_label(), "Yahoo"):
             result, errors = evaluated[label]
 
             if result is None:
@@ -3117,12 +3456,12 @@ def compare_sources(symbols):
                 print(f"  {label:<6}: session {result.get('previous_day')}  "
                       f"status {result.get('status')}")
 
-        nse, yahoo = evaluated["NSE"][0], evaluated["Yahoo"][0]
+        nse, yahoo = evaluated[primary_label()][0], evaluated["Yahoo"][0]
 
         if nse is None or yahoo is None or "candles" not in nse or "candles" not in yahoo:
             continue
 
-        print(f"  {'candle':<10} {'NSE open':>9} {'close':>9} {'volume':>10}   "
+        print(f"  {'candle':<10} {'1st open':>9} {'close':>9} {'volume':>10}   "
               f"{'Yahoo open':>10} {'close':>9} {'volume':>10}   verdict")
 
         for key in SLOT_KEYS:
@@ -3306,7 +3645,7 @@ def scan_one_symbol_nse(symbol):
         result = evaluate_rows(rows)
         result["symbol"] = symbol
         result["data_status"] = info
-        result["source"] = "NSE"
+        result["source"] = primary_label()
 
         return result
 
@@ -3343,7 +3682,7 @@ def retry_failed(results):
         print("=" * 70)
         print(
             f"RETRY {round_number}/{RETRY_ROUNDS}: {len(errored)} stocks errored, "
-            f"{len(fallbacks)} stocks are on the Yahoo fallback only because NSE "
+            f"{len(fallbacks)} stocks are on the Yahoo fallback only because {primary_label()} "
             f"failed. Waiting {wait}s, then trying again with {RETRY_WORKERS} workers."
         )
         print("=" * 70)
@@ -3375,24 +3714,24 @@ def retry_failed(results):
 
                 if was_error and result.get("status") != "ERROR":
                     recovered += 1
-                elif not was_error and result.get("source") == "NSE":
+                elif not was_error and result.get("source") == primary_label():
                     moved += 1
                     with _nse_lock:
                         _nse_transient.discard(sym)
 
                 by_symbol[sym] = result
 
-        print(f"Retry {round_number}: {recovered} stocks recovered, {moved} moved back to NSE.")
+        print(f"Retry {round_number}: {recovered} stocks recovered, {moved} moved back to {primary_label()}.")
 
     return sorted(by_symbol.values(), key=lambda r: r.get("symbol", ""))
 
 
 def other_source_name(result):
-    return "NSE" if str(result.get("source", "")).startswith("Yahoo") else "Yahoo"
+    return primary_label() if str(result.get("source", "")).startswith("Yahoo") else "Yahoo"
 
 
 def source_name(result):
-    return "Yahoo" if str(result.get("source", "")).startswith("Yahoo") else "NSE"
+    return "Yahoo" if str(result.get("source", "")).startswith("Yahoo") else primary_label()
 
 
 def check_other_source(result, session_day):
@@ -3403,12 +3742,12 @@ def check_other_source(result, session_day):
 
     time.sleep(random.uniform(0.05, 0.25))
 
-    if other == "NSE":
+    if other != "Yahoo":
         if _nse_calibration["ok"] is not True:
-            return {"source": other, "checked": False, "note": "NSE candle times were not verified"}
+            return {"source": other, "checked": False, "note": f"{other} candle times were not verified"}
 
         if _nse_state["blocked"]:
-            return {"source": other, "checked": False, "note": "NSE is blocked in this run"}
+            return {"source": other, "checked": False, "note": f"{other} is blocked in this run"}
 
         fetcher = fetch_interval_nse
     else:
@@ -3543,7 +3882,7 @@ def signal_info(result):
 
 
 def final_signals(results):
-    """Every signal to show: a pass on NSE or a pass on Yahoo."""
+    """Every signal to show: a pass on the primary source or a pass on Yahoo."""
 
     signals = [x for x in (signal_info(r) for r in results) if x]
     signals.sort(key=lambda x: (x["direction"] != "LONG", x["symbol"]))
@@ -3553,7 +3892,7 @@ def final_signals(results):
 
 def confirm_candidates(results, session_day):
     """Scan, on the OTHER data source and for the market's session, every stock
-    that did not pass on NSE (and confirm every signal). Stores the outcome in
+    that did not pass on the primary source (and confirm every signal). Stores the outcome in
     result["confirm"]."""
 
     if not session_day:
@@ -3564,7 +3903,7 @@ def confirm_candidates(results, session_day):
     chosen = [
         r["symbol"] for r in results
         if r.get("status") not in ("ERROR", "NO_DATA")
-        and (source_name(r) == "NSE" or r.get("status") == "PASS")
+        and (source_name(r) != "Yahoo" or r.get("status") == "PASS")
     ]
 
     if not chosen:
@@ -3574,7 +3913,7 @@ def confirm_candidates(results, session_day):
     print("=" * 70)
     print(
         f"SECOND SOURCE: scanning {len(chosen)} stocks on the other data source "
-        f"(every stock that did not pass on NSE, plus every signal)..."
+        f"(every stock that did not pass on {primary_label()}, plus every signal)..."
     )
     print("=" * 70)
 
@@ -3654,7 +3993,7 @@ def signal_tag(signal):
     if signal.get("note"):
         kind, text = "warn", "sources disagree on direction"
     elif len(sources) == 2:
-        kind, text = "ok", "NSE + Yahoo"
+        kind, text = "ok", f"{primary_label()} + Yahoo"
     else:
         kind, text = "warn", f"{sources[0]} only"
 
@@ -3692,7 +4031,7 @@ def cross_html(results):
 
     return (
         '<div class="match-box"><h2>Both data sources</h2>'
-        '<p>Every stock that did not pass on NSE was also scanned on Yahoo for the same '
+        f'<p>Every stock that did not pass on {esc(primary_label())} was also scanned on Yahoo for the same '
         'session, and every signal was confirmed on the other source. A pass on either '
         f'source is shown as a signal. {esc(summary)}</p>{table}</div>'
     )
@@ -3745,12 +4084,123 @@ def unscanned_html(results):
     return '<div class="warn">' + "<br>".join(esc(line) for line in lines) + "</div>"
 
 
+# =============================================================================
+# TRADINGVIEW DEBUG   (python scanner.py --tv-debug RELIANCE)
+# =============================================================================
+
+def tv_debug(symbols):
+    """Show what TradingView sends for one stock, whether its own 5-minute and
+    3-minute candles equal the ones built from its 1-minute candles, and how its
+    candle minutes line up with Yahoo's. Paste the output when asking for help."""
+
+    symbol = (symbols[0] if symbols else "RELIANCE").strip().upper()
+
+    print("=" * 78)
+    print(f"TRADINGVIEW DEBUG for {symbol}")
+    print("=" * 78)
+
+    if websocket is None:
+        print("The websocket-client package is not installed (pip install websocket-client).")
+        return
+
+    chosen, bars = None, None
+
+    for candidate in tv_symbol_candidates(symbol):
+        print(f"1) {candidate}: requesting {TV_BARS} 1-minute bars ...")
+
+        try:
+            bars = tv_fetch_bars(candidate, TV_BARS, "1")
+            chosen = candidate
+            break
+        except NseNoData as e:
+            print("   no data:", e)
+        except Exception as e:
+            print(f"   failed: {type(e).__name__}: {e}")
+            return
+
+    if chosen is None:
+        return
+
+    times = [pd.to_datetime(b[0], unit="s", utc=True).tz_convert("Asia/Kolkata") for b in bars]
+    print(f"   {len(bars)} bars from {times[0]:%Y-%m-%d %H:%M} to {times[-1]:%Y-%m-%d %H:%M} IST")
+
+    last_day = times[-1].date()
+    day = [(t, b) for t, b in zip(times, bars) if t.date() == last_day]
+
+    def show(items):
+        return ", ".join(
+            f"{t:%H:%M} o{b[1]} c{b[4]} v{b[5] if len(b) > 5 else '-'}" for t, b in items
+        )
+
+    print(f"   last day {last_day}: {len(day)} bars")
+    print("   first 3:", show(day[:3]))
+    print("   last 3 :", show(day[-3:]))
+
+    rows = clean_yahoo_data(tv_bars_to_frame(bars, 0))
+
+    print("2) TradingView's own candles vs the ones built from its 1-minute candles:")
+
+    for interval, minutes in (("5", 5), ("3", 3)):
+        try:
+            native = tv_fetch_bars(chosen, 800, interval)
+        except Exception as e:
+            print(f"   {minutes}m: could not download ({type(e).__name__}: {e})")
+            continue
+
+        native_rows = clean_yahoo_data(tv_bars_to_frame(native, 0))
+        derived = resample_from_1m(rows, minutes)
+
+        mine = {
+            (d, int(h)): (o, c, v)
+            for d, h, o, c, v in zip(derived["date"], derived["hm"], derived["open"], derived["close"], derived["volume"])
+        }
+        same = total = 0
+        examples = []
+
+        for d, h, o, c, v in zip(native_rows["date"], native_rows["hm"], native_rows["open"], native_rows["close"], native_rows["volume"]):
+            other = mine.get((d, int(h)))
+
+            if other is None:
+                continue
+
+            total += 1
+
+            if (
+                abs(other[0] - o) <= 0.011 and abs(other[1] - c) <= 0.011
+                and abs(other[2] - v) <= max(1.0, 0.02 * max(v, other[2]))
+            ):
+                same += 1
+            elif len(examples) < 3:
+                examples.append(f"{d} {int(h):04d}: native o{o} c{c} v{v:.0f} vs built o{other[0]} c{other[1]} v{other[2]:.0f}")
+
+        share = f"{same / total:.0%}" if total else "n/a"
+        print(f"   {minutes}m: {same}/{total} candles identical ({share})")
+
+        for line in examples:
+            print("      differs:", line)
+
+    print("3) alignment of TradingView's 1-minute candles with Yahoo's:")
+
+    try:
+        result = nse_alignment(symbol)
+        print(f"   compared {result['candles']} candles on {result['days']}")
+        print(f"   best correction {result['shift']:+d} min, {result['share']:.0%} of minutes match "
+              f"(runner-up {result['runner_up']:.0%}); top 4: {result['top']}")
+        print("   verdict:", "VERIFIED" if nse_alignment_ok(result) else "NOT VERIFIED")
+    except Exception as e:
+        print(f"   could not compare: {type(e).__name__}: {e}")
+
+
 def main():
 
     if len(sys.argv) > 1 and sys.argv[1] == "--check":
         load_nse_token_cache()
         nse_preflight()
         audit_symbols(sys.argv[2:])
+        return
+
+    if len(sys.argv) > 1 and sys.argv[1] == "--tv-debug":
+        tv_debug(sys.argv[2:])
         return
 
     if len(sys.argv) > 1 and sys.argv[1] == "--nse-debug":
@@ -3769,19 +4219,27 @@ def main():
     print("NSE EOD MOMENTUM SCANNER")
     print("=" * 70)
     print()
-    if DATA_SOURCE not in ("NSE", "YAHOO"):
-        print('ERROR: DATA_SOURCE must be "NSE" or "YAHOO"')
+    if DATA_SOURCE not in ("TRADINGVIEW", "NSE", "YAHOO"):
+        print('ERROR: DATA_SOURCE must be "TRADINGVIEW", "NSE" or "YAHOO"')
+        sys.exit(1)
+
+    if DATA_SOURCE == "TRADINGVIEW" and websocket is None:
+        print()
+        print("ERROR: the websocket-client package is not installed, but TradingView needs it.")
+        print("Install with: pip install websocket-client")
+        print('Or set DATA_SOURCE = "NSE" (or "YAHOO") in the scanner.')
+        print()
         sys.exit(1)
 
     if (DATA_SOURCE == "YAHOO" or FALLBACK_TO_YAHOO) and yf is None:
         print()
         print("ERROR: yfinance is not installed, but it is needed for Yahoo / the Yahoo fallback.")
         print("Install with: pip install yfinance curl_cffi")
-        print('Or set DATA_SOURCE = "NSE" and FALLBACK_TO_YAHOO = False in the scanner.')
+        print('Or set FALLBACK_TO_YAHOO = False (and DATA_SOURCE to "TRADINGVIEW" or "NSE") in the scanner.')
         print()
         sys.exit(1)
 
-    print("Data source:", DATA_SOURCE, "(Yahoo fallback on)" if FALLBACK_TO_YAHOO and DATA_SOURCE == "NSE" else "")
+    print("Data source:", DATA_SOURCE, "(Yahoo fallback on)" if FALLBACK_TO_YAHOO and DATA_SOURCE != "YAHOO" else "")
 
     if yf is not None:
         print("yfinance version:", getattr(yf, "__version__", "unknown"))
@@ -3833,7 +4291,7 @@ def main():
     print()
 
     if matches:
-        print("MATCHES (a pass on NSE or on Yahoo):")
+        print(f"MATCHES (a pass on {primary_label()} or on Yahoo):")
         for sig in matches:
             print(
                 f"  {sig['symbol']:<15}"
