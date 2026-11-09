@@ -21,9 +21,11 @@ concurrency:
 jobs:
   scan:
     runs-on: ubuntu-latest
-    # A full ~2,300-stock scan can take a while because NSE requests are spaced
-    # out and pause when NSE rate-limits. This stops a stuck run from hanging.
-    timeout-minutes: 120
+    # A full ~2,300-stock scan takes a while: every stock is read on the primary
+    # source (TradingView by default, a few connections at a time) and every
+    # stock that does not pass is then also scanned on Yahoo. This stops a stuck
+    # run from hanging.
+    timeout-minutes: 180
 
     steps:
 
@@ -38,11 +40,11 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install "yfinance==1.7.0" pandas requests curl_cffi
+          python -m pip install "yfinance==1.7.0" pandas requests curl_cffi websocket-client
 
-      # The scanner saves each stock's NSE chart token in nse_token_cache.json so
-      # every symbol is looked up only once. GitHub runners start empty, so the
-      # file is restored from the previous run's cache and saved again at the end.
+      # Only used when DATA_SOURCE is "NSE": the scanner saves each stock's NSE
+      # chart token in nse_token_cache.json so every symbol is looked up once.
+      # (With TradingView, the default, the file does not exist and this is a no-op.)
       - name: Restore NSE token cache
         uses: actions/cache/restore@v4
         with:
