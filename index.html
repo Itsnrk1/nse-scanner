@@ -85,7 +85,7 @@ small { color: #777; font-size: 10px; }
 <h1>NSE Momentum Scanner</h1>
 
 <div class="subtitle">
-Generated: 2026-11-11 19:40:49 IST<br>
+Generated: 2026-11-11 23:58:43 IST<br>
 Universe: NSE official equity list (all EQ)<br>
 Data: TradingView: 2397 stocks - 5-minute, 3-minute and 1-minute candles on the 09:15 grid<br>
 Rules: 5m volume | 3m volume + same trend | 1m volume + same trend | aligned second-last trend | morning (09:15) trend<br>
@@ -93,18 +93,18 @@ Previous day: Wed 11 Nov 2026<br>
 Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 </div>
 
-<div class="note">The market has closed, so today&#x27;s session (Wed 11 Nov 2026) is used as the latest completed session. Entry is the next trading day, Thu 12 Nov 2026.</div><div class="note">TradingView served 2397 stocks; Yahoo fallback served 0 stocks.<br>TradingView candle times verified against Yahoo (RELIANCE, 720 candles): correction +0 min, 100% of minutes match<br>TradingView is working: no stock needed the Yahoo fallback.<br>Why the primary source failed for those stocks (top reasons):<br>6 x RuntimeError: TradingView did not finish within 40s (still waiting for [&#x27;1m&#x27;, &#x27;3m&#x27;, &#x27;5m&#x27;])<br>3 x RuntimeError: TradingView did not finish within 40s (still waiting for [&#x27;1m&#x27;])<br>2 x RuntimeError: TradingView did not finish within 40s (still waiting for [&#x27;5m&#x27;])<br>1 x RuntimeError: TradingView did not finish within 40s (still waiting for [&#x27;1m&#x27;, &#x27;5m&#x27;])</div><div class="warn">3 stocks were read on a different session than most stocks: THACKER, THAKDEV, WHBRADY</div>
+<div class="note">The market has closed, so today&#x27;s session (Wed 11 Nov 2026) is used as the latest completed session. Entry is the next trading day, Thu 12 Nov 2026.</div><div class="note">TradingView served 2397 stocks; Yahoo fallback served 0 stocks.<br>TradingView candle times verified against Yahoo (RELIANCE, 720 candles): correction +0 min, 100% of minutes match<br>TradingView is working: no stock needed the Yahoo fallback.<br>Why the primary source failed for those stocks (top reasons):<br>1 x RuntimeError: TradingView closed the connection</div><div class="warn">3 stocks were read on a different session than most stocks: THACKER, THAKDEV, WHBRADY</div>
 
-<div class="stats"><div class="stat"><b>2397</b>Stocks scanned</div><div class="stat"><b>2</b>Matches</div><div class="stat"><b>2</b>Long</div><div class="stat"><b>0</b>Short</div><div class="stat"><b>2348</b>No match</div><div class="stat"><b>0</b>Data conflict</div><div class="stat"><b>44</b>Incomplete</div><div class="stat"><b>3</b>Stale</div><div class="stat"><b>0</b>No data</div><div class="stat"><b>0</b>Errors</div><div class="stat"><b>1438.9s</b>Scan time</div></div>
+<div class="stats"><div class="stat"><b>2397</b>Stocks scanned</div><div class="stat"><b>2</b>Matches</div><div class="stat"><b>2</b>Long</div><div class="stat"><b>0</b>Short</div><div class="stat"><b>2348</b>No match</div><div class="stat"><b>0</b>Data conflict</div><div class="stat"><b>44</b>Incomplete</div><div class="stat"><b>3</b>Stale</div><div class="stat"><b>0</b>No data</div><div class="stat"><b>0</b>Errors</div><div class="stat"><b>1230.8s</b>Scan time</div></div>
 
 <div class="match-box"><h2>Where stocks dropped out</h2><div class="table-wrap"><table class="funnel"><tbody><tr><td>Stocks scanned</td><td>2397</td><td class="lost"></td></tr><tr><td>Data downloaded (no error / no-data)</td><td>2397</td><td class="lost"></td></tr><tr><td>A completed session found</td><td>2353</td><td class="lost">-44</td></tr><tr><td>All nine candles present</td><td>1566</td><td class="lost">-787</td></tr><tr><td>5m: 15:20 volume &gt; 15:25 volume</td><td>399</td><td class="lost">-1167</td></tr><tr><td>3m: 15:24 volume &gt; 15:27 volume</td><td>253</td><td class="lost">-146</td></tr><tr><td>3m: 15:24 and 15:27 candles same trend</td><td>95</td><td class="lost">-158</td></tr><tr><td>1m: 15:28 volume &gt; 15:29 volume</td><td>52</td><td class="lost">-43</td></tr><tr><td>1m: 15:28 and 15:29 candles same trend</td><td>18</td><td class="lost">-34</td></tr><tr><td>Same trend: 5m 15:20 = 3m 15:24 = 1m 15:28</td><td>4</td><td class="lost">-14</td></tr><tr><td>Morning 09:15 candles (5m, 3m, 1m) share that trend</td><td>2</td><td class="lost">-2</td></tr><tr><td>No 5m/1m data conflict</td><td>2</td><td class="lost"></td></tr><tr><td>Same session as most stocks (pass on the primary source)</td><td>2</td><td class="lost"></td></tr><tr><td>SIGNALS SHOWN (pass on TradingView or on Yahoo)</td><td>2</td><td class="lost"></td></tr><tr><td>   of which found only by the other source</td><td>0</td><td class="lost">-2</td></tr></tbody></table></div><h2 style="margin-top:22px">Stocks missing each candle (of 2353 with a session)</h2><div class="table-wrap"><table class="funnel"><tbody><tr><td>5m 09:15</td><td>117</td></tr><tr><td>3m 09:15</td><td>134</td></tr><tr><td>1m 09:15</td><td>172</td></tr><tr><td>5m 15:20</td><td>426</td></tr><tr><td>5m 15:25</td><td>300</td></tr><tr><td>3m 15:24</td><td>514</td></tr><tr><td>3m 15:27</td><td>331</td></tr><tr><td>1m 15:28</td><td>539</td></tr><tr><td>1m 15:29</td><td>450</td></tr><tr><td>Missing ONLY the last 3m/1m candle (MISSING_LAST_CANDLE_IS_ZERO_VOLUME = False)</td><td>0</td></tr></tbody></table></div><h2 style="margin-top:22px">Closest misses (fail exactly one condition)</h2><p class="none">Not signals: each of these passed every condition except the one in brackets.</p><p>AVALON [morning candles], AWL [5m volume], CHENNPETRO [5m volume], CRAMC [1m volume], DMCC [morning candles], GLOBUSSPR [5m volume], KANOHAR [1m volume], MRF [5m volume], STOVEKRAFT [3m volume], TVSSCS [5m volume]</p></div>
 
 <div class="match-box">
 <h2>Matches</h2>
-<div class="matches"><div class="match"><span class="direction long">LONG</span><b>CLEANMAX</b><span class="date">Previous day: 2026-11-11</span><span class="tag warn" title="passes on TradingView; fails on Yahoo: morning 09:15 candles, missing candles: 5m 09:15, 1m 09:15">TradingView only</span></div><div class="match"><span class="direction long">LONG</span><b>SHADOWFAX</b><span class="date">Previous day: 2026-11-11</span><span class="tag warn" title="passes on TradingView; fails on Yahoo: 3m trend (15:24 and 15:27 same), 1m trend (15:28 and 15:29 same)">TradingView only</span></div></div>
+<div class="matches"><div class="match"><span class="direction long">LONG</span><b>CLEANMAX</b><span class="date">Previous day: 2026-11-11</span><span class="tag warn" title="passes on TradingView; fails on Yahoo: morning 09:15 candles, missing candles: 5m 09:15, 1m 09:15">TradingView only</span></div><div class="match"><span class="direction long">LONG</span><b>SHADOWFAX</b><span class="date">Previous day: 2026-11-11</span><span class="tag warn" title="not checked on Yahoo: Too Many Requests. Rate limited. Try after a while.">TradingView only</span></div></div>
 </div>
 
-<div class="match-box"><h2>Both data sources</h2><p>Every stock that did not pass on TradingView was also scanned on Yahoo for the same session, and every signal was confirmed on the other source. A pass on either source is shown as a signal. 0 signal(s) pass on both sources; 2 pass on one source only (the other fails); 0 were found only by the second source.</p><div class="table-wrap"><table><thead><tr><th>Symbol</th><th>Result</th><th>Detail</th></tr></thead><tbody><tr><td class="symbol">CLEANMAX</td><td>ONE SOURCE ONLY</td><td>passes on TradingView; fails on Yahoo: morning 09:15 candles, missing candles: 5m 09:15, 1m 09:15</td></tr><tr><td class="symbol">SHADOWFAX</td><td>ONE SOURCE ONLY</td><td>passes on TradingView; fails on Yahoo: 3m trend (15:24 and 15:27 same), 1m trend (15:28 and 15:29 same)</td></tr></tbody></table></div></div>
+<div class="match-box"><h2>Both data sources</h2><p>Every stock that did not pass on TradingView was also scanned on Yahoo for the same session, and every signal was confirmed on the other source. A pass on either source is shown as a signal. 0 signal(s) pass on both sources; 1 pass on one source only (the other fails); 0 were found only by the second source.</p><div class="table-wrap"><table><thead><tr><th>Symbol</th><th>Result</th><th>Detail</th></tr></thead><tbody><tr><td class="symbol">CLEANMAX</td><td>ONE SOURCE ONLY</td><td>passes on TradingView; fails on Yahoo: morning 09:15 candles, missing candles: 5m 09:15, 1m 09:15</td></tr><tr><td class="symbol">SHADOWFAX</td><td>NOT CHECKED</td><td>not checked on Yahoo: Too Many Requests. Rate limited. Try after a while.</td></tr></tbody></table></div></div>
 
 <div class="table-wrap">
 <table>
@@ -147,7 +147,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge pass">PASS</span><br><small>5m 15:20 Up / 3m 15:24 Up / 1m 15:28 Up</small></td>
 <td><span class="badge pass">PASS</span><br><small>5m 09:15 Up (282.00&rarr;286.35) vol 207,302<br>3m 09:15 Up (282.00&rarr;286.75) vol 188,816<br>1m 09:15 Up (282.00&rarr;287.00) vol 105,728</small></td>
 <td class="pass">PASS</td>
-<td>OK (TradingView)<br><small>Yahoo check: fails: 3m trend (15:24 and 15:27 same), 1m trend (15:28 and 15:29 same)</small></td>
+<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
 </tr>
 
 <tr>
@@ -1733,7 +1733,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Flat / 3m 15:24 Flat / 1m 15:28 Flat</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 missing<br>3m 09:15 missing<br>1m 09:15 missing</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>missing: 5m 09:15, 3m 09:15, 1m 09:15</small><br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m volume (15:24 &gt; 15:27), 3m trend (15:24 and 15:27 same), 1m </small></td>
+<td>OK (TradingView)<br><small>missing: 5m 09:15, 3m 09:15, 1m 09:15</small><br><small>Yahoo check: fails: 3m volume (15:24 &gt; 15:27), 3m trend (15:24 and 15:27 same), 1m volume (15:28 &gt; 15:29), 1m </small></td>
 </tr>
 
 <tr>
@@ -4008,7 +4008,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Up / 3m 15:24 Flat / 1m 15:28 Flat</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Flat (217.70&rarr;217.70) vol 38<br>3m 09:15 Flat (217.70&rarr;217.70) vol 38<br>1m 09:15 Flat (217.70&rarr;217.70) vol 38</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m volume (15:24 &gt; 15:27), 3m trend (15:24 and 15:27 same), 1m </small></td>
+<td>OK (TradingView)<br><small>Yahoo check: fails: 3m volume (15:24 &gt; 15:27), 3m trend (15:24 and 15:27 same), 1m volume (15:28 &gt; 15:29), 1m </small></td>
 </tr>
 
 <tr>
@@ -4424,7 +4424,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Flat / 3m 15:24 Down / 1m 15:28 Flat</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Down (102.00&rarr;99.55) vol 1,411<br>3m 09:15 Down (102.00&rarr;99.54) vol 893<br>1m 09:15 Flat (102.00&rarr;102.00) vol 16</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>missing: 1m 15:28</small><br><small>Yahoo check: fails: 3m trend (15:24 and 15:27 same), 1m volume (15:28 &gt; 15:29), 1m trend (15:28 and 15:29 same</small></td>
+<td>OK (TradingView)<br><small>missing: 1m 15:28</small><br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m trend (15:24 and 15:27 same), 1m volume (15:28 &gt; 15:29), 1m </small></td>
 </tr>
 
 <tr>
@@ -5802,7 +5802,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Flat / 3m 15:24 Up / 1m 15:28 Flat</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Up (87.24&rarr;89.00) vol 895<br>3m 09:15 Up (87.24&rarr;90.00) vol 674<br>1m 09:15 Flat (87.24&rarr;87.24) vol 41</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check: fails: 3m trend (15:24 and 15:27 same), 1m volume (15:28 &gt; 15:29), 1m trend (15:28 and 15:29 same</small></td>
+<td>OK (TradingView)<br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m trend (15:24 and 15:27 same), 1m volume (15:28 &gt; 15:29), 1m </small></td>
 </tr>
 
 <tr>
@@ -8038,7 +8038,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Flat / 3m 15:24 Flat / 1m 15:28 Flat</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Flat (50.74&rarr;50.74) vol 11<br>3m 09:15 Flat (50.74&rarr;50.74) vol 10<br>1m 09:15 Flat (50.74&rarr;50.74) vol 10</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>missing: 3m 15:24</small><br><small>Yahoo check: fails: 3m volume (15:24 &gt; 15:27), 3m trend (15:24 and 15:27 same), 1m volume (15:28 &gt; 15:29), 1m </small></td>
+<td>OK (TradingView)<br><small>missing: 3m 15:24</small><br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m volume (15:24 &gt; 15:27), 3m trend (15:24 and 15:27 same), 1m </small></td>
 </tr>
 
 <tr>
@@ -10287,7 +10287,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Up / 3m 15:24 Down / 1m 15:28 Flat</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Up (5.66&rarr;5.67) vol 565<br>3m 09:15 Flat (5.66&rarr;5.66) vol 418<br>1m 09:15 Flat (5.66&rarr;5.66) vol 15</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>missing: 1m 15:29</small><br><small>Yahoo check: fails: 3m trend (15:24 and 15:27 same), 1m volume (15:28 &gt; 15:29), 1m trend (15:28 and 15:29 same</small></td>
+<td>OK (TradingView)<br><small>missing: 1m 15:29</small><br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m trend (15:24 and 15:27 same), 1m volume (15:28 &gt; 15:29), 1m </small></td>
 </tr>
 
 <tr>
@@ -12055,7 +12055,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Flat / 3m 15:24 Flat / 1m 15:28 Flat</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Up (113.04&rarr;113.15) vol 119,559<br>3m 09:15 Down (113.04&rarr;112.94) vol 99,630<br>1m 09:15 Up (113.04&rarr;113.46) vol 21,999</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>missing: 5m 15:20, 5m 15:25, 3m 15:24, 3m 15:27, 1m 15:28, 1m 15:29</small><br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>missing: 5m 15:20, 5m 15:25, 3m 15:24, 3m 15:27, 1m 15:28, 1m 15:29</small><br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m volume (15:24 &gt; 15:27), 3m trend (15:24 and 15:27 same), 1m </small></td>
 </tr>
 
 <tr>
@@ -12068,7 +12068,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Up / 3m 15:24 Flat / 1m 15:28 Flat</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Up (865.00&rarr;866.20) vol 110<br>3m 09:15 Down (865.00&rarr;862.50) vol 95<br>1m 09:15 Up (865.00&rarr;865.25) vol 57</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m volume (15:24 &gt; 15:27), 3m trend (15:24 and 15:27 same), 1m </small></td>
 </tr>
 
 <tr>
@@ -12081,7 +12081,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Up / 3m 15:24 Down / 1m 15:28 Down</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Up (1111.10&rarr;1122.90) vol 956<br>3m 09:15 Up (1111.10&rarr;1120.40) vol 404<br>1m 09:15 Down (1111.10&rarr;1110.00) vol 203</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m trend (15:24 and 15:27 same), 1m trend (15:28 and 15:29 same</small></td>
 </tr>
 
 <tr>
@@ -12094,7 +12094,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Up / 3m 15:24 Up / 1m 15:28 Down</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Up (62.25&rarr;62.67) vol 994,183<br>3m 09:15 Up (62.25&rarr;62.28) vol 637,788<br>1m 09:15 Up (62.25&rarr;62.42) vol 253,500</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m trend (15:24 and 15:27 same), 1m volume (15:28 &gt; 15:29), ali</small></td>
 </tr>
 
 <tr>
@@ -12107,7 +12107,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Down / 3m 15:24 Up / 1m 15:28 Flat</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Flat (176.60&rarr;176.60) vol 26<br>3m 09:15 Down (176.60&rarr;176.55) vol 25<br>1m 09:15 Down (176.60&rarr;176.57) vol 24</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m trend (15:24 and 15:27 same), 1m volume (15:28 &gt; 15:29), 1m </small></td>
 </tr>
 
 <tr>
@@ -12120,7 +12120,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Flat / 3m 15:24 Flat / 1m 15:28 Down</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Up (374.00&rarr;378.55) vol 7,864<br>3m 09:15 Up (374.00&rarr;381.50) vol 7,626<br>1m 09:15 Up (374.00&rarr;376.00) vol 259</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>Yahoo check: fails: 3m volume (15:24 &gt; 15:27), 3m trend (15:24 and 15:27 same), 1m volume (15:28 &gt; 15:29), 1m </small></td>
 </tr>
 
 <tr>
@@ -12133,7 +12133,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Down / 3m 15:24 Flat / 1m 15:28 Down</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Down (62.00&rarr;61.79) vol 338<br>3m 09:15 Down (62.00&rarr;61.93) vol 104<br>1m 09:15 Flat (62.00&rarr;62.00) vol 2</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>missing: 3m 15:24</small><br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>missing: 3m 15:24</small><br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m volume (15:24 &gt; 15:27), 3m trend (15:24 and 15:27 same), 1m </small></td>
 </tr>
 
 <tr>
@@ -12146,7 +12146,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Down / 3m 15:24 Down / 1m 15:28 Up</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Up (447.65&rarr;449.10) vol 499,156<br>3m 09:15 Up (447.65&rarr;448.55) vol 404,325<br>1m 09:15 Up (447.65&rarr;451.25) vol 176,273</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>Yahoo check: fails: 3m trend (15:24 and 15:27 same), alignment (5m 15:20 = 3m 15:24 = 1m 15:28), morning 09:15</small></td>
 </tr>
 
 <tr>
@@ -12159,7 +12159,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge pass">PASS</span><br><small>5m 15:20 Down / 3m 15:24 Down / 1m 15:28 Down</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Up (144.31&rarr;144.77) vol 34,178<br>3m 09:15 Down (144.31&rarr;144.25) vol 19,369<br>1m 09:15 Up (144.31&rarr;144.66) vol 11,297</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m volume (15:24 &gt; 15:27), 3m trend (15:24 and 15:27 same), 1m </small></td>
 </tr>
 
 <tr>
@@ -12172,7 +12172,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Down / 3m 15:24 Down / 1m 15:28 Up</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Up (592.75&rarr;593.00) vol 1,562<br>3m 09:15 Up (592.75&rarr;594.05) vol 660<br>1m 09:15 Down (592.75&rarr;590.05) vol 366</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m trend (15:24 and 15:27 same), 1m volume (15:28 &gt; 15:29), 1m </small></td>
 </tr>
 
 <tr>
@@ -12185,7 +12185,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Down / 3m 15:24 Down / 1m 15:28 Up</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Down (641.10&rarr;638.05) vol 1,549,227<br>3m 09:15 Down (641.10&rarr;637.15) vol 1,358,458<br>1m 09:15 Up (641.10&rarr;642.15) vol 879,113</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m trend (15:24 and 15:27 same), 1m volume (15:28 &gt; 15:29), ali</small></td>
 </tr>
 
 <tr>
@@ -12198,7 +12198,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge pass">PASS</span><br><small>5m 15:20 Up / 3m 15:24 Up / 1m 15:28 Up</small></td>
 <td><span class="badge pass">PASS</span><br><small>5m 09:15 Up (350.35&rarr;350.40) vol 103,933<br>3m 09:15 Up (350.35&rarr;350.65) vol 90,395<br>1m 09:15 Up (350.35&rarr;350.95) vol 2,241</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m volume (15:24 &gt; 15:27)</small></td>
 </tr>
 
 <tr>
@@ -12211,7 +12211,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Flat / 3m 15:24 Up / 1m 15:28 Flat</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Flat (115.30&rarr;115.30) vol 5<br>3m 09:15 Flat (115.30&rarr;115.30) vol 5<br>1m 09:15 Flat (115.30&rarr;115.30) vol 5</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>missing: 1m 15:28</small><br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>missing: 1m 15:28</small><br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m volume (15:24 &gt; 15:27), 3m trend (15:24 and 15:27 same), 1m </small></td>
 </tr>
 
 <tr>
@@ -12224,7 +12224,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Up / 3m 15:24 Flat / 1m 15:28 Up</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 missing<br>3m 09:15 missing<br>1m 09:15 missing</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>missing: 5m 09:15, 3m 09:15, 1m 09:15, 3m 15:24</small><br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>missing: 5m 09:15, 3m 09:15, 1m 09:15, 3m 15:24</small><br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m volume (15:24 &gt; 15:27), 3m trend (15:24 and 15:27 same), 1m </small></td>
 </tr>
 
 <tr>
@@ -12237,7 +12237,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Down / 3m 15:24 Up / 1m 15:28 Up</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Down (198.97&rarr;198.41) vol 15,809<br>3m 09:15 Down (198.97&rarr;197.78) vol 12,256<br>1m 09:15 Down (198.97&rarr;197.31) vol 6,736</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m volume (15:24 &gt; 15:27), alignment (5m 15:20 = 3m 15:24 = 1m </small></td>
 </tr>
 
 <tr>
@@ -12250,7 +12250,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Down / 3m 15:24 Down / 1m 15:28 Up</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Up (1668.30&rarr;1673.00) vol 2,771<br>3m 09:15 Up (1668.30&rarr;1670.00) vol 2,368<br>1m 09:15 Down (1668.30&rarr;1665.40) vol 1,616</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>Yahoo check: fails: 1m volume (15:28 &gt; 15:29), 1m trend (15:28 and 15:29 same), alignment (5m 15:20 = 3m 15:24</small></td>
 </tr>
 
 <tr>
@@ -12263,7 +12263,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Up / 3m 15:24 Down / 1m 15:28 Up</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Up (43.49&rarr;43.50) vol 3,895<br>3m 09:15 Up (43.49&rarr;43.83) vol 3,567<br>1m 09:15 Up (43.49&rarr;43.76) vol 2,720</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>Yahoo check: fails: 3m trend (15:24 and 15:27 same), 1m volume (15:28 &gt; 15:29), 1m trend (15:28 and 15:29 same</small></td>
 </tr>
 
 <tr>
@@ -12276,7 +12276,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Up / 3m 15:24 Up / 1m 15:28 Flat</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Up (1121.00&rarr;1124.50) vol 3,600<br>3m 09:15 Down (1121.00&rarr;1118.30) vol 1,648<br>1m 09:15 Up (1121.00&rarr;1122.00) vol 271</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m volume (15:24 &gt; 15:27), 1m volume (15:28 &gt; 15:29), 1m trend </small></td>
 </tr>
 
 <tr>
@@ -12289,7 +12289,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Flat / 3m 15:24 Flat / 1m 15:28 Flat</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Flat (1025.60&rarr;1025.60) vol 6<br>3m 09:15 Flat (1025.60&rarr;1025.60) vol 6<br>1m 09:15 Flat (1025.60&rarr;1025.60) vol 6</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>missing: 1m 15:28</small><br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>missing: 1m 15:28</small><br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m volume (15:24 &gt; 15:27), 3m trend (15:24 and 15:27 same), 1m </small></td>
 </tr>
 
 <tr>
@@ -12302,7 +12302,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge pass">PASS</span><br><small>5m 15:20 Down / 3m 15:24 Down / 1m 15:28 Down</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Up (72.00&rarr;74.98) vol 85,333<br>3m 09:15 Up (72.00&rarr;74.00) vol 40,107<br>1m 09:15 Up (72.00&rarr;73.85) vol 13,841</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>Yahoo check: fails: 3m trend (15:24 and 15:27 same), 1m trend (15:28 and 15:29 same), morning 09:15 candles</small></td>
 </tr>
 
 <tr>
@@ -12315,7 +12315,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Flat / 3m 15:24 Flat / 1m 15:28 Flat</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Flat (31.80&rarr;31.80) vol 1<br>3m 09:15 Flat (31.80&rarr;31.80) vol 1<br>1m 09:15 Flat (31.80&rarr;31.80) vol 1</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>missing: 5m 15:20, 3m 15:24, 1m 15:28</small><br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>missing: 5m 15:20, 3m 15:24, 1m 15:28</small><br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m volume (15:24 &gt; 15:27), 3m trend (15:24 and 15:27 same), 1m </small></td>
 </tr>
 
 <tr>
@@ -12328,7 +12328,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Down / 3m 15:24 Up / 1m 15:28 Flat</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Down (25.95&rarr;25.94) vol 186<br>3m 09:15 Flat (25.95&rarr;25.95) vol 106<br>1m 09:15 Flat (25.95&rarr;25.95) vol 106</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>Yahoo check: fails: 3m trend (15:24 and 15:27 same), 1m volume (15:28 &gt; 15:29), 1m trend (15:28 and 15:29 same</small></td>
 </tr>
 
 <tr>
@@ -12341,7 +12341,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Up / 3m 15:24 Up / 1m 15:28 Flat</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Up (619.85&rarr;625.50) vol 21,679<br>3m 09:15 Up (619.85&rarr;623.15) vol 14,095<br>1m 09:15 Up (619.85&rarr;621.60) vol 2,952</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m volume (15:24 &gt; 15:27), 3m trend (15:24 and 15:27 same), 1m </small></td>
 </tr>
 
 <tr>
@@ -12354,7 +12354,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Flat / 3m 15:24 Flat / 1m 15:28 Flat</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Up (897.40&rarr;900.50) vol 227,823<br>3m 09:15 Up (897.40&rarr;898.30) vol 158,666<br>1m 09:15 Up (897.40&rarr;898.70) vol 74,799</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>missing: 5m 15:20, 5m 15:25, 3m 15:24, 3m 15:27, 1m 15:28, 1m 15:29</small><br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>missing: 5m 15:20, 5m 15:25, 3m 15:24, 3m 15:27, 1m 15:28, 1m 15:29</small><br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m volume (15:24 &gt; 15:27), 3m trend (15:24 and 15:27 same), 1m </small></td>
 </tr>
 
 <tr>
@@ -14941,7 +14941,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Up / 3m 15:24 Up / 1m 15:28 Flat</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Down (665.50&rarr;657.50) vol 132,200<br>3m 09:15 Down (665.50&rarr;647.90) vol 84,836<br>1m 09:15 Down (665.50&rarr;638.30) vol 20,081</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m volume (15:24 &gt; 15:27), 1m volume (15:28 &gt; 15:29), 1m trend </small></td>
+<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
 </tr>
 
 <tr>
@@ -14954,7 +14954,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Up / 3m 15:24 Flat / 1m 15:28 Flat</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Up (31.77&rarr;32.31) vol 2,480<br>3m 09:15 Up (31.77&rarr;31.80) vol 1,425<br>1m 09:15 Up (31.77&rarr;31.81) vol 192</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m volume (15:24 &gt; 15:27), 3m trend (15:24 and 15:27 same), 1m </small></td>
+<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
 </tr>
 
 <tr>
@@ -14967,7 +14967,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Up / 3m 15:24 Down / 1m 15:28 Down</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Down (207.89&rarr;207.50) vol 16,890<br>3m 09:15 Down (207.89&rarr;207.50) vol 14,813<br>1m 09:15 Up (207.89&rarr;209.23) vol 6,657</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m trend (15:24 and 15:27 same), 1m volume (15:28 &gt; 15:29), 1m </small></td>
+<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
 </tr>
 
 <tr>
@@ -14980,7 +14980,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Down / 3m 15:24 Down / 1m 15:28 Flat</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 missing<br>3m 09:15 missing<br>1m 09:15 missing</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>missing: 5m 09:15, 3m 09:15, 1m 09:15</small><br><small>Yahoo check: fails: 3m volume (15:24 &gt; 15:27), 1m volume (15:28 &gt; 15:29), 1m trend (15:28 and 15:29 same), ali</small></td>
+<td>OK (TradingView)<br><small>missing: 5m 09:15, 3m 09:15, 1m 09:15</small><br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
 </tr>
 
 <tr>
@@ -14993,7 +14993,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Down / 3m 15:24 Down / 1m 15:28 Up</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Down (112.65&rarr;112.63) vol 54,322<br>3m 09:15 Up (112.65&rarr;112.66) vol 37,648<br>1m 09:15 Down (112.65&rarr;112.49) vol 12,205</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m trend (15:24 and 15:27 same), 1m trend (15:28 and 15:29 same</small></td>
+<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
 </tr>
 
 <tr>
@@ -15006,7 +15006,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Down / 3m 15:24 Flat / 1m 15:28 Down</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Up (28.60&rarr;29.11) vol 3,291<br>3m 09:15 Up (28.60&rarr;29.21) vol 51<br>1m 09:15 Flat (28.60&rarr;28.60) vol 1</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m volume (15:24 &gt; 15:27), 3m trend (15:24 and 15:27 same), ali</small></td>
+<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
 </tr>
 
 <tr>
@@ -15019,7 +15019,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Flat / 3m 15:24 Flat / 1m 15:28 Up</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Flat (72.70&rarr;72.70) vol 121<br>3m 09:15 Flat (72.70&rarr;72.70) vol 100<br>1m 09:15 Flat (72.70&rarr;72.70) vol 100</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m trend (15:24 and 15:27 same), 1m volume (15:28 &gt; 15:29), 1m </small></td>
+<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
 </tr>
 
 <tr>
@@ -15032,7 +15032,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Down / 3m 15:24 Up / 1m 15:28 Flat</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Up (446.00&rarr;446.60) vol 630<br>3m 09:15 Up (446.00&rarr;448.80) vol 597<br>1m 09:15 Down (446.00&rarr;444.50) vol 26</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m volume (15:24 &gt; 15:27), 3m trend (15:24 and 15:27 same), 1m </small></td>
+<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
 </tr>
 
 <tr>
@@ -15045,7 +15045,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Up / 3m 15:24 Down / 1m 15:28 Up</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Up (259.00&rarr;262.80) vol 10,800<br>3m 09:15 Up (259.00&rarr;261.98) vol 7,256<br>1m 09:15 Up (259.00&rarr;261.86) vol 3,131</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m trend (15:24 and 15:27 same), 1m volume (15:28 &gt; 15:29), 1m </small></td>
+<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
 </tr>
 
 <tr>
@@ -15058,7 +15058,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Flat / 3m 15:24 Flat / 1m 15:28 Flat</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Up (484.50&rarr;485.45) vol 1,849,535<br>3m 09:15 Up (484.50&rarr;484.70) vol 1,340,215<br>1m 09:15 Down (484.50&rarr;484.30) vol 847,179</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>missing: 5m 15:20, 5m 15:25, 3m 15:24, 3m 15:27, 1m 15:28, 1m 15:29</small><br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m volume (15:24 &gt; 15:27), 3m trend (15:24 and 15:27 same), 1m </small></td>
+<td>OK (TradingView)<br><small>missing: 5m 15:20, 5m 15:25, 3m 15:24, 3m 15:27, 1m 15:28, 1m 15:29</small><br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
 </tr>
 
 <tr>
@@ -15071,7 +15071,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Down / 3m 15:24 Flat / 1m 15:28 Flat</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Up (124.97&rarr;125.00) vol 1,635<br>3m 09:15 Up (124.97&rarr;125.00) vol 1,635<br>1m 09:15 Flat (124.97&rarr;124.97) vol 35</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m volume (15:24 &gt; 15:27), 3m trend (15:24 and 15:27 same), 1m </small></td>
+<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
 </tr>
 
 <tr>
@@ -15084,7 +15084,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Flat / 3m 15:24 Flat / 1m 15:28 Flat</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Flat (61.76&rarr;61.76) vol 51<br>3m 09:15 Flat (61.76&rarr;61.76) vol 51<br>1m 09:15 Flat (61.76&rarr;61.76) vol 51</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>missing: 5m 15:20, 3m 15:24</small><br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m volume (15:24 &gt; 15:27), 3m trend (15:24 and 15:27 same), 1m </small></td>
+<td>OK (TradingView)<br><small>missing: 5m 15:20, 3m 15:24</small><br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
 </tr>
 
 <tr>
@@ -15097,7 +15097,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Flat / 3m 15:24 Down / 1m 15:28 Up</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Up (136.60&rarr;138.65) vol 989<br>3m 09:15 Up (136.60&rarr;138.39) vol 573<br>1m 09:15 Up (136.60&rarr;137.60) vol 215</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m volume (15:24 &gt; 15:27), 3m trend (15:24 and 15:27 same), 1m </small></td>
+<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
 </tr>
 
 <tr>
@@ -15110,7 +15110,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Down / 3m 15:24 Up / 1m 15:28 Down</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Down (40.00&rarr;39.88) vol 20,922<br>3m 09:15 Up (40.00&rarr;40.35) vol 15,139<br>1m 09:15 Down (40.00&rarr;39.41) vol 642</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m volume (15:24 &gt; 15:27), 1m trend (15:28 and 15:29 same), ali</small></td>
+<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
 </tr>
 
 <tr>
@@ -15123,7 +15123,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Down / 3m 15:24 Up / 1m 15:28 Up</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Up (6010.00&rarr;6075.00) vol 60<br>3m 09:15 Up (6010.00&rarr;6072.00) vol 39<br>1m 09:15 Flat (6010.00&rarr;6010.00) vol 2</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m volume (15:24 &gt; 15:27), 1m trend (15:28 and 15:29 same), ali</small></td>
+<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
 </tr>
 
 <tr>
@@ -15136,7 +15136,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Down / 3m 15:24 Up / 1m 15:28 Up</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Down (213.80&rarr;207.52) vol 1,116,482<br>3m 09:15 Down (213.80&rarr;208.66) vol 898,685<br>1m 09:15 Down (213.80&rarr;205.99) vol 502,704</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m trend (15:24 and 15:27 same), 1m trend (15:28 and 15:29 same</small></td>
+<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
 </tr>
 
 <tr>
@@ -15162,7 +15162,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Up / 3m 15:24 Down / 1m 15:28 Up</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Down (1379.90&rarr;1369.40) vol 1,821<br>3m 09:15 Down (1379.90&rarr;1367.30) vol 1,276<br>1m 09:15 Down (1379.90&rarr;1367.10) vol 866</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m trend (15:24 and 15:27 same), alignment (5m 15:20 = 3m 15:24</small></td>
+<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
 </tr>
 
 <tr>
@@ -15409,7 +15409,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Flat / 3m 15:24 Up / 1m 15:28 Flat</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Down (176.50&rarr;176.00) vol 7<br>3m 09:15 Down (176.50&rarr;176.00) vol 7<br>1m 09:15 Flat (176.50&rarr;176.50) vol 2</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m volume (15:24 &gt; 15:27), 3m trend (15:24 and 15:27 same), 1m </small></td>
 </tr>
 
 <tr>
@@ -15422,7 +15422,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Down / 3m 15:24 Up / 1m 15:28 Up</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Up (1002.50&rarr;1042.20) vol 29,022<br>3m 09:15 Up (1002.50&rarr;1034.50) vol 16,706<br>1m 09:15 Up (1002.50&rarr;1029.90) vol 5,060</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>Yahoo check: fails: 3m trend (15:24 and 15:27 same), 1m volume (15:28 &gt; 15:29), 1m trend (15:28 and 15:29 same</small></td>
 </tr>
 
 <tr>
@@ -15435,7 +15435,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge pass">PASS</span><br><small>5m 15:20 Up / 3m 15:24 Up / 1m 15:28 Up</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Down (864.00&rarr;862.70) vol 992<br>3m 09:15 Down (864.00&rarr;857.90) vol 420<br>1m 09:15 Down (864.00&rarr;846.00) vol 245</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 1m volume (15:28 &gt; 15:29), morning 09:15 candles, missing candl</small></td>
 </tr>
 
 <tr>
@@ -15448,7 +15448,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Flat / 3m 15:24 Up / 1m 15:28 Down</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Down (214.48&rarr;213.28) vol 966<br>3m 09:15 Up (214.48&rarr;215.38) vol 440<br>1m 09:15 Down (214.48&rarr;213.00) vol 208</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m volume (15:24 &gt; 15:27), 3m trend (15:24 and 15:27 same), 1m </small></td>
 </tr>
 
 <tr>
@@ -15461,7 +15461,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Up / 3m 15:24 Up / 1m 15:28 Down</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Up (337.30&rarr;341.30) vol 191,611<br>3m 09:15 Up (337.30&rarr;339.65) vol 138,557<br>1m 09:15 Up (337.30&rarr;339.00) vol 35,220</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m trend (15:24 and 15:27 same), 1m volume (15:28 &gt; 15:29), ali</small></td>
 </tr>
 
 <tr>
@@ -15474,7 +15474,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Up / 3m 15:24 Flat / 1m 15:28 Down</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Down (67.90&rarr;67.50) vol 2,385<br>3m 09:15 Down (67.90&rarr;67.50) vol 2,335<br>1m 09:15 Down (67.90&rarr;67.50) vol 300</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m volume (15:24 &gt; 15:27), 3m trend (15:24 and 15:27 same), ali</small></td>
 </tr>
 
 <tr>
@@ -15487,7 +15487,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge pass">PASS</span><br><small>5m 15:20 Up / 3m 15:24 Up / 1m 15:28 Up</small></td>
 <td><span class="badge pass">PASS</span><br><small>5m 09:15 Up (553.00&rarr;554.35) vol 2,558<br>3m 09:15 Up (553.00&rarr;555.45) vol 1,381<br>1m 09:15 Up (553.00&rarr;556.05) vol 155</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m trend (15:24 and 15:27 same), 1m volume (15:28 &gt; 15:29), 1m </small></td>
 </tr>
 
 <tr>
@@ -15500,7 +15500,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Down / 3m 15:24 Down / 1m 15:28 Up</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Down (37.90&rarr;37.86) vol 321,906<br>3m 09:15 Down (37.90&rarr;37.74) vol 233,779<br>1m 09:15 Down (37.90&rarr;37.78) vol 90,516</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>Yahoo check: fails: 3m trend (15:24 and 15:27 same), 1m volume (15:28 &gt; 15:29), alignment (5m 15:20 = 3m 15:24</small></td>
 </tr>
 
 <tr>
@@ -15513,7 +15513,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Down / 3m 15:24 Flat / 1m 15:28 Flat</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Flat (86.51&rarr;86.51) vol 16<br>3m 09:15 Flat (86.51&rarr;86.51) vol 16<br>1m 09:15 Flat (86.51&rarr;86.51) vol 16</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>missing: 3m 15:24</small><br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>missing: 3m 15:24</small><br><small>Yahoo check: fails: 3m volume (15:24 &gt; 15:27), 3m trend (15:24 and 15:27 same), 1m volume (15:28 &gt; 15:29), 1m </small></td>
 </tr>
 
 <tr>
@@ -15526,7 +15526,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Flat / 3m 15:24 Flat / 1m 15:28 Flat</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Flat (39.00&rarr;39.00) vol 1<br>3m 09:15 Flat (39.00&rarr;39.00) vol 1<br>1m 09:15 Flat (39.00&rarr;39.00) vol 1</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>missing: 5m 15:20, 5m 15:25, 3m 15:24, 3m 15:27, 1m 15:28, 1m 15:29</small><br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>missing: 5m 15:20, 5m 15:25, 3m 15:24, 3m 15:27, 1m 15:28, 1m 15:29</small><br><small>Yahoo check not done: Yahoo has no usable data for that session</small></td>
 </tr>
 
 <tr>
@@ -15539,7 +15539,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Flat / 3m 15:24 Flat / 1m 15:28 Flat</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 missing<br>3m 09:15 missing<br>1m 09:15 missing</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>missing: 5m 09:15, 3m 09:15, 1m 09:15, 5m 15:20, 3m 15:24, 1m 15:28, 1m 15:29</small><br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>missing: 5m 09:15, 3m 09:15, 1m 09:15, 5m 15:20, 3m 15:24, 1m 15:28, 1m 15:29</small><br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m volume (15:24 &gt; 15:27), 3m trend (15:24 and 15:27 same), 1m </small></td>
 </tr>
 
 <tr>
@@ -15552,7 +15552,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Down / 3m 15:24 Down / 1m 15:28 Up</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Down (11.62&rarr;11.61) vol 348<br>3m 09:15 Down (11.62&rarr;11.61) vol 144<br>1m 09:15 Flat (11.62&rarr;11.62) vol 85</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m volume (15:24 &gt; 15:27), 1m volume (15:28 &gt; 15:29), alignment</small></td>
 </tr>
 
 <tr>
@@ -15565,7 +15565,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge pass">PASS</span><br><small>5m 15:20 Down / 3m 15:24 Down / 1m 15:28 Down</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Up (362.10&rarr;363.35) vol 76,646<br>3m 09:15 Down (362.10&rarr;361.70) vol 52,324<br>1m 09:15 Up (362.10&rarr;362.25) vol 16,095</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m volume (15:24 &gt; 15:27), 1m trend (15:28 and 15:29 same), mor</small></td>
 </tr>
 
 <tr>
@@ -15578,7 +15578,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Down / 3m 15:24 Up / 1m 15:28 Down</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Up (2042.10&rarr;2054.60) vol 19,029<br>3m 09:15 Up (2042.10&rarr;2054.10) vol 13,312<br>1m 09:15 Down (2042.10&rarr;2031.70) vol 5,646</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>Yahoo check: fails: 3m volume (15:24 &gt; 15:27), 1m trend (15:28 and 15:29 same), alignment (5m 15:20 = 3m 15:24</small></td>
 </tr>
 
 <tr>
@@ -15591,7 +15591,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Flat / 3m 15:24 Flat / 1m 15:28 Flat</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Down (133.90&rarr;133.60) vol 22<br>3m 09:15 Down (133.90&rarr;133.60) vol 22<br>1m 09:15 missing</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>missing: 1m 09:15, 5m 15:20</small><br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>missing: 1m 09:15, 5m 15:20</small><br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m volume (15:24 &gt; 15:27), 3m trend (15:24 and 15:27 same), 1m </small></td>
 </tr>
 
 <tr>
@@ -15604,7 +15604,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Up / 3m 15:24 Up / 1m 15:28 Down</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Up (11.52&rarr;11.89) vol 59,985<br>3m 09:15 Up (11.52&rarr;12.93) vol 35,916<br>1m 09:15 Flat (11.52&rarr;11.52) vol 17,006</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>Yahoo check: fails: 3m volume (15:24 &gt; 15:27), 3m trend (15:24 and 15:27 same), 1m volume (15:28 &gt; 15:29), 1m </small></td>
 </tr>
 
 <tr>
@@ -15617,7 +15617,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Up / 3m 15:24 Up / 1m 15:28 Flat</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Up (474.05&rarr;480.45) vol 6,408<br>3m 09:15 Up (474.05&rarr;481.00) vol 2,750<br>1m 09:15 Up (474.05&rarr;477.75) vol 1,041</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>Yahoo check: fails: 3m volume (15:24 &gt; 15:27), 3m trend (15:24 and 15:27 same), 1m volume (15:28 &gt; 15:29), 1m </small></td>
 </tr>
 
 <tr>
@@ -15630,7 +15630,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Up / 3m 15:24 Up / 1m 15:28 Down</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Up (152.87&rarr;153.77) vol 5,876<br>3m 09:15 Up (152.87&rarr;153.71) vol 3,933<br>1m 09:15 Up (152.87&rarr;154.00) vol 1,323</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m trend (15:24 and 15:27 same), 1m volume (15:28 &gt; 15:29), 1m </small></td>
 </tr>
 
 <tr>
@@ -15643,7 +15643,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Down / 3m 15:24 Up / 1m 15:28 Up</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Up (209.50&rarr;212.44) vol 14,630<br>3m 09:15 Up (209.50&rarr;213.84) vol 8,616<br>1m 09:15 Up (209.50&rarr;210.23) vol 1,207</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>Yahoo check: fails: 3m volume (15:24 &gt; 15:27), 3m trend (15:24 and 15:27 same), 1m trend (15:28 and 15:29 same</small></td>
 </tr>
 
 <tr>
@@ -15656,7 +15656,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Down / 3m 15:24 Up / 1m 15:28 Down</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Up (205.00&rarr;208.29) vol 41,214<br>3m 09:15 Up (205.00&rarr;206.48) vol 11,943<br>1m 09:15 Up (205.00&rarr;206.10) vol 4,729</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m trend (15:24 and 15:27 same), 1m trend (15:28 and 15:29 same</small></td>
 </tr>
 
 <tr>
@@ -15669,7 +15669,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Flat / 3m 15:24 Flat / 1m 15:28 Flat</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Up (18.05&rarr;18.50) vol 993<br>3m 09:15 Up (18.05&rarr;19.25) vol 301<br>1m 09:15 Flat (18.05&rarr;18.05) vol 47</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>missing: 5m 15:20, 3m 15:27, 1m 15:28, 1m 15:29</small><br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>missing: 5m 15:20, 3m 15:27, 1m 15:28, 1m 15:29</small><br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m volume (15:24 &gt; 15:27), 3m trend (15:24 and 15:27 same), 1m </small></td>
 </tr>
 
 <tr>
@@ -15682,7 +15682,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Flat / 3m 15:24 Flat / 1m 15:28 Flat</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Down (2471.10&rarr;2446.80) vol 357,205<br>3m 09:15 Down (2471.10&rarr;2449.70) vol 273,210<br>1m 09:15 Down (2471.10&rarr;2451.40) vol 179,295</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>missing: 5m 15:20, 5m 15:25, 3m 15:24, 3m 15:27, 1m 15:28, 1m 15:29</small><br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>missing: 5m 15:20, 5m 15:25, 3m 15:24, 3m 15:27, 1m 15:28, 1m 15:29</small><br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m volume (15:24 &gt; 15:27), 3m trend (15:24 and 15:27 same), 1m </small></td>
 </tr>
 
 <tr>
@@ -15695,7 +15695,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Flat / 3m 15:24 Flat / 1m 15:28 Flat</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Flat (12.21&rarr;12.21) vol 681<br>3m 09:15 Flat (12.21&rarr;12.21) vol 681<br>1m 09:15 missing</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>missing: 1m 09:15, 5m 15:25, 3m 15:27, 1m 15:28, 1m 15:29</small><br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>missing: 1m 09:15, 5m 15:25, 3m 15:27, 1m 15:28, 1m 15:29</small><br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m volume (15:24 &gt; 15:27), 3m trend (15:24 and 15:27 same), 1m </small></td>
 </tr>
 
 <tr>
@@ -15708,7 +15708,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Down / 3m 15:24 Flat / 1m 15:28 Up</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Up (204.51&rarr;206.74) vol 283<br>3m 09:15 Up (204.51&rarr;206.99) vol 106<br>1m 09:15 Down (204.51&rarr;204.01) vol 95</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m volume (15:24 &gt; 15:27), 3m trend (15:24 and 15:27 same), ali</small></td>
 </tr>
 
 <tr>
@@ -15734,7 +15734,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Flat / 3m 15:24 Flat / 1m 15:28 Flat</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Up (4.14&rarr;4.21) vol 2,536<br>3m 09:15 Up (4.14&rarr;4.20) vol 2,535<br>1m 09:15 Up (4.14&rarr;4.20) vol 2,535</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>missing: 3m 15:24, 1m 15:29</small><br><small>Yahoo check: fails: 3m volume (15:24 &gt; 15:27), 3m trend (15:24 and 15:27 same), 1m volume (15:28 &gt; 15:29), 1m </small></td>
+<td>OK (TradingView)<br><small>missing: 3m 15:24, 1m 15:29</small><br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m volume (15:24 &gt; 15:27), 3m trend (15:24 and 15:27 same), 1m </small></td>
 </tr>
 
 <tr>
@@ -16150,7 +16150,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Up / 3m 15:24 Flat / 1m 15:28 Flat</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Up (5.87&rarr;6.01) vol 3,440<br>3m 09:15 Up (5.87&rarr;6.01) vol 3,440<br>1m 09:15 Up (5.87&rarr;6.01) vol 3,434</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>missing: 1m 15:28</small><br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m volume (15:24 &gt; 15:27), 3m trend (15:24 and 15:27 same), 1m </small></td>
+<td>OK (TradingView)<br><small>missing: 1m 15:28</small><br><small>Yahoo check: fails: 3m volume (15:24 &gt; 15:27), 3m trend (15:24 and 15:27 same), 1m volume (15:28 &gt; 15:29), 1m </small></td>
 </tr>
 
 <tr>
@@ -18672,7 +18672,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Up / 3m 15:24 Flat / 1m 15:28 Up</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Up (2668.60&rarr;2755.50) vol 14,237<br>3m 09:15 Up (2668.60&rarr;2725.00) vol 7,793<br>1m 09:15 Up (2668.60&rarr;2693.60) vol 2,181</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m trend (15:24 and 15:27 same), 1m trend (15:28 and 15:29 same</small></td>
 </tr>
 
 <tr>
@@ -18698,7 +18698,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Up / 3m 15:24 Down / 1m 15:28 Up</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Up (1057.40&rarr;1065.20) vol 530<br>3m 09:15 Up (1057.40&rarr;1064.85) vol 432<br>1m 09:15 Up (1057.40&rarr;1066.35) vol 347</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m volume (15:24 &gt; 15:27), 1m volume (15:28 &gt; 15:29), 1m trend </small></td>
 </tr>
 
 <tr>
@@ -18711,7 +18711,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Flat / 3m 15:24 Flat / 1m 15:28 Flat</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Up (1297.80&rarr;1299.10) vol 101,727<br>3m 09:15 Down (1297.80&rarr;1296.60) vol 84,709<br>1m 09:15 Up (1297.80&rarr;1301.60) vol 49,740</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>missing: 5m 15:20, 5m 15:25, 3m 15:24, 3m 15:27, 1m 15:28, 1m 15:29</small><br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>missing: 5m 15:20, 5m 15:25, 3m 15:24, 3m 15:27, 1m 15:28, 1m 15:29</small><br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m volume (15:24 &gt; 15:27), 3m trend (15:24 and 15:27 same), 1m </small></td>
 </tr>
 
 <tr>
@@ -18724,7 +18724,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Down / 3m 15:24 Down / 1m 15:28 Up</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Up (3884.20&rarr;3958.60) vol 134,407<br>3m 09:15 Up (3884.20&rarr;3943.60) vol 92,962<br>1m 09:15 Up (3884.20&rarr;3909.90) vol 34,214</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m trend (15:24 and 15:27 same), 1m volume (15:28 &gt; 15:29), ali</small></td>
 </tr>
 
 <tr>
@@ -18737,7 +18737,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Up / 3m 15:24 Up / 1m 15:28 Down</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Up (27.44&rarr;27.58) vol 135,594<br>3m 09:15 Up (27.44&rarr;27.51) vol 100,762<br>1m 09:15 Up (27.44&rarr;27.54) vol 33,773</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>Yahoo check: fails: 1m trend (15:28 and 15:29 same), alignment (5m 15:20 = 3m 15:24 = 1m 15:28), morning 09:15</small></td>
 </tr>
 
 <tr>
@@ -18750,7 +18750,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Up / 3m 15:24 Down / 1m 15:28 Down</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Up (20129.00&rarr;20212.00) vol 2,813<br>3m 09:15 Up (20129.00&rarr;20131.00) vol 2,204<br>1m 09:15 Down (20129.00&rarr;20023.00) vol 1,225</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>Yahoo check: fails: 3m trend (15:24 and 15:27 same), 1m trend (15:28 and 15:29 same), alignment (5m 15:20 = 3m</small></td>
 </tr>
 
 <tr>
@@ -18763,7 +18763,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Down / 3m 15:24 Up / 1m 15:28 Down</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Up (442.10&rarr;443.75) vol 46,631<br>3m 09:15 Up (442.10&rarr;443.50) vol 35,175<br>1m 09:15 Down (442.10&rarr;440.10) vol 13,244</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m trend (15:24 and 15:27 same), 1m trend (15:28 and 15:29 same</small></td>
 </tr>
 
 <tr>
@@ -18776,7 +18776,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Flat / 3m 15:24 Flat / 1m 15:28 Flat</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Flat (2.99&rarr;2.99) vol 30<br>3m 09:15 Flat (2.99&rarr;2.99) vol 30<br>1m 09:15 Flat (2.99&rarr;2.99) vol 30</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>missing: 5m 15:20, 5m 15:25, 3m 15:24, 3m 15:27, 1m 15:28, 1m 15:29</small><br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>missing: 5m 15:20, 5m 15:25, 3m 15:24, 3m 15:27, 1m 15:28, 1m 15:29</small><br><small>Yahoo check not done: Yahoo has no usable data for that session</small></td>
 </tr>
 
 <tr>
@@ -18789,7 +18789,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Up / 3m 15:24 Up / 1m 15:28 Down</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Up (64.20&rarr;64.52) vol 56,190<br>3m 09:15 Up (64.20&rarr;64.50) vol 36,165<br>1m 09:15 Up (64.20&rarr;64.51) vol 5,509</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m trend (15:24 and 15:27 same), 1m volume (15:28 &gt; 15:29), 1m </small></td>
 </tr>
 
 <tr>
@@ -18802,7 +18802,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Flat / 3m 15:24 Flat / 1m 15:28 Up</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Down (41.53&rarr;41.33) vol 1<br>3m 09:15 Down (41.53&rarr;41.33) vol 1<br>1m 09:15 missing</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>missing: 1m 09:15, 5m 15:20, 3m 15:24</small><br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>missing: 1m 09:15, 5m 15:20, 3m 15:24</small><br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m volume (15:24 &gt; 15:27), 3m trend (15:24 and 15:27 same), 1m </small></td>
 </tr>
 
 <tr>
@@ -18815,7 +18815,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Up / 3m 15:24 Down / 1m 15:28 Down</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Down (2990.60&rarr;2948.10) vol 88<br>3m 09:15 Down (2990.60&rarr;2968.00) vol 75<br>1m 09:15 Down (2990.60&rarr;2941.60) vol 45</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 1m volume (15:28 &gt; 15:29), alignment (5m 15:20 = 3m 15:24 = 1m </small></td>
 </tr>
 
 <tr>
@@ -18828,7 +18828,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Down / 3m 15:24 Down / 1m 15:28 Up</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Down (1889.90&rarr;1887.80) vol 4,484<br>3m 09:15 Down (1889.90&rarr;1884.00) vol 1,583<br>1m 09:15 Down (1889.90&rarr;1885.80) vol 1,171</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m trend (15:24 and 15:27 same), alignment (5m 15:20 = 3m 15:24</small></td>
 </tr>
 
 <tr>
@@ -18841,7 +18841,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Flat / 3m 15:24 Flat / 1m 15:28 Flat</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Down (79.70&rarr;78.68) vol 1,652,231<br>3m 09:15 Down (79.70&rarr;78.40) vol 1,308,964<br>1m 09:15 Down (79.70&rarr;79.31) vol 549,353</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>missing: 5m 15:20, 5m 15:25, 3m 15:24, 3m 15:27, 1m 15:28, 1m 15:29</small><br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>missing: 5m 15:20, 5m 15:25, 3m 15:24, 3m 15:27, 1m 15:28, 1m 15:29</small><br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m volume (15:24 &gt; 15:27), 3m trend (15:24 and 15:27 same), 1m </small></td>
 </tr>
 
 <tr>
@@ -18854,7 +18854,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Up / 3m 15:24 Up / 1m 15:28 Down</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Down (160.95&rarr;160.69) vol 68,684<br>3m 09:15 Up (160.95&rarr;161.37) vol 40,446<br>1m 09:15 Down (160.95&rarr;160.87) vol 31,484</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m volume (15:24 &gt; 15:27), 3m trend (15:24 and 15:27 same), 1m </small></td>
 </tr>
 
 <tr>
@@ -18867,7 +18867,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Up / 3m 15:24 Down / 1m 15:28 Up</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Up (1228.40&rarr;1242.00) vol 5,404<br>3m 09:15 Up (1228.40&rarr;1250.00) vol 3,232<br>1m 09:15 Up (1228.40&rarr;1228.60) vol 490</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m trend (15:24 and 15:27 same), alignment (5m 15:20 = 3m 15:24</small></td>
 </tr>
 
 <tr>
@@ -18880,7 +18880,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Down / 3m 15:24 Up / 1m 15:28 Up</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Up (31.06&rarr;31.50) vol 51<br>3m 09:15 Up (31.06&rarr;31.50) vol 51<br>1m 09:15 Up (31.06&rarr;31.50) vol 51</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m trend (15:24 and 15:27 same), 1m volume (15:28 &gt; 15:29), ali</small></td>
 </tr>
 
 <tr>
@@ -18893,7 +18893,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Flat / 3m 15:24 Flat / 1m 15:28 Flat</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Up (67.10&rarr;67.68) vol 467<br>3m 09:15 Up (67.10&rarr;67.35) vol 339<br>1m 09:15 Down (67.10&rarr;66.79) vol 90</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>missing: 5m 15:20, 3m 15:24, 1m 15:29</small><br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>missing: 5m 15:20, 3m 15:24, 1m 15:29</small><br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m volume (15:24 &gt; 15:27), 3m trend (15:24 and 15:27 same), 1m </small></td>
 </tr>
 
 <tr>
@@ -18906,7 +18906,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Up / 3m 15:24 Down / 1m 15:28 Flat</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Up (72.50&rarr;72.88) vol 9,699<br>3m 09:15 Up (72.50&rarr;72.90) vol 9,090<br>1m 09:15 Up (72.50&rarr;72.80) vol 2,620</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m trend (15:24 and 15:27 same), 1m volume (15:28 &gt; 15:29), 1m </small></td>
 </tr>
 
 <tr>
@@ -18919,7 +18919,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge pass">PASS</span><br><small>5m 15:20 Up / 3m 15:24 Up / 1m 15:28 Up</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Up (170.17&rarr;171.49) vol 2,300<br>3m 09:15 Up (170.17&rarr;171.00) vol 1,685<br>1m 09:15 Down (170.17&rarr;170.09) vol 753</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m trend (15:24 and 15:27 same), 1m trend (15:28 and 15:29 same</small></td>
 </tr>
 
 <tr>
@@ -18932,7 +18932,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Flat / 3m 15:24 Flat / 1m 15:28 Flat</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Up (6.95&rarr;7.05) vol 1,281<br>3m 09:15 Up (6.95&rarr;7.04) vol 1,076<br>1m 09:15 Up (6.95&rarr;7.05) vol 1,010</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m volume (15:24 &gt; 15:27), 3m trend (15:24 and 15:27 same), 1m </small></td>
 </tr>
 
 <tr>
@@ -18945,7 +18945,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Down / 3m 15:24 Up / 1m 15:28 Flat</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Up (10.08&rarr;10.10) vol 7,142<br>3m 09:15 Up (10.08&rarr;10.12) vol 5,340<br>1m 09:15 Down (10.08&rarr;10.02) vol 3,168</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m volume (15:24 &gt; 15:27), 3m trend (15:24 and 15:27 same), 1m </small></td>
 </tr>
 
 <tr>
@@ -18958,7 +18958,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Down / 3m 15:24 Up / 1m 15:28 Up</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Down (1287.00&rarr;1238.50) vol 8,575<br>3m 09:15 Down (1287.00&rarr;1215.00) vol 6,396<br>1m 09:15 Down (1287.00&rarr;1258.80) vol 2,226</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m trend (15:24 and 15:27 same), alignment (5m 15:20 = 3m 15:24</small></td>
 </tr>
 
 <tr>
@@ -18971,7 +18971,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Up / 3m 15:24 Up / 1m 15:28 Down</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Up (2075.00&rarr;2079.30) vol 3,118<br>3m 09:15 Up (2075.00&rarr;2079.50) vol 3,086<br>1m 09:15 Down (2075.00&rarr;2074.10) vol 1,905</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>Yahoo check: fails: 3m volume (15:24 &gt; 15:27), 1m volume (15:28 &gt; 15:29), alignment (5m 15:20 = 3m 15:24 = 1m </small></td>
 </tr>
 
 <tr>
@@ -19413,7 +19413,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Up / 3m 15:24 Up / 1m 15:28 Flat</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Down (21.97&rarr;20.51) vol 224<br>3m 09:15 Down (21.97&rarr;20.51) vol 128<br>1m 09:15 Down (21.97&rarr;20.50) vol 111</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>missing: 1m 15:29</small><br><small>Yahoo check: fails: 3m volume (15:24 &gt; 15:27), 3m trend (15:24 and 15:27 same), 1m volume (15:28 &gt; 15:29), 1m </small></td>
+<td>OK (TradingView)<br><small>missing: 1m 15:29</small><br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m volume (15:24 &gt; 15:27), 3m trend (15:24 and 15:27 same), 1m </small></td>
 </tr>
 
 <tr>
@@ -21987,7 +21987,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge pass">PASS</span><br><small>5m 15:20 Up / 3m 15:24 Up / 1m 15:28 Up</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Down (843.60&rarr;837.95) vol 3,409<br>3m 09:15 Down (843.60&rarr;837.20) vol 3,335<br>1m 09:15 Down (843.60&rarr;839.55) vol 2,374</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m trend (15:24 and 15:27 same), morning 09:15 candles, missing</small></td>
 </tr>
 
 <tr>
@@ -22000,7 +22000,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Up / 3m 15:24 Down / 1m 15:28 Flat</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Down (319.00&rarr;317.30) vol 2,538<br>3m 09:15 Down (319.00&rarr;318.10) vol 2,134<br>1m 09:15 Down (319.00&rarr;318.85) vol 384</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 1m volume (15:28 &gt; 15:29), 1m trend (15:28 and 15:29 same), ali</small></td>
 </tr>
 
 <tr>
@@ -22013,7 +22013,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Up / 3m 15:24 Down / 1m 15:28 Up</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Up (533.00&rarr;539.55) vol 2,580<br>3m 09:15 Up (533.00&rarr;538.10) vol 1,352<br>1m 09:15 Flat (533.00&rarr;533.00) vol 62</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>Yahoo check: fails: 3m volume (15:24 &gt; 15:27), 3m trend (15:24 and 15:27 same), alignment (5m 15:20 = 3m 15:24</small></td>
 </tr>
 
 <tr>
@@ -22026,7 +22026,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Down / 3m 15:24 Flat / 1m 15:28 Up</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Up (401.30&rarr;404.25) vol 8,419<br>3m 09:15 Up (401.30&rarr;401.45) vol 6,012<br>1m 09:15 Up (401.30&rarr;403.90) vol 1,075</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m volume (15:24 &gt; 15:27), 3m trend (15:24 and 15:27 same), 1m </small></td>
 </tr>
 
 <tr>
@@ -22039,7 +22039,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Up / 3m 15:24 Down / 1m 15:28 Flat</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Up (519.05&rarr;524.90) vol 832<br>3m 09:15 Up (519.05&rarr;524.40) vol 630<br>1m 09:15 Up (519.05&rarr;522.60) vol 277</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m volume (15:24 &gt; 15:27), 3m trend (15:24 and 15:27 same), 1m </small></td>
 </tr>
 
 <tr>
@@ -22052,7 +22052,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Flat / 3m 15:24 Up / 1m 15:28 Flat</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Up (12.47&rarr;12.50) vol 4,952<br>3m 09:15 Up (12.47&rarr;12.50) vol 4,952<br>1m 09:15 Up (12.47&rarr;12.50) vol 152</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>missing: 5m 15:20</small><br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>missing: 5m 15:20</small><br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m trend (15:24 and 15:27 same), 1m volume (15:28 &gt; 15:29), 1m </small></td>
 </tr>
 
 <tr>
@@ -22065,7 +22065,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Down / 3m 15:24 Up / 1m 15:28 Flat</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Down (1536.50&rarr;1534.10) vol 13<br>3m 09:15 Down (1536.50&rarr;1534.10) vol 13<br>1m 09:15 Down (1536.50&rarr;1535.80) vol 6</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m volume (15:24 &gt; 15:27), 3m trend (15:24 and 15:27 same), 1m </small></td>
 </tr>
 
 <tr>
@@ -22078,7 +22078,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge pass">PASS</span><br><small>5m 15:20 Down / 3m 15:24 Down / 1m 15:28 Down</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Up (697.45&rarr;705.50) vol 16,857<br>3m 09:15 Up (697.45&rarr;701.30) vol 14,613<br>1m 09:15 Down (697.45&rarr;695.85) vol 8,932</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m volume (15:24 &gt; 15:27), morning 09:15 candles</small></td>
 </tr>
 
 <tr>
@@ -22091,7 +22091,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Flat / 3m 15:24 Up / 1m 15:28 Down</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Up (2442.00&rarr;2467.90) vol 950<br>3m 09:15 Up (2442.00&rarr;2470.00) vol 782<br>1m 09:15 Up (2442.00&rarr;2446.20) vol 204</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m volume (15:24 &gt; 15:27), 3m trend (15:24 and 15:27 same), 1m </small></td>
 </tr>
 
 <tr>
@@ -22104,7 +22104,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Up / 3m 15:24 Down / 1m 15:28 Up</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Up (366.90&rarr;368.55) vol 89,841<br>3m 09:15 Up (366.90&rarr;369.00) vol 63,426<br>1m 09:15 Up (366.90&rarr;369.55) vol 45,944</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m trend (15:24 and 15:27 same), alignment (5m 15:20 = 3m 15:24</small></td>
 </tr>
 
 <tr>
@@ -22117,7 +22117,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Up / 3m 15:24 Down / 1m 15:28 Flat</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Down (1103.90&rarr;1095.90) vol 17,314<br>3m 09:15 Down (1103.90&rarr;1091.00) vol 11,821<br>1m 09:15 Down (1103.90&rarr;1100.20) vol 4,588</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m trend (15:24 and 15:27 same), 1m volume (15:28 &gt; 15:29), 1m </small></td>
 </tr>
 
 <tr>
@@ -22130,7 +22130,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Up / 3m 15:24 Up / 1m 15:28 Down</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Up (542.40&rarr;560.70) vol 18,039<br>3m 09:15 Up (542.40&rarr;553.05) vol 7,463<br>1m 09:15 Up (542.40&rarr;547.85) vol 1,060</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 1m trend (15:28 and 15:29 same), alignment (5m 15:20 = 3m 15:24</small></td>
 </tr>
 
 <tr>
@@ -22143,7 +22143,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Up / 3m 15:24 Down / 1m 15:28 Flat</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Up (558.00&rarr;564.00) vol 31,824<br>3m 09:15 Up (558.00&rarr;563.30) vol 19,178<br>1m 09:15 Up (558.00&rarr;561.85) vol 4,351</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>Yahoo check: fails: 3m trend (15:24 and 15:27 same), 1m trend (15:28 and 15:29 same), alignment (5m 15:20 = 3m</small></td>
 </tr>
 
 <tr>
@@ -22156,7 +22156,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Up / 3m 15:24 Down / 1m 15:28 Up</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Up (88.73&rarr;88.78) vol 75,199<br>3m 09:15 Down (88.73&rarr;88.65) vol 56,200<br>1m 09:15 Down (88.73&rarr;88.56) vol 17,647</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m volume (15:24 &gt; 15:27), 3m trend (15:24 and 15:27 same), ali</small></td>
 </tr>
 
 <tr>
@@ -22169,7 +22169,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Flat / 3m 15:24 Flat / 1m 15:28 Flat</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Up (381.65&rarr;384.40) vol 176,505<br>3m 09:15 Up (381.65&rarr;383.75) vol 150,202<br>1m 09:15 Up (381.65&rarr;382.50) vol 35,778</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>missing: 5m 15:20, 5m 15:25, 3m 15:24, 3m 15:27, 1m 15:28, 1m 15:29</small><br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>missing: 5m 15:20, 5m 15:25, 3m 15:24, 3m 15:27, 1m 15:28, 1m 15:29</small><br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m volume (15:24 &gt; 15:27), 3m trend (15:24 and 15:27 same), 1m </small></td>
 </tr>
 
 <tr>
@@ -22182,7 +22182,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge pass">PASS</span><br><small>5m 15:20 Up / 3m 15:24 Up / 1m 15:28 Up</small></td>
 <td><span class="badge pass">PASS</span><br><small>5m 09:15 Up (103.90&rarr;104.05) vol 66,320<br>3m 09:15 Up (103.90&rarr;103.96) vol 35,855<br>1m 09:15 Up (103.90&rarr;103.93) vol 11,187</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>Yahoo check: fails: 3m trend (15:24 and 15:27 same), 1m trend (15:28 and 15:29 same)</small></td>
 </tr>
 
 <tr>
@@ -22195,7 +22195,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Flat / 3m 15:24 Flat / 1m 15:28 Flat</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Flat (306.25&rarr;306.25) vol 319,309<br>3m 09:15 Down (306.25&rarr;305.45) vol 265,940<br>1m 09:15 Up (306.25&rarr;307.20) vol 106,100</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>missing: 5m 15:20, 5m 15:25, 3m 15:24, 3m 15:27, 1m 15:28, 1m 15:29</small><br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>missing: 5m 15:20, 5m 15:25, 3m 15:24, 3m 15:27, 1m 15:28, 1m 15:29</small><br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m volume (15:24 &gt; 15:27), 3m trend (15:24 and 15:27 same), 1m </small></td>
 </tr>
 
 <tr>
@@ -22208,7 +22208,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Down / 3m 15:24 Down / 1m 15:28 Flat</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Up (329.75&rarr;336.10) vol 248,080<br>3m 09:15 Up (329.75&rarr;332.85) vol 165,142<br>1m 09:15 Up (329.75&rarr;331.45) vol 69,547</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m trend (15:24 and 15:27 same), 1m trend (15:28 and 15:29 same</small></td>
 </tr>
 
 <tr>
@@ -22221,7 +22221,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Down / 3m 15:24 Down / 1m 15:28 Up</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Down (109.90&rarr;109.16) vol 14,970<br>3m 09:15 Down (109.90&rarr;109.01) vol 13,705<br>1m 09:15 Up (109.90&rarr;110.00) vol 2,476</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m trend (15:24 and 15:27 same), 1m volume (15:28 &gt; 15:29), ali</small></td>
 </tr>
 
 <tr>
@@ -22234,7 +22234,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Down / 3m 15:24 Up / 1m 15:28 Down</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Up (230.50&rarr;235.20) vol 19,098<br>3m 09:15 Up (230.50&rarr;233.50) vol 5,431<br>1m 09:15 Up (230.50&rarr;232.00) vol 1,962</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m volume (15:24 &gt; 15:27), 3m trend (15:24 and 15:27 same), 1m </small></td>
 </tr>
 
 <tr>
@@ -22247,7 +22247,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Up / 3m 15:24 Down / 1m 15:28 Down</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Up (89.40&rarr;90.00) vol 7,514<br>3m 09:15 Up (89.40&rarr;90.00) vol 6,605<br>1m 09:15 Up (89.40&rarr;90.85) vol 1,912</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 1m volume (15:28 &gt; 15:29), alignment (5m 15:20 = 3m 15:24 = 1m </small></td>
 </tr>
 
 <tr>
@@ -22260,7 +22260,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Down / 3m 15:24 Flat / 1m 15:28 Flat</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Flat (29.50&rarr;29.50) vol 1<br>3m 09:15 missing<br>1m 09:15 missing</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>missing: 3m 09:15, 1m 09:15, 1m 15:29</small><br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>missing: 3m 09:15, 1m 09:15, 1m 15:29</small><br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m trend (15:24 and 15:27 same), 1m volume (15:28 &gt; 15:29), 1m </small></td>
 </tr>
 
 <tr>
@@ -22273,7 +22273,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Up / 3m 15:24 Up / 1m 15:28 Down</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Down (297.00&rarr;296.30) vol 19,607<br>3m 09:15 Up (297.00&rarr;297.15) vol 6,772<br>1m 09:15 Up (297.00&rarr;297.95) vol 2,204</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m trend (15:24 and 15:27 same), 1m volume (15:28 &gt; 15:29), ali</small></td>
 </tr>
 
 <tr>
@@ -22286,7 +22286,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Down / 3m 15:24 Up / 1m 15:28 Flat</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Flat (131.50&rarr;131.50) vol 13<br>3m 09:15 Flat (131.50&rarr;131.50) vol 13<br>1m 09:15 Flat (131.50&rarr;131.50) vol 13</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m trend (15:24 and 15:27 same), 1m volume (15:28 &gt; 15:29), 1m </small></td>
 </tr>
 
 <tr>
@@ -22949,7 +22949,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Down / 3m 15:24 Flat / 1m 15:28 Flat</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Up (60.09&rarr;60.16) vol 1,033<br>3m 09:15 Up (60.09&rarr;60.16) vol 1,033<br>1m 09:15 Up (60.09&rarr;60.16) vol 1,033</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>missing: 1m 15:28</small><br><small>Yahoo check: fails: 3m trend (15:24 and 15:27 same), 1m volume (15:28 &gt; 15:29), 1m trend (15:28 and 15:29 same</small></td>
+<td>OK (TradingView)<br><small>missing: 1m 15:28</small><br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m trend (15:24 and 15:27 same), 1m volume (15:28 &gt; 15:29), 1m </small></td>
 </tr>
 
 <tr>
@@ -23014,7 +23014,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Flat / 3m 15:24 Down / 1m 15:28 Flat</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Up (17.50&rarr;17.51) vol 146<br>3m 09:15 Up (17.50&rarr;17.51) vol 146<br>1m 09:15 Up (17.50&rarr;17.51) vol 146</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>missing: 1m 15:28</small><br><small>Yahoo check: fails: 3m trend (15:24 and 15:27 same), 1m volume (15:28 &gt; 15:29), 1m trend (15:28 and 15:29 same</small></td>
+<td>OK (TradingView)<br><small>missing: 1m 15:28</small><br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m trend (15:24 and 15:27 same), 1m volume (15:28 &gt; 15:29), 1m </small></td>
 </tr>
 
 <tr>
@@ -23118,7 +23118,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Up / 3m 15:24 Flat / 1m 15:28 Flat</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 missing<br>3m 09:15 missing<br>1m 09:15 missing</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>missing: 5m 09:15, 3m 09:15, 1m 09:15</small><br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m volume (15:24 &gt; 15:27), 3m trend (15:24 and 15:27 same), 1m </small></td>
+<td>OK (TradingView)<br><small>missing: 5m 09:15, 3m 09:15, 1m 09:15</small><br><small>Yahoo check: fails: 3m volume (15:24 &gt; 15:27), 3m trend (15:24 and 15:27 same), 1m volume (15:28 &gt; 15:29), 1m </small></td>
 </tr>
 
 <tr>
@@ -23248,7 +23248,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Down / 3m 15:24 Up / 1m 15:28 Flat</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Down (323.00&rarr;322.80) vol 3<br>3m 09:15 Down (323.00&rarr;322.80) vol 3<br>1m 09:15 Down (323.00&rarr;322.80) vol 3</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check: fails: 3m trend (15:24 and 15:27 same), 1m volume (15:28 &gt; 15:29), 1m trend (15:28 and 15:29 same</small></td>
+<td>OK (TradingView)<br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m trend (15:24 and 15:27 same), 1m volume (15:28 &gt; 15:29), 1m </small></td>
 </tr>
 
 <tr>
@@ -23755,7 +23755,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge pass">PASS</span><br><small>5m 15:20 Up / 3m 15:24 Up / 1m 15:28 Up</small></td>
 <td><span class="badge pass">PASS</span><br><small>5m 09:15 Up (68.81&rarr;69.09) vol 235,175<br>3m 09:15 Up (68.81&rarr;69.32) vol 97,414<br>1m 09:15 Up (68.81&rarr;69.20) vol 18,316</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m volume (15:24 &gt; 15:27), 3m trend (15:24 and 15:27 same), 1m </small></td>
+<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
 </tr>
 
 <tr>
@@ -23768,7 +23768,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Up / 3m 15:24 Down / 1m 15:28 Down</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Up (1028.00&rarr;1029.10) vol 15,170<br>3m 09:15 Down (1028.00&rarr;1025.50) vol 6,827<br>1m 09:15 Down (1028.00&rarr;1022.80) vol 2,708</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 1m volume (15:28 &gt; 15:29), alignment (5m 15:20 = 3m 15:24 = 1m </small></td>
+<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
 </tr>
 
 <tr>
@@ -23781,7 +23781,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Down / 3m 15:24 Down / 1m 15:28 Up</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Down (88.82&rarr;88.64) vol 24,134<br>3m 09:15 Down (88.82&rarr;88.36) vol 11,523<br>1m 09:15 Down (88.82&rarr;88.76) vol 6,757</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m trend (15:24 and 15:27 same), 1m volume (15:28 &gt; 15:29), 1m </small></td>
+<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
 </tr>
 
 <tr>
@@ -23794,7 +23794,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Flat / 3m 15:24 Flat / 1m 15:28 Flat</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Down (24.40&rarr;24.37) vol 288<br>3m 09:15 Flat (24.40&rarr;24.40) vol 144<br>1m 09:15 missing</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>missing: 1m 09:15, 5m 15:20, 1m 15:28</small><br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m volume (15:24 &gt; 15:27), 3m trend (15:24 and 15:27 same), 1m </small></td>
+<td>OK (TradingView)<br><small>missing: 1m 09:15, 5m 15:20, 1m 15:28</small><br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
 </tr>
 
 <tr>
@@ -23807,7 +23807,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Flat / 3m 15:24 Flat / 1m 15:28 Flat</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Flat (593.50&rarr;593.50) vol 56,178<br>3m 09:15 Up (593.50&rarr;593.60) vol 49,020<br>1m 09:15 Up (593.50&rarr;595.45) vol 26,681</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>missing: 5m 15:20, 5m 15:25, 3m 15:24, 3m 15:27, 1m 15:28, 1m 15:29</small><br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m volume (15:24 &gt; 15:27), 3m trend (15:24 and 15:27 same), 1m </small></td>
+<td>OK (TradingView)<br><small>missing: 5m 15:20, 5m 15:25, 3m 15:24, 3m 15:27, 1m 15:28, 1m 15:29</small><br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
 </tr>
 
 <tr>
@@ -23820,7 +23820,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Flat / 3m 15:24 Flat / 1m 15:28 Down</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Up (504.50&rarr;505.00) vol 35,507<br>3m 09:15 Up (504.50&rarr;504.75) vol 21,297<br>1m 09:15 Down (504.50&rarr;504.25) vol 8,808</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check: fails: 3m trend (15:24 and 15:27 same), 1m trend (15:28 and 15:29 same), alignment (5m 15:20 = 3m</small></td>
+<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
 </tr>
 
 <tr>
@@ -23833,7 +23833,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Flat / 3m 15:24 Flat / 1m 15:28 Flat</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Down (1780.00&rarr;1779.10) vol 293,379<br>3m 09:15 Up (1780.00&rarr;1783.10) vol 243,908<br>1m 09:15 Up (1780.00&rarr;1784.40) vol 175,167</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>missing: 5m 15:20, 5m 15:25, 3m 15:24, 3m 15:27, 1m 15:28, 1m 15:29</small><br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m volume (15:24 &gt; 15:27), 3m trend (15:24 and 15:27 same), 1m </small></td>
+<td>OK (TradingView)<br><small>missing: 5m 15:20, 5m 15:25, 3m 15:24, 3m 15:27, 1m 15:28, 1m 15:29</small><br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
 </tr>
 
 <tr>
@@ -23846,7 +23846,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Flat / 3m 15:24 Flat / 1m 15:28 Flat</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Up (1056.00&rarr;1059.05) vol 2,031,686<br>3m 09:15 Up (1056.00&rarr;1059.30) vol 1,683,046<br>1m 09:15 Up (1056.00&rarr;1056.75) vol 1,007,689</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>missing: 5m 15:20, 5m 15:25, 3m 15:24, 3m 15:27, 1m 15:28, 1m 15:29</small><br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m volume (15:24 &gt; 15:27), 3m trend (15:24 and 15:27 same), 1m </small></td>
+<td>OK (TradingView)<br><small>missing: 5m 15:20, 5m 15:25, 3m 15:24, 3m 15:27, 1m 15:28, 1m 15:29</small><br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
 </tr>
 
 <tr>
@@ -23859,7 +23859,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Flat / 3m 15:24 Flat / 1m 15:28 Flat</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Down (52.40&rarr;52.29) vol 199<br>3m 09:15 Down (52.40&rarr;52.34) vol 196<br>1m 09:15 Down (52.40&rarr;51.50) vol 195</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>missing: 1m 15:28</small><br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m volume (15:24 &gt; 15:27), 3m trend (15:24 and 15:27 same), 1m </small></td>
+<td>OK (TradingView)<br><small>missing: 1m 15:28</small><br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
 </tr>
 
 <tr>
@@ -23872,7 +23872,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Up / 3m 15:24 Down / 1m 15:28 Down</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Up (3561.00&rarr;3582.60) vol 2,305<br>3m 09:15 Up (3561.00&rarr;3589.20) vol 2,083<br>1m 09:15 Up (3561.00&rarr;3570.30) vol 790</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m volume (15:24 &gt; 15:27), 1m volume (15:28 &gt; 15:29), alignment</small></td>
+<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
 </tr>
 
 <tr>
@@ -23885,7 +23885,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Flat / 3m 15:24 Flat / 1m 15:28 Down</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Down (128.02&rarr;127.21) vol 2,427<br>3m 09:15 Up (128.02&rarr;128.08) vol 779<br>1m 09:15 Up (128.02&rarr;128.08) vol 2</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>missing: 3m 15:24</small><br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m volume (15:24 &gt; 15:27), 3m trend (15:24 and 15:27 same), 1m </small></td>
+<td>OK (TradingView)<br><small>missing: 3m 15:24</small><br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
 </tr>
 
 <tr>
@@ -23898,7 +23898,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Down / 3m 15:24 Up / 1m 15:28 Down</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Up (1065.00&rarr;1078.50) vol 10,256<br>3m 09:15 Up (1065.00&rarr;1077.20) vol 6,595<br>1m 09:15 Up (1065.00&rarr;1080.00) vol 4,382</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m volume (15:24 &gt; 15:27), 3m trend (15:24 and 15:27 same), 1m </small></td>
+<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
 </tr>
 
 <tr>
@@ -23911,7 +23911,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge pass">PASS</span><br><small>5m 15:20 Up / 3m 15:24 Up / 1m 15:28 Up</small></td>
 <td><span class="badge pass">PASS</span><br><small>5m 09:15 Up (263.89&rarr;267.97) vol 342,951<br>3m 09:15 Up (263.89&rarr;267.19) vol 207,485<br>1m 09:15 Up (263.89&rarr;265.15) vol 66,553</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 1m volume (15:28 &gt; 15:29), 1m trend (15:28 and 15:29 same), mor</small></td>
+<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
 </tr>
 
 <tr>
@@ -23924,7 +23924,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Up / 3m 15:24 Down / 1m 15:28 Flat</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Up (36.88&rarr;37.09) vol 8,044<br>3m 09:15 Up (36.88&rarr;37.35) vol 4,239<br>1m 09:15 Up (36.88&rarr;37.36) vol 758</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check: fails: 3m volume (15:24 &gt; 15:27), 3m trend (15:24 and 15:27 same), 1m volume (15:28 &gt; 15:29), 1m </small></td>
+<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
 </tr>
 
 <tr>
@@ -23937,7 +23937,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Down / 3m 15:24 Up / 1m 15:28 Flat</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Up (105.21&rarr;105.64) vol 1,172<br>3m 09:15 Up (105.21&rarr;105.64) vol 1,172<br>1m 09:15 Up (105.21&rarr;105.79) vol 1,042</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>missing: 1m 15:28</small><br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m volume (15:24 &gt; 15:27), 3m trend (15:24 and 15:27 same), 1m </small></td>
+<td>OK (TradingView)<br><small>missing: 1m 15:28</small><br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
 </tr>
 
 <tr>
@@ -23950,7 +23950,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Up / 3m 15:24 Down / 1m 15:28 Up</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Down (75.15&rarr;75.10) vol 30,603<br>3m 09:15 Down (75.15&rarr;75.00) vol 15,447<br>1m 09:15 Down (75.15&rarr;75.08) vol 7,459</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m trend (15:24 and 15:27 same), 1m volume (15:28 &gt; 15:29), ali</small></td>
+<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
 </tr>
 
 <tr>
@@ -23963,7 +23963,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Down / 3m 15:24 Flat / 1m 15:28 Down</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Down (1540.80&rarr;1527.10) vol 1,517<br>3m 09:15 Down (1540.80&rarr;1526.90) vol 1,006<br>1m 09:15 Down (1540.80&rarr;1526.80) vol 839</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m trend (15:24 and 15:27 same), 1m volume (15:28 &gt; 15:29), 1m </small></td>
+<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
 </tr>
 
 <tr>
@@ -23976,7 +23976,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Flat / 3m 15:24 Flat / 1m 15:28 Flat</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Flat (156.45&rarr;156.45) vol 2<br>3m 09:15 Flat (156.45&rarr;156.45) vol 2<br>1m 09:15 Flat (156.45&rarr;156.45) vol 1</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>missing: 5m 15:20, 5m 15:25, 3m 15:24, 3m 15:27, 1m 15:28, 1m 15:29</small><br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m volume (15:24 &gt; 15:27), 3m trend (15:24 and 15:27 same), 1m </small></td>
+<td>OK (TradingView)<br><small>missing: 5m 15:20, 5m 15:25, 3m 15:24, 3m 15:27, 1m 15:28, 1m 15:29</small><br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
 </tr>
 
 <tr>
@@ -23989,7 +23989,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Flat / 3m 15:24 Up / 1m 15:28 Flat</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Up (14.53&rarr;14.54) vol 503<br>3m 09:15 Flat (14.53&rarr;14.53) vol 6<br>1m 09:15 Flat (14.53&rarr;14.53) vol 6</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>missing: 5m 15:20</small><br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m volume (15:24 &gt; 15:27), 3m trend (15:24 and 15:27 same), 1m </small></td>
+<td>OK (TradingView)<br><small>missing: 5m 15:20</small><br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
 </tr>
 
 <tr>
@@ -24002,7 +24002,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge pass">PASS</span><br><small>5m 15:20 Down / 3m 15:24 Down / 1m 15:28 Down</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Up (3126.00&rarr;3140.60) vol 3,315<br>3m 09:15 Up (3126.00&rarr;3136.50) vol 2,614<br>1m 09:15 Up (3126.00&rarr;3149.70) vol 1,386</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m trend (15:24 and 15:27 same), 1m trend (15:28 and 15:29 same</small></td>
+<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
 </tr>
 
 <tr>
@@ -24015,7 +24015,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Up / 3m 15:24 Down / 1m 15:28 Down</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Down (197.98&rarr;196.00) vol 2,470<br>3m 09:15 Down (197.98&rarr;196.00) vol 2,390<br>1m 09:15 Down (197.98&rarr;196.88) vol 803</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m volume (15:24 &gt; 15:27), 1m volume (15:28 &gt; 15:29), alignment</small></td>
+<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
 </tr>
 
 <tr>
@@ -24028,7 +24028,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Up / 3m 15:24 Down / 1m 15:28 Up</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Down (896.90&rarr;889.35) vol 322<br>3m 09:15 Up (896.90&rarr;897.35) vol 3<br>1m 09:15 Flat (896.90&rarr;896.90) vol 1</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m volume (15:24 &gt; 15:27), 1m trend (15:28 and 15:29 same), ali</small></td>
+<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
 </tr>
 
 <tr>
@@ -24041,7 +24041,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Flat / 3m 15:24 Down / 1m 15:28 Flat</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 missing<br>3m 09:15 missing<br>1m 09:15 missing</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>missing: 5m 09:15, 3m 09:15, 1m 09:15</small><br><small>Yahoo check: fails: 1m volume (15:28 &gt; 15:29), 1m trend (15:28 and 15:29 same), alignment (5m 15:20 = 3m 15:24</small></td>
+<td>OK (TradingView)<br><small>missing: 5m 09:15, 3m 09:15, 1m 09:15</small><br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
 </tr>
 
 <tr>
@@ -24054,7 +24054,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Flat / 3m 15:24 Flat / 1m 15:28 Flat</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 missing<br>3m 09:15 missing<br>1m 09:15 missing</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>missing: 5m 09:15, 3m 09:15, 1m 09:15, 5m 15:20, 3m 15:24, 1m 15:28</small><br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m volume (15:24 &gt; 15:27), 3m trend (15:24 and 15:27 same), 1m </small></td>
+<td>OK (TradingView)<br><small>missing: 5m 09:15, 3m 09:15, 1m 09:15, 5m 15:20, 3m 15:24, 1m 15:28</small><br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
 </tr>
 
 <tr>
@@ -24067,7 +24067,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Up / 3m 15:24 Up / 1m 15:28 Flat</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Up (322.95&rarr;328.50) vol 93,791<br>3m 09:15 Up (322.95&rarr;326.85) vol 67,974<br>1m 09:15 Up (322.95&rarr;325.40) vol 21,282</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 1m trend (15:28 and 15:29 same), alignment (5m 15:20 = 3m 15:24</small></td>
+<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
 </tr>
 
 <tr>
@@ -24080,7 +24080,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Down / 3m 15:24 Down / 1m 15:28 Up</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Up (1175.00&rarr;1183.60) vol 9,100<br>3m 09:15 Up (1175.00&rarr;1176.90) vol 4,460<br>1m 09:15 Down (1175.00&rarr;1168.70) vol 2,626</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check: fails: 3m volume (15:24 &gt; 15:27), 3m trend (15:24 and 15:27 same), 1m volume (15:28 &gt; 15:29), 1m </small></td>
+<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
 </tr>
 
 <tr>
@@ -24093,7 +24093,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Flat / 3m 15:24 Down / 1m 15:28 Up</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Up (5.25&rarr;5.29) vol 388,440<br>3m 09:15 Up (5.25&rarr;5.28) vol 349,781<br>1m 09:15 Up (5.25&rarr;5.27) vol 43,191</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m trend (15:24 and 15:27 same), alignment (5m 15:20 = 3m 15:24</small></td>
+<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
 </tr>
 
 <tr>
@@ -24106,7 +24106,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Up / 3m 15:24 Down / 1m 15:28 Down</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Up (68.50&rarr;68.75) vol 22,083<br>3m 09:15 Down (68.50&rarr;68.47) vol 20,986<br>1m 09:15 Up (68.50&rarr;68.51) vol 3,840</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check: fails: 3m trend (15:24 and 15:27 same), 1m volume (15:28 &gt; 15:29), 1m trend (15:28 and 15:29 same</small></td>
+<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
 </tr>
 
 <tr>
@@ -24119,7 +24119,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge pass">PASS</span><br><small>5m 15:20 Down / 3m 15:24 Down / 1m 15:28 Down</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Up (215.61&rarr;218.39) vol 241<br>3m 09:15 Up (215.61&rarr;218.39) vol 75<br>1m 09:15 Up (215.61&rarr;217.00) vol 5</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m volume (15:24 &gt; 15:27), 3m trend (15:24 and 15:27 same), 1m </small></td>
+<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
 </tr>
 
 <tr>
@@ -24132,7 +24132,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Up / 3m 15:24 Up / 1m 15:28 Flat</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Up (17.35&rarr;18.09) vol 1,231<br>3m 09:15 Up (17.35&rarr;18.10) vol 988<br>1m 09:15 Up (17.35&rarr;18.14) vol 978</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check: fails: 3m trend (15:24 and 15:27 same), 1m volume (15:28 &gt; 15:29), 1m trend (15:28 and 15:29 same</small></td>
+<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
 </tr>
 
 <tr>
@@ -24145,7 +24145,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge pass">PASS</span><br><small>5m 15:20 Up / 3m 15:24 Up / 1m 15:28 Up</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Up (346.00&rarr;346.80) vol 60,292<br>3m 09:15 Down (346.00&rarr;342.35) vol 48,937<br>1m 09:15 Down (346.00&rarr;338.10) vol 26,772</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m volume (15:24 &gt; 15:27), 1m volume (15:28 &gt; 15:29), 1m trend </small></td>
+<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
 </tr>
 
 <tr>
@@ -24158,7 +24158,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Down / 3m 15:24 Up / 1m 15:28 Up</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Up (413.00&rarr;414.95) vol 40,795<br>3m 09:15 Up (413.00&rarr;416.40) vol 31,296<br>1m 09:15 Down (413.00&rarr;411.35) vol 3,591</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 1m volume (15:28 &gt; 15:29), 1m trend (15:28 and 15:29 same), ali</small></td>
+<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
 </tr>
 
 <tr>
@@ -24171,7 +24171,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Up / 3m 15:24 Up / 1m 15:28 Down</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Up (564.90&rarr;576.60) vol 16,601<br>3m 09:15 Up (564.90&rarr;575.45) vol 11,907<br>1m 09:15 Down (564.90&rarr;563.60) vol 570</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m volume (15:24 &gt; 15:27), 3m trend (15:24 and 15:27 same), 1m </small></td>
+<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
 </tr>
 
 <tr>
@@ -24184,7 +24184,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Down / 3m 15:24 Down / 1m 15:28 Up</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Up (710.00&rarr;711.75) vol 11,849<br>3m 09:15 Up (710.00&rarr;713.30) vol 10,173<br>1m 09:15 Up (710.00&rarr;713.65) vol 3,245</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m trend (15:24 and 15:27 same), 1m trend (15:28 and 15:29 same</small></td>
+<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
 </tr>
 
 <tr>
@@ -24197,7 +24197,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Flat / 3m 15:24 Flat / 1m 15:28 Flat</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Up (535.35&rarr;540.20) vol 1<br>3m 09:15 Up (535.35&rarr;540.20) vol 1<br>1m 09:15 missing</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>missing: 1m 09:15, 5m 15:20, 1m 15:28</small><br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m volume (15:24 &gt; 15:27), 3m trend (15:24 and 15:27 same), 1m </small></td>
+<td>OK (TradingView)<br><small>missing: 1m 09:15, 5m 15:20, 1m 15:28</small><br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
 </tr>
 
 <tr>
@@ -24210,7 +24210,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Flat / 3m 15:24 Flat / 1m 15:28 Flat</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 missing<br>3m 09:15 missing<br>1m 09:15 missing</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>missing: 5m 09:15, 3m 09:15, 1m 09:15, 5m 15:20, 1m 15:29</small><br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m trend (15:24 and 15:27 same), 1m volume (15:28 &gt; 15:29), 1m </small></td>
+<td>OK (TradingView)<br><small>missing: 5m 09:15, 3m 09:15, 1m 09:15, 5m 15:20, 1m 15:29</small><br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
 </tr>
 
 <tr>
@@ -24223,7 +24223,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Up / 3m 15:24 Flat / 1m 15:28 Flat</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Up (2.02&rarr;2.13) vol 1,270<br>3m 09:15 Up (2.02&rarr;2.13) vol 1,132<br>1m 09:15 Flat (2.02&rarr;2.02) vol 1,122</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>missing: 3m 15:24, 1m 15:28</small><br><small>Yahoo check: fails: 3m volume (15:24 &gt; 15:27), 3m trend (15:24 and 15:27 same), 1m volume (15:28 &gt; 15:29), 1m </small></td>
+<td>OK (TradingView)<br><small>missing: 3m 15:24, 1m 15:28</small><br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
 </tr>
 
 <tr>
@@ -24236,7 +24236,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge pass">PASS</span><br><small>5m 15:20 Up / 3m 15:24 Up / 1m 15:28 Up</small></td>
 <td><span class="badge pass">PASS</span><br><small>5m 09:15 Up (907.00&rarr;914.75) vol 18,179<br>3m 09:15 Up (907.00&rarr;909.00) vol 9,246<br>1m 09:15 Up (907.00&rarr;912.00) vol 2,570</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m trend (15:24 and 15:27 same), 1m volume (15:28 &gt; 15:29), 1m </small></td>
+<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
 </tr>
 
 <tr>
@@ -24249,7 +24249,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Flat / 3m 15:24 Flat / 1m 15:28 Flat</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Up (616.90&rarr;620.45) vol 146<br>3m 09:15 Down (616.90&rarr;616.80) vol 100<br>1m 09:15 Flat (616.90&rarr;616.90) vol 4</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>missing: 1m 15:28</small><br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m trend (15:24 and 15:27 same), 1m volume (15:28 &gt; 15:29), 1m </small></td>
+<td>OK (TradingView)<br><small>missing: 1m 15:28</small><br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
 </tr>
 
 <tr>
@@ -24262,7 +24262,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Up / 3m 15:24 Flat / 1m 15:28 Flat</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Flat (2.86&rarr;2.86) vol 29,279<br>3m 09:15 Up (2.86&rarr;2.88) vol 22,963<br>1m 09:15 Flat (2.86&rarr;2.86) vol 17,728</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m volume (15:24 &gt; 15:27), 3m trend (15:24 and 15:27 same), 1m </small></td>
+<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
 </tr>
 
 <tr>
@@ -24275,7 +24275,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Up / 3m 15:24 Flat / 1m 15:28 Flat</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Flat (138.97&rarr;138.97) vol 1<br>3m 09:15 missing<br>1m 09:15 missing</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>missing: 3m 09:15, 1m 09:15</small><br><small>Yahoo check: fails: 3m volume (15:24 &gt; 15:27), 3m trend (15:24 and 15:27 same), 1m volume (15:28 &gt; 15:29), 1m </small></td>
+<td>OK (TradingView)<br><small>missing: 3m 09:15, 1m 09:15</small><br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
 </tr>
 
 <tr>
@@ -24288,7 +24288,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Down / 3m 15:24 Up / 1m 15:28 Down</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Up (3108.40&rarr;3157.60) vol 6,260<br>3m 09:15 Up (3108.40&rarr;3162.00) vol 3,207<br>1m 09:15 Up (3108.40&rarr;3144.00) vol 788</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m volume (15:24 &gt; 15:27), 3m trend (15:24 and 15:27 same), 1m </small></td>
+<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
 </tr>
 
 <tr>
@@ -24314,7 +24314,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge pass">PASS</span><br><small>5m 15:20 Up / 3m 15:24 Up / 1m 15:28 Up</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Down (121.99&rarr;121.72) vol 2,302<br>3m 09:15 Down (121.99&rarr;121.84) vol 1,382<br>1m 09:15 Down (121.99&rarr;120.09) vol 156</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m volume (15:24 &gt; 15:27), 1m trend (15:28 and 15:29 same), mor</small></td>
+<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
 </tr>
 
 <tr>
@@ -25107,7 +25107,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Up / 3m 15:24 Down / 1m 15:28 Up</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Up (2381.40&rarr;2385.30) vol 518<br>3m 09:15 Down (2381.40&rarr;2372.00) vol 413<br>1m 09:15 Up (2381.40&rarr;2386.60) vol 93</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>Yahoo check: fails: 3m trend (15:24 and 15:27 same), alignment (5m 15:20 = 3m 15:24 = 1m 15:28), morning 09:15</small></td>
 </tr>
 
 <tr>
@@ -25120,7 +25120,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Down / 3m 15:24 Up / 1m 15:28 Up</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Up (519.60&rarr;524.05) vol 19,942<br>3m 09:15 Up (519.60&rarr;524.25) vol 12,492<br>1m 09:15 Up (519.60&rarr;522.45) vol 6,335</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m volume (15:24 &gt; 15:27), 1m trend (15:28 and 15:29 same), ali</small></td>
 </tr>
 
 <tr>
@@ -25133,7 +25133,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Up / 3m 15:24 Down / 1m 15:28 Down</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Up (234.00&rarr;236.92) vol 3,649<br>3m 09:15 Up (234.00&rarr;236.43) vol 3,013<br>1m 09:15 Flat (234.00&rarr;234.00) vol 842</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m trend (15:24 and 15:27 same), 1m volume (15:28 &gt; 15:29), 1m </small></td>
 </tr>
 
 <tr>
@@ -25146,7 +25146,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Up / 3m 15:24 Down / 1m 15:28 Down</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Up (937.10&rarr;949.70) vol 48,608<br>3m 09:15 Up (937.10&rarr;945.00) vol 35,500<br>1m 09:15 Down (937.10&rarr;935.25) vol 25,054</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>Yahoo check: fails: alignment (5m 15:20 = 3m 15:24 = 1m 15:28), morning 09:15 candles</small></td>
 </tr>
 
 <tr>
@@ -25159,7 +25159,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Up / 3m 15:24 Down / 1m 15:28 Flat</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Up (109.40&rarr;110.25) vol 29,995<br>3m 09:15 Up (109.40&rarr;110.01) vol 21,343<br>1m 09:15 Up (109.40&rarr;110.39) vol 10,722</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m volume (15:24 &gt; 15:27), 1m volume (15:28 &gt; 15:29), 1m trend </small></td>
 </tr>
 
 <tr>
@@ -25172,7 +25172,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Flat / 3m 15:24 Flat / 1m 15:28 Flat</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 missing<br>3m 09:15 missing<br>1m 09:15 missing</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>missing: 5m 09:15, 3m 09:15, 1m 09:15, 3m 15:24, 1m 15:28</small><br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>missing: 5m 09:15, 3m 09:15, 1m 09:15, 3m 15:24, 1m 15:28</small><br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m volume (15:24 &gt; 15:27), 3m trend (15:24 and 15:27 same), 1m </small></td>
 </tr>
 
 <tr>
@@ -25185,7 +25185,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge pass">PASS</span><br><small>5m 15:20 Down / 3m 15:24 Down / 1m 15:28 Down</small></td>
 <td><span class="badge pass">PASS</span><br><small>5m 09:15 Down (517.90&rarr;512.00) vol 1,012<br>3m 09:15 Down (517.90&rarr;510.60) vol 972<br>1m 09:15 Down (517.90&rarr;510.20) vol 356</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>Yahoo check: fails: 3m volume (15:24 &gt; 15:27), 1m trend (15:28 and 15:29 same)</small></td>
 </tr>
 
 <tr>
@@ -25198,7 +25198,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Down / 3m 15:24 Up / 1m 15:28 Up</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Up (95.82&rarr;96.50) vol 49,756<br>3m 09:15 Up (95.82&rarr;96.14) vol 40,324<br>1m 09:15 Down (95.82&rarr;95.22) vol 27,853</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m trend (15:24 and 15:27 same), 1m volume (15:28 &gt; 15:29), 1m </small></td>
 </tr>
 
 <tr>
@@ -25211,7 +25211,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge pass">PASS</span><br><small>5m 15:20 Up / 3m 15:24 Up / 1m 15:28 Up</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Down (5281.80&rarr;5245.00) vol 2,404<br>3m 09:15 Down (5281.80&rarr;5268.90) vol 1,604<br>1m 09:15 Down (5281.80&rarr;5254.90) vol 555</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m volume (15:24 &gt; 15:27), 3m trend (15:24 and 15:27 same), 1m </small></td>
 </tr>
 
 <tr>
@@ -25224,7 +25224,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Up / 3m 15:24 Down / 1m 15:28 Down</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Up (521.70&rarr;525.90) vol 40,076<br>3m 09:15 Up (521.70&rarr;527.70) vol 32,744<br>1m 09:15 Up (521.70&rarr;524.40) vol 14,775</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 1m volume (15:28 &gt; 15:29), alignment (5m 15:20 = 3m 15:24 = 1m </small></td>
 </tr>
 
 <tr>
@@ -25237,7 +25237,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Down / 3m 15:24 Up / 1m 15:28 Up</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Down (498.05&rarr;496.40) vol 23,216<br>3m 09:15 Down (498.05&rarr;494.55) vol 22,407<br>1m 09:15 Down (498.05&rarr;494.90) vol 11,985</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m trend (15:24 and 15:27 same), 1m volume (15:28 &gt; 15:29), 1m </small></td>
 </tr>
 
 <tr>
@@ -25250,7 +25250,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Up / 3m 15:24 Down / 1m 15:28 Up</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Down (34.49&rarr;34.41) vol 11,186<br>3m 09:15 Down (34.49&rarr;34.41) vol 9,425<br>1m 09:15 Down (34.49&rarr;34.46) vol 990</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m volume (15:24 &gt; 15:27), 3m trend (15:24 and 15:27 same), ali</small></td>
 </tr>
 
 <tr>
@@ -25263,7 +25263,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Down / 3m 15:24 Down / 1m 15:28 Up</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Down (1265.40&rarr;1251.20) vol 6,193<br>3m 09:15 Down (1265.40&rarr;1253.30) vol 3,576<br>1m 09:15 Down (1265.40&rarr;1258.00) vol 1,946</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m trend (15:24 and 15:27 same), alignment (5m 15:20 = 3m 15:24</small></td>
 </tr>
 
 <tr>
@@ -25276,7 +25276,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Flat / 3m 15:24 Flat / 1m 15:28 Flat</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Flat (438.20&rarr;438.20) vol 100<br>3m 09:15 Flat (438.20&rarr;438.20) vol 100<br>1m 09:15 Flat (438.20&rarr;438.20) vol 100</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>missing: 3m 15:24, 1m 15:28</small><br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>missing: 3m 15:24, 1m 15:28</small><br><small>Yahoo check: fails: 3m volume (15:24 &gt; 15:27), 3m trend (15:24 and 15:27 same), 1m volume (15:28 &gt; 15:29), 1m </small></td>
 </tr>
 
 <tr>
@@ -25289,7 +25289,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge pass">PASS</span><br><small>5m 15:20 Down / 3m 15:24 Down / 1m 15:28 Down</small></td>
 <td><span class="badge pass">PASS</span><br><small>5m 09:15 Down (650.00&rarr;649.70) vol 9,597<br>3m 09:15 Down (650.00&rarr;648.65) vol 6,622<br>1m 09:15 Down (650.00&rarr;645.45) vol 1,510</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>Yahoo check: fails: 3m trend (15:24 and 15:27 same), 1m volume (15:28 &gt; 15:29), 1m trend (15:28 and 15:29 same</small></td>
 </tr>
 
 <tr>
@@ -25302,7 +25302,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Flat / 3m 15:24 Flat / 1m 15:28 Flat</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Down (19047.00&rarr;19029.00) vol 5,286<br>3m 09:15 Down (19047.00&rarr;19011.00) vol 3,559<br>1m 09:15 Down (19047.00&rarr;18992.00) vol 1,514</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>missing: 5m 15:20, 5m 15:25, 3m 15:24, 3m 15:27, 1m 15:28, 1m 15:29</small><br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>missing: 5m 15:20, 5m 15:25, 3m 15:24, 3m 15:27, 1m 15:28, 1m 15:29</small><br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m volume (15:24 &gt; 15:27), 3m trend (15:24 and 15:27 same), 1m </small></td>
 </tr>
 
 <tr>
@@ -25315,7 +25315,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Up / 3m 15:24 Down / 1m 15:28 Up</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Up (111.92&rarr;113.77) vol 20,230<br>3m 09:15 Up (111.92&rarr;112.79) vol 9,205<br>1m 09:15 Up (111.92&rarr;112.11) vol 5,422</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 1m volume (15:28 &gt; 15:29), alignment (5m 15:20 = 3m 15:24 = 1m </small></td>
 </tr>
 
 <tr>
@@ -25328,7 +25328,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Up / 3m 15:24 Up / 1m 15:28 Flat</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Down (677.55&rarr;666.75) vol 1,893<br>3m 09:15 Down (677.55&rarr;670.00) vol 1,497<br>1m 09:15 Down (677.55&rarr;667.65) vol 1,068</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m trend (15:24 and 15:27 same), 1m volume (15:28 &gt; 15:29), 1m </small></td>
 </tr>
 
 <tr>
@@ -25341,7 +25341,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Down / 3m 15:24 Up / 1m 15:28 Up</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Down (552.30&rarr;551.00) vol 2,733<br>3m 09:15 Up (552.30&rarr;554.45) vol 1,288<br>1m 09:15 Down (552.30&rarr;550.40) vol 620</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m volume (15:24 &gt; 15:27), 1m volume (15:28 &gt; 15:29), 1m trend </small></td>
 </tr>
 
 <tr>
@@ -25354,7 +25354,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Flat / 3m 15:24 Flat / 1m 15:28 Flat</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Down (71.95&rarr;71.07) vol 237<br>3m 09:15 Down (71.95&rarr;71.07) vol 237<br>1m 09:15 Down (71.95&rarr;71.07) vol 237</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>missing: 5m 15:20, 3m 15:24, 1m 15:29</small><br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>missing: 5m 15:20, 3m 15:24, 1m 15:29</small><br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m volume (15:24 &gt; 15:27), 3m trend (15:24 and 15:27 same), 1m </small></td>
 </tr>
 
 <tr>
@@ -25367,7 +25367,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Flat / 3m 15:24 Flat / 1m 15:28 Flat</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Down (82.80&rarr;80.00) vol 246<br>3m 09:15 Down (82.80&rarr;81.60) vol 232<br>1m 09:15 Flat (82.80&rarr;82.80) vol 3</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>missing: 3m 15:24, 1m 15:28</small><br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>missing: 3m 15:24, 1m 15:28</small><br><small>Yahoo check: fails: 3m volume (15:24 &gt; 15:27), 3m trend (15:24 and 15:27 same), 1m volume (15:28 &gt; 15:29), 1m </small></td>
 </tr>
 
 <tr>
@@ -25380,7 +25380,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Up / 3m 15:24 Down / 1m 15:28 Up</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Up (105.90&rarr;108.60) vol 19,768<br>3m 09:15 Up (105.90&rarr;108.94) vol 7,339<br>1m 09:15 Up (105.90&rarr;107.00) vol 1,101</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 1m trend (15:28 and 15:29 same), alignment (5m 15:20 = 3m 15:24</small></td>
 </tr>
 
 <tr>
@@ -25393,7 +25393,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Flat / 3m 15:24 Flat / 1m 15:28 Flat</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Down (925.05&rarr;925.00) vol 84,929<br>3m 09:15 Up (925.05&rarr;925.15) vol 66,890<br>1m 09:15 Up (925.05&rarr;927.20) vol 38,686</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>missing: 5m 15:20, 5m 15:25, 3m 15:24, 3m 15:27, 1m 15:28, 1m 15:29</small><br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>missing: 5m 15:20, 5m 15:25, 3m 15:24, 3m 15:27, 1m 15:28, 1m 15:29</small><br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m volume (15:24 &gt; 15:27), 3m trend (15:24 and 15:27 same), 1m </small></td>
 </tr>
 
 <tr>
@@ -25536,7 +25536,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Flat / 3m 15:24 Flat / 1m 15:28 Flat</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Flat (87.24&rarr;87.24) vol 321<br>3m 09:15 Flat (87.24&rarr;87.24) vol 224<br>1m 09:15 Flat (87.24&rarr;87.24) vol 3</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check: fails: 3m trend (15:24 and 15:27 same), 1m volume (15:28 &gt; 15:29), 1m trend (15:28 and 15:29 same</small></td>
+<td>OK (TradingView)<br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m trend (15:24 and 15:27 same), 1m volume (15:28 &gt; 15:29), 1m </small></td>
 </tr>
 
 <tr>
@@ -26641,7 +26641,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Flat / 3m 15:24 Flat / 1m 15:28 Flat</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Down (3.80&rarr;3.60) vol 101,720<br>3m 09:15 Down (3.80&rarr;3.60) vol 15,802<br>1m 09:15 Down (3.80&rarr;3.63) vol 1,720</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check: fails: 3m trend (15:24 and 15:27 same), 1m trend (15:28 and 15:29 same), alignment (5m 15:20 = 3m</small></td>
+<td>OK (TradingView)<br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m trend (15:24 and 15:27 same), 1m trend (15:28 and 15:29 same</small></td>
 </tr>
 
 <tr>
@@ -28058,7 +28058,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Up / 3m 15:24 Up / 1m 15:28 Flat</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Down (6.95&rarr;6.90) vol 1,391<br>3m 09:15 Up (6.95&rarr;6.98) vol 534<br>1m 09:15 Flat (6.95&rarr;6.95) vol 2</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>missing: 1m 15:29</small><br><small>Yahoo check: fails: 1m volume (15:28 &gt; 15:29), 1m trend (15:28 and 15:29 same), morning 09:15 candles, missing</small></td>
+<td>OK (TradingView)<br><small>missing: 1m 15:29</small><br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 1m volume (15:28 &gt; 15:29), 1m trend (15:28 and 15:29 same), mor</small></td>
 </tr>
 
 <tr>
@@ -28149,7 +28149,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Down / 3m 15:24 Flat / 1m 15:28 Flat</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Up (1138.30&rarr;1170.00) vol 337<br>3m 09:15 Flat (1138.30&rarr;1138.30) vol 5<br>1m 09:15 Flat (1138.30&rarr;1138.30) vol 5</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>missing: 3m 15:24</small><br><small>Yahoo check: fails: 3m volume (15:24 &gt; 15:27), 3m trend (15:24 and 15:27 same), 1m volume (15:28 &gt; 15:29), 1m </small></td>
+<td>OK (TradingView)<br><small>missing: 3m 15:24</small><br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m volume (15:24 &gt; 15:27), 3m trend (15:24 and 15:27 same), 1m </small></td>
 </tr>
 
 <tr>
@@ -28175,7 +28175,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Up / 3m 15:24 Up / 1m 15:28 Down</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Down (242.00&rarr;241.46) vol 6,631<br>3m 09:15 Down (242.00&rarr;241.21) vol 5,499<br>1m 09:15 Down (242.00&rarr;241.85) vol 2,628</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m volume (15:24 &gt; 15:27), 3m trend (15:24 and 15:27 same), 1m </small></td>
+<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
 </tr>
 
 <tr>
@@ -28201,7 +28201,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Flat / 3m 15:24 Flat / 1m 15:28 Flat</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Up (4.29&rarr;4.30) vol 1,904<br>3m 09:15 Flat (4.29&rarr;4.29) vol 1,804<br>1m 09:15 Flat (4.29&rarr;4.29) vol 48</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>missing: 5m 15:20</small><br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m volume (15:24 &gt; 15:27), 3m trend (15:24 and 15:27 same), 1m </small></td>
+<td>OK (TradingView)<br><small>missing: 5m 15:20</small><br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
 </tr>
 
 <tr>
@@ -28214,7 +28214,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge pass">PASS</span><br><small>5m 15:20 Up / 3m 15:24 Up / 1m 15:28 Up</small></td>
 <td><span class="badge pass">PASS</span><br><small>5m 09:15 Up (354.75&rarr;356.95) vol 1,478<br>3m 09:15 Up (354.75&rarr;356.55) vol 416<br>1m 09:15 Up (354.75&rarr;357.35) vol 102</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m trend (15:24 and 15:27 same), 1m trend (15:28 and 15:29 same</small></td>
+<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
 </tr>
 
 <tr>
@@ -28227,7 +28227,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge pass">PASS</span><br><small>5m 15:20 Up / 3m 15:24 Up / 1m 15:28 Up</small></td>
 <td><span class="badge pass">PASS</span><br><small>5m 09:15 Up (411.00&rarr;413.15) vol 10,959<br>3m 09:15 Up (411.00&rarr;420.70) vol 10,165<br>1m 09:15 Up (411.00&rarr;412.75) vol 46</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m volume (15:24 &gt; 15:27), 3m trend (15:24 and 15:27 same), 1m </small></td>
+<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
 </tr>
 
 <tr>
@@ -28240,7 +28240,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Down / 3m 15:24 Up / 1m 15:28 Up</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Up (930.10&rarr;944.90) vol 161<br>3m 09:15 Up (930.10&rarr;935.60) vol 21<br>1m 09:15 Up (930.10&rarr;933.00) vol 3</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m volume (15:24 &gt; 15:27), 1m volume (15:28 &gt; 15:29), 1m trend </small></td>
+<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
 </tr>
 
 <tr>
@@ -28253,7 +28253,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Up / 3m 15:24 Down / 1m 15:28 Up</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Down (609.50&rarr;604.75) vol 7,717<br>3m 09:15 Down (609.50&rarr;604.00) vol 6,615<br>1m 09:15 Down (609.50&rarr;604.65) vol 2,100</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m trend (15:24 and 15:27 same), alignment (5m 15:20 = 3m 15:24</small></td>
+<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
 </tr>
 
 <tr>
@@ -28266,7 +28266,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge pass">PASS</span><br><small>5m 15:20 Up / 3m 15:24 Up / 1m 15:28 Up</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Flat (7.37&rarr;7.37) vol 495<br>3m 09:15 Flat (7.37&rarr;7.37) vol 495<br>1m 09:15 Flat (7.37&rarr;7.37) vol 495</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>missing: 1m 15:29</small><br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m trend (15:24 and 15:27 same), 1m volume (15:28 &gt; 15:29), 1m </small></td>
+<td>OK (TradingView)<br><small>missing: 1m 15:29</small><br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
 </tr>
 
 <tr>
@@ -28279,7 +28279,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Up / 3m 15:24 Down / 1m 15:28 Up</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Up (39.20&rarr;39.90) vol 1,693,666<br>3m 09:15 Up (39.20&rarr;39.87) vol 1,341,549<br>1m 09:15 Up (39.20&rarr;39.59) vol 456,220</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check: fails: 3m trend (15:24 and 15:27 same), 1m trend (15:28 and 15:29 same), alignment (5m 15:20 = 3m</small></td>
+<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
 </tr>
 
 <tr>
@@ -28292,7 +28292,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Down / 3m 15:24 Down / 1m 15:28 Up</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Down (60.25&rarr;59.70) vol 8,617<br>3m 09:15 Down (60.25&rarr;59.68) vol 5,585<br>1m 09:15 Down (60.25&rarr;60.00) vol 2,145</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check: fails: 3m volume (15:24 &gt; 15:27), alignment (5m 15:20 = 3m 15:24 = 1m 15:28), morning 09:15 candl</small></td>
+<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
 </tr>
 
 <tr>
@@ -28305,7 +28305,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Up / 3m 15:24 Down / 1m 15:28 Flat</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Flat (50.00&rarr;50.00) vol 18<br>3m 09:15 Flat (50.00&rarr;50.00) vol 14<br>1m 09:15 Flat (50.00&rarr;50.00) vol 14</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>missing: 1m 15:29</small><br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m volume (15:24 &gt; 15:27), 3m trend (15:24 and 15:27 same), 1m </small></td>
+<td>OK (TradingView)<br><small>missing: 1m 15:29</small><br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
 </tr>
 
 <tr>
@@ -28318,7 +28318,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Down / 3m 15:24 Down / 1m 15:28 Up</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Up (397.10&rarr;400.80) vol 2,944<br>3m 09:15 Up (397.10&rarr;399.95) vol 2,293<br>1m 09:15 Up (397.10&rarr;397.70) vol 577</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m trend (15:24 and 15:27 same), 1m volume (15:28 &gt; 15:29), ali</small></td>
+<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
 </tr>
 
 <tr>
@@ -28331,7 +28331,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Flat / 3m 15:24 Flat / 1m 15:28 Flat</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Down (4540.20&rarr;4539.90) vol 39,205<br>3m 09:15 Down (4540.20&rarr;4537.00) vol 27,725<br>1m 09:15 Up (4540.20&rarr;4556.80) vol 16,140</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>missing: 5m 15:20, 5m 15:25, 3m 15:24, 3m 15:27, 1m 15:28, 1m 15:29</small><br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m volume (15:24 &gt; 15:27), 3m trend (15:24 and 15:27 same), 1m </small></td>
+<td>OK (TradingView)<br><small>missing: 5m 15:20, 5m 15:25, 3m 15:24, 3m 15:27, 1m 15:28, 1m 15:29</small><br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
 </tr>
 
 <tr>
@@ -28344,7 +28344,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge pass">PASS</span><br><small>5m 15:20 Up / 3m 15:24 Up / 1m 15:28 Up</small></td>
 <td><span class="badge pass">PASS</span><br><small>5m 09:15 Up (120.98&rarr;121.75) vol 35,922<br>3m 09:15 Up (120.98&rarr;121.64) vol 29,861<br>1m 09:15 Up (120.98&rarr;121.00) vol 13,551</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m trend (15:24 and 15:27 same), 1m trend (15:28 and 15:29 same</small></td>
+<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
 </tr>
 
 <tr>
@@ -28357,7 +28357,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Up / 3m 15:24 Down / 1m 15:28 Flat</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Up (4270.00&rarr;4321.60) vol 61<br>3m 09:15 Up (4270.00&rarr;4300.00) vol 34<br>1m 09:15 Up (4270.00&rarr;4285.00) vol 24</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 1m trend (15:28 and 15:29 same), alignment (5m 15:20 = 3m 15:24</small></td>
+<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
 </tr>
 
 <tr>
@@ -28383,7 +28383,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Up / 3m 15:24 Up / 1m 15:28 Down</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Up (1229.00&rarr;1231.40) vol 5,503<br>3m 09:15 Up (1229.00&rarr;1229.90) vol 3,807<br>1m 09:15 Up (1229.00&rarr;1235.00) vol 1,363</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m volume (15:24 &gt; 15:27), 3m trend (15:24 and 15:27 same), 1m </small></td>
+<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
 </tr>
 
 <tr>
@@ -28500,7 +28500,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Down / 3m 15:24 Up / 1m 15:28 Down</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Up (401.40&rarr;401.60) vol 157<br>3m 09:15 Down (401.40&rarr;401.35) vol 5<br>1m 09:15 missing</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>missing: 1m 09:15</small><br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>missing: 1m 09:15</small><br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m volume (15:24 &gt; 15:27), 3m trend (15:24 and 15:27 same), 1m </small></td>
 </tr>
 
 <tr>
@@ -28513,7 +28513,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Down / 3m 15:24 Flat / 1m 15:28 Flat</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Down (20.88&rarr;20.20) vol 2,674<br>3m 09:15 Down (20.88&rarr;20.20) vol 2,674<br>1m 09:15 Down (20.88&rarr;20.50) vol 71</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>missing: 3m 15:24, 1m 15:29</small><br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>missing: 3m 15:24, 1m 15:29</small><br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m volume (15:24 &gt; 15:27), 3m trend (15:24 and 15:27 same), 1m </small></td>
 </tr>
 
 <tr>
@@ -28526,7 +28526,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Flat / 3m 15:24 Flat / 1m 15:28 Flat</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Down (4.50&rarr;4.48) vol 1,011<br>3m 09:15 Down (4.50&rarr;4.40) vol 1,005<br>1m 09:15 Down (4.50&rarr;4.40) vol 1,005</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>missing: 5m 15:25, 3m 15:27, 1m 15:28, 1m 15:29</small><br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>missing: 5m 15:25, 3m 15:27, 1m 15:28, 1m 15:29</small><br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m volume (15:24 &gt; 15:27), 3m trend (15:24 and 15:27 same), 1m </small></td>
 </tr>
 
 <tr>
@@ -28539,7 +28539,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Up / 3m 15:24 Down / 1m 15:28 Flat</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Flat (90.20&rarr;90.20) vol 17<br>3m 09:15 Flat (90.20&rarr;90.20) vol 17<br>1m 09:15 Flat (90.20&rarr;90.20) vol 17</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m volume (15:24 &gt; 15:27), 1m volume (15:28 &gt; 15:29), 1m trend </small></td>
 </tr>
 
 <tr>
@@ -28552,7 +28552,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Up / 3m 15:24 Down / 1m 15:28 Up</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Up (509.00&rarr;510.00) vol 984<br>3m 09:15 Up (509.00&rarr;510.00) vol 720<br>1m 09:15 Down (509.00&rarr;503.35) vol 476</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>Yahoo check: fails: 3m volume (15:24 &gt; 15:27), 3m trend (15:24 and 15:27 same), 1m volume (15:28 &gt; 15:29), ali</small></td>
 </tr>
 
 <tr>
@@ -28565,7 +28565,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Flat / 3m 15:24 Flat / 1m 15:28 Flat</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Down (191.99&rarr;187.45) vol 102<br>3m 09:15 Down (191.99&rarr;191.90) vol 101<br>1m 09:15 Flat (191.99&rarr;191.99) vol 1</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>missing: 5m 15:20, 3m 15:24, 1m 15:28</small><br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>missing: 5m 15:20, 3m 15:24, 1m 15:28</small><br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m volume (15:24 &gt; 15:27), 3m trend (15:24 and 15:27 same), 1m </small></td>
 </tr>
 
 <tr>
@@ -28578,7 +28578,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Down / 3m 15:24 Up / 1m 15:28 Up</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Up (84.20&rarr;85.02) vol 8,432<br>3m 09:15 Up (84.20&rarr;85.23) vol 8,417<br>1m 09:15 Up (84.20&rarr;84.76) vol 1,355</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 1m volume (15:28 &gt; 15:29), 1m trend (15:28 and 15:29 same), ali</small></td>
 </tr>
 
 <tr>
@@ -28591,7 +28591,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Flat / 3m 15:24 Flat / 1m 15:28 Down</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 missing<br>3m 09:15 missing<br>1m 09:15 missing</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>missing: 5m 09:15, 3m 09:15, 1m 09:15, 5m 15:20, 3m 15:24, 1m 15:29</small><br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>missing: 5m 09:15, 3m 09:15, 1m 09:15, 5m 15:20, 3m 15:24, 1m 15:29</small><br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m volume (15:24 &gt; 15:27), 3m trend (15:24 and 15:27 same), 1m </small></td>
 </tr>
 
 <tr>
@@ -28604,7 +28604,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Flat / 3m 15:24 Flat / 1m 15:28 Flat</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Down (11.42&rarr;11.40) vol 9<br>3m 09:15 Flat (11.42&rarr;11.42) vol 8<br>1m 09:15 Flat (11.42&rarr;11.42) vol 7</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>missing: 5m 15:20, 5m 15:25, 3m 15:24, 3m 15:27, 1m 15:28, 1m 15:29</small><br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>missing: 5m 15:20, 5m 15:25, 3m 15:24, 3m 15:27, 1m 15:28, 1m 15:29</small><br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m volume (15:24 &gt; 15:27), 3m trend (15:24 and 15:27 same), 1m </small></td>
 </tr>
 
 <tr>
@@ -28617,7 +28617,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Up / 3m 15:24 Up / 1m 15:28 Down</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Up (1840.00&rarr;1884.90) vol 34,949<br>3m 09:15 Up (1840.00&rarr;1872.30) vol 15,257<br>1m 09:15 Up (1840.00&rarr;1882.40) vol 8,004</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m trend (15:24 and 15:27 same), alignment (5m 15:20 = 3m 15:24</small></td>
 </tr>
 
 <tr>
@@ -28630,7 +28630,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Flat / 3m 15:24 Flat / 1m 15:28 Flat</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Down (199.80&rarr;198.00) vol 1,958,140<br>3m 09:15 Down (199.80&rarr;198.21) vol 1,540,839<br>1m 09:15 Down (199.80&rarr;198.58) vol 882,243</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>missing: 5m 15:20, 5m 15:25, 3m 15:24, 3m 15:27, 1m 15:28, 1m 15:29</small><br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>missing: 5m 15:20, 5m 15:25, 3m 15:24, 3m 15:27, 1m 15:28, 1m 15:29</small><br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m volume (15:24 &gt; 15:27), 3m trend (15:24 and 15:27 same), 1m </small></td>
 </tr>
 
 <tr>
@@ -28643,7 +28643,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Up / 3m 15:24 Down / 1m 15:28 Up</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Up (720.00&rarr;723.80) vol 1,234<br>3m 09:15 Up (720.00&rarr;721.95) vol 864<br>1m 09:15 Down (720.00&rarr;717.20) vol 724</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m trend (15:24 and 15:27 same), alignment (5m 15:20 = 3m 15:24</small></td>
 </tr>
 
 <tr>
@@ -28656,7 +28656,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Flat / 3m 15:24 Flat / 1m 15:28 Flat</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Up (1434.20&rarr;1434.70) vol 23,175<br>3m 09:15 Up (1434.20&rarr;1435.30) vol 20,603<br>1m 09:15 Up (1434.20&rarr;1438.70) vol 14,327</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>missing: 5m 15:20, 5m 15:25, 3m 15:24, 3m 15:27, 1m 15:28, 1m 15:29</small><br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>missing: 5m 15:20, 5m 15:25, 3m 15:24, 3m 15:27, 1m 15:28, 1m 15:29</small><br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m volume (15:24 &gt; 15:27), 3m trend (15:24 and 15:27 same), 1m </small></td>
 </tr>
 
 <tr>
@@ -28669,7 +28669,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Flat / 3m 15:24 Up / 1m 15:28 Flat</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Up (3.96&rarr;4.01) vol 103,869<br>3m 09:15 Up (3.96&rarr;3.99) vol 24,809<br>1m 09:15 Up (3.96&rarr;3.99) vol 21,414</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m trend (15:24 and 15:27 same), 1m volume (15:28 &gt; 15:29), 1m </small></td>
 </tr>
 
 <tr>
@@ -28682,7 +28682,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Up / 3m 15:24 Down / 1m 15:28 Down</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Up (51.79&rarr;52.54) vol 1,216<br>3m 09:15 Up (51.79&rarr;52.54) vol 780<br>1m 09:15 Up (51.79&rarr;53.00) vol 479</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m trend (15:24 and 15:27 same), 1m volume (15:28 &gt; 15:29), 1m </small></td>
 </tr>
 
 <tr>
@@ -28916,7 +28916,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Flat / 3m 15:24 Flat / 1m 15:28 Flat</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Flat (7.07&rarr;7.07) vol 152<br>3m 09:15 Up (7.07&rarr;7.24) vol 33<br>1m 09:15 Flat (7.07&rarr;7.07) vol 19</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>missing: 3m 15:24</small><br><small>Yahoo check: fails: 3m volume (15:24 &gt; 15:27), 3m trend (15:24 and 15:27 same), 1m volume (15:28 &gt; 15:29), 1m </small></td>
+<td>OK (TradingView)<br><small>missing: 3m 15:24</small><br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m volume (15:24 &gt; 15:27), 3m trend (15:24 and 15:27 same), 1m </small></td>
 </tr>
 
 <tr>
@@ -30567,7 +30567,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td><span class="badge fail">FAIL</span><br><small>5m 15:20 Down / 3m 15:24 Up / 1m 15:28 Flat</small></td>
 <td><span class="badge fail">FAIL</span><br><small>5m 09:15 Up (752.00&rarr;759.95) vol 33<br>3m 09:15 Up (752.00&rarr;759.95) vol 33<br>1m 09:15 Flat (752.00&rarr;752.00) vol 11</small></td>
 <td class="fail">FAIL</td>
-<td>OK (TradingView)<br><small>missing: 1m 15:28</small><br><small>Yahoo check: fails: 5m volume (15:20 &gt; 15:25), 3m volume (15:24 &gt; 15:27), 3m trend (15:24 and 15:27 same), 1m </small></td>
+<td>OK (TradingView)<br><small>missing: 1m 15:28</small><br><small>Yahoo check: fails: 3m volume (15:24 &gt; 15:27), 3m trend (15:24 and 15:27 same), 1m volume (15:28 &gt; 15:29), 1m </small></td>
 </tr>
 
 <tr>
@@ -30944,7 +30944,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td>&mdash;<br><small></small></td>
 <td>&mdash;<br><small></small></td>
 <td class="skip">INCOMPLETE</td>
-<td>OK (TradingView)<br><small>missing: 5m 09:15, 3m 09:15, 1m 09:15, 5m 15:20, 5m 15:25, 3m 15:24, 3m 15:27, 1m 15:28, 1m 15:29</small><br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>missing: 5m 09:15, 3m 09:15, 1m 09:15, 5m 15:20, 5m 15:25, 3m 15:24, 3m 15:27, 1m 15:28, 1m 15:29</small><br><small>Yahoo check not done: Yahoo has no usable data for that session</small></td>
 </tr>
 
 <tr>
@@ -31113,7 +31113,7 @@ Entry: Thu 12 Nov 2026 at the 09:15 open &nbsp;|&nbsp; Exit: 15:27
 <td>&mdash;<br><small></small></td>
 <td>&mdash;<br><small></small></td>
 <td class="skip">INCOMPLETE</td>
-<td>OK (TradingView)<br><small>missing: 5m 09:15, 3m 09:15, 1m 09:15, 5m 15:20, 5m 15:25, 3m 15:24, 3m 15:27, 1m 15:28, 1m 15:29</small><br><small>Yahoo check not done: Too Many Requests. Rate limited. Try after a while.</small></td>
+<td>OK (TradingView)<br><small>missing: 5m 09:15, 3m 09:15, 1m 09:15, 5m 15:20, 5m 15:25, 3m 15:24, 3m 15:27, 1m 15:28, 1m 15:29</small><br><small>Yahoo check not done: Yahoo has no usable data for that session</small></td>
 </tr>
 
 <tr>
