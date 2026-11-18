@@ -1,14 +1,14 @@
 # =============================================================================
-# NSE DAILY MOMENTUM SCANNER - 15-MIN / 5-MIN / 3-MIN / 1-MIN CLOSING-CANDLE VERSION
+# NSE DAILY MOMENTUM SCANNER - 5-MIN / 3-MIN / 1-MIN CLOSING-CANDLE VERSION
 # =============================================================================
 #
 # Downloads candles from a free source that needs no API key or login:
 #   * TradingView's chart feed (default; see DATA_SOURCE) - the same candles
-#     you see on a TradingView chart. The 5m, 3m and 1m candles are TradingView's
+#     you see on a TradingView chart. The 15m, 3m and 1m candles are TradingView's
 #     OWN native candles (nothing is rebuilt). Unofficial: TradingView has no
 #     free public data API, this uses the same websocket feed its web charts use.
-#   * or NSE's own charting feed (1m candles; 5m and 3m are built from them on
-#     the 09:15 grid), or Yahoo Finance (native 5m and 1m; 3m built from 1m).
+#   * or NSE's own charting feed (1m candles; 15m and 3m are built from them on
+#     the 09:15 grid), or Yahoo Finance (native 15m and 1m; 3m built from 1m).
 #   * Yahoo Finance is also the automatic per-stock fallback (FALLBACK_TO_YAHOO)
 #     and the second source every stock is checked on.
 # Universe: Nifty 500 CSV -> NSE equity list -> built-in fallback.
@@ -29,9 +29,7 @@
 # The entry day is the next trading session after the one being read.
 #
 # Candles are labelled by their START time. NSE closes at 15:30, so:
-#   15-minute : ... 15:00, 15:15       (15:15 is the last, 15:00 the second last;
-#               NSE closes at 15:30, so the last 15m candle is 15:15-15:29)
-#   5-minute : ... 15:20, 15:25       (15:25 is the last, 15:20 the second last)
+#   15-minute : ... 15:00, 15:15       (15:15 is the last, 15:00 the second last)
 #   3-minute  : ... 15:24, 15:27       (15:27 is the last, 15:24 the second last)
 #               3-minute buckets are anchored to 09:15 (09:15, 09:18, ... 15:27),
 #               the same grid TradingView and broker charts use.
@@ -39,17 +37,19 @@
 #
 # ALL of these must hold:
 #   1) 15m volume: the 15:00 candle's volume is HIGHER than the 15:15 candle's.
-#   2) 5m volume:  the 15:20 candle's volume is HIGHER than the 15:25 candle's.
-#   3) 3m volume:  the 15:24 candle's volume is HIGHER than the 15:27 candle's.
+#   2) 3m volume:  the 15:24 candle's volume is HIGHER than the 15:27 candle's.
+#   3) 3m trend:   the last two 3m candles (15:24, 15:27) have the SAME trend.
 #   4) 1m volume:  the 15:28 candle's volume is HIGHER than the 15:29 candle's.
-#   5) The second-last candles of all four timeframes (15m 15:00, 5m 15:20,
-#      3m 15:24, 1m 15:28) have the SAME trend (the "aligned trend").
-#   6) The morning candles (09:15) of all four timeframes (15m, 5m, 3m, 1m
-#      09:15) have that SAME aligned trend too.
+#   5) 1m trend:   the last two 1m candles (15:28, 15:29) have the SAME trend.
+#   6) The second-last candles of all three timeframes (15m 15:00, 3m 15:24,
+#      1m 15:28) have the SAME trend (the "aligned trend").
+#   7) The morning candles (09:15) of all three timeframes (15m 09:15, 3m 09:15,
+#      1m 09:15) have that SAME aligned trend too.
 #
-# On EVERY timeframe the last two candles may have the same or opposite trends:
-# only their volume order matters (and the second-last candle's trend, for the
-# alignment in 5). There is no same-trend rule on the last two candles.
+# The 15m timeframe has no opposite-trend rule: its last two candles may have
+# the same or opposite trends; only their volume order matters (and the
+# second-last candle's trend, for the alignment in 6). The 3m and 1m
+# timeframes also require their last two candles to share a trend (rules 3, 5).
 #
 # DATA SOURCES: every stock is scanned on the primary source (DATA_SOURCE), and
 # every stock that does not pass there is ALSO scanned on Yahoo for the same
@@ -61,24 +61,23 @@
 #
 # DIRECTION: the strategy does not say which way to trade, so it is set by
 # DIRECTION_RULE below (default: trade WITH the aligned second-last candles'
-# trend, i.e. the 5m 15:20 / 3m 15:24 / 1m 15:28 trend: Up = LONG, Down = SHORT).
+# trend, i.e. the 15m 15:00 / 3m 15:24 / 1m 15:28 trend: Up = LONG, Down = SHORT).
 # TRADE:     Entry = the 09:15 OPEN of the entry day, Exit = EXIT_TIME_LABEL.
 #
 # A candle with no trades is absent from the data. By default a missing
 # candle can only BLOCK a match, never create one. Optionally
-# MISSING_LAST_CANDLE_IS_ZERO_VOLUME treats a missing LAST candle (15m 15:15,
-# 5m 15:25, 3m 15:27 or 1m 15:29) as volume 0 (see CONFIGURATION).
+# MISSING_LAST_CANDLE_IS_ZERO_VOLUME treats a missing 15m 15:15 candle as
+# volume 0 (see CONFIGURATION).
 #
 # DATA-ACCURACY SAFEGUARDS
 #   * Prices are rounded to 2 decimals, so Yahoo's float noise can never turn a
 #     flat candle into an Up/Down one.
 #   * Zero-volume candles and corrupt candles (price <= 0, close/open outside
 #     the high-low range) are dropped and treated as MISSING.
-#   * Cross-check (the native 5-minute and 15-minute feeds): the 5m 09:15, 15:20 and 15:25
-#     candles (and, the same way, the 15m 09:15, 15:00 and 15:15 candles)
+#   * Cross-check (Yahoo's native 15-minute feed): the 15m 09:15, 15:00 and 15:15
 #     candles are rebuilt from the 1m candles inside them (volume = sum of the
-#     1m volumes). If the two feeds disagree on the 09:15 or 15:20 candle's
-#     trend, or on which of the 15:20 / 15:25 candles has more volume, the
+#     1m volumes). If the two feeds disagree on the 09:15 or 15:00 candle's
+#     trend, or on which of the 15:00 / 15:15 candles has more volume, the
 #     symbol is marked DATA CONFLICT and never produces a signal. (Yahoo has no 3m feed, so its 3m candles are built from
 #     the 1m candles; TradingView's 3m candles are its own native ones.)
 #   * Every row in the report shows each candle's open -> close and volume, so
@@ -133,33 +132,33 @@ logging.getLogger("yfinance").setLevel(logging.CRITICAL)
 # CONFIGURATION
 # =============================================================================
 
-# Yahoo throttles heavy parallel use. Each symbol needs TWO downloads (5m and
+# Yahoo throttles heavy parallel use. Each symbol needs TWO downloads (15m and
 # 1m; the 1-minute download is the heaviest). If you see many rate-limit ERRORs, lower this to 4-6.
 MAX_WORKERS = 8
 
 # Attempts per request (only rate limits / network errors are retried).
 MAX_RETRIES = 3
 
-# Native candles. Yahoo keeps about 60 days of 5-minute history but only about
+# Native candles. Yahoo keeps about 60 days of 15-minute history but only about
 # 7-8 days of 1-minute history, so the 1-minute fallback window must not
 # exceed "7d" (a longer one is rejected).
-INITIAL_PERIOD = {"5m": "5d", "15m": "5d", "1m": "5d"}
+INITIAL_PERIOD = {"15m": "5d", "1m": "5d"}
 
-FALLBACK_PERIOD = {"5m": "1mo", "15m": "1mo", "1m": "7d"}
+FALLBACK_PERIOD = {"15m": "1mo", "1m": "7d"}
 
 REQUEST_TIMEOUT = 20
 
-# If fewer than this share of scanned symbols have all twelve required candles,
+# If fewer than this share of scanned symbols have all nine required candles,
 # the report shows a "data looks incomplete" warning. Kept low because
 # illiquid stocks often have a no-trade candle; when Yahoo's data is genuinely
 # broken the share is close to 0%.
 SESSION_COMPLETE_SHARE = 0.20
 
-# Cross-check the native 5m candles against the 1m candles inside them (see
+# Cross-check the native 15m candles against the 1m candles inside them (see
 # header). Keep True for accuracy; set False only to diagnose.
 CROSS_CHECK_FEEDS = True
 
-# If more than this share of scanned symbols show a 5m/1m conflict, the report
+# If more than this share of scanned symbols show a 15m/1m conflict, the report
 # warns that Yahoo's data is inconsistent today.
 CONFLICT_WARN_SHARE = 0.10
 
@@ -168,19 +167,21 @@ CONFLICT_WARN_SHARE = 0.10
 # 0, so:
 #   False -> a missing last candle BLOCKS the match (default, strictest)
 #   True  -> a missing last candle counts as volume 0: the rule passes whenever
-#            the second-last candle traded. This applies to the last candle of
-#            every timeframe (15m 15:15, 5m 15:25, 3m 15:27, 1m 15:29): since the
-#            last candles' trends are no longer a rule, only their volume is read.
-#   Illiquid stocks often have no trade in the final minute, so this switch can
-#   matter. It stays False (strictest) unless you decide otherwise.
+#            the second-last candle traded. This can only apply to the 15m
+#            15:15 candle: the 3m 15:27 and 1m 15:29 candles need a trend (the
+#            3m / 1m same-trend rules), and the second-last candles need one
+#            too (alignment).
+#   NOTE: because the 3m 15:27 and 1m 15:29 candles must exist and lie INSIDE
+#   the 15m 15:15 candle, whenever the 15m 15:15 candle is missing they are
+#   missing too - so this switch no longer changes any result.
 MISSING_LAST_CANDLE_IS_ZERO_VOLUME = False
 
 # A short description of the rules, shown at the top of every report and in the
 # console so a result can always be tied to the rule set that produced it.
 # (Keep it in step with the rules above if they ever change.)
 STRATEGY_RULES = (
-    "15m volume | 5m volume | 3m volume | 1m volume | "
-    "aligned second-last trend (15m/5m/3m/1m) | morning (09:15) trend (15m/5m/3m/1m)"
+    "15m volume | 3m volume + same trend | 1m volume + same trend | "
+    "aligned second-last trend | morning (09:15) trend"
 )
 
 # No stock may be lost to a technical failure. After the main scan, stocks that
@@ -245,7 +246,7 @@ NSE_MAX_COOLDOWNS = 4
 # the rest of the run (it is not working from this network / the API changed).
 NSE_GIVE_UP_AFTER = 40
 
-# Which way to trade when a match fires. The second-last candles (5m 15:20,
+# Which way to trade when a match fires. The second-last candles (15m 15:00,
 # 3m 15:24, 1m 15:28) always share one trend - the "alignment trend" - so there
 # are only two choices:
 #   "FOLLOW_ALIGNED" -> trade WITH the alignment trend (default; Up = LONG,
@@ -285,24 +286,6 @@ DATA_READY_BUFFER_MINUTES = 20
 # a few requests) but the stock -> NSE token lookups are cached between runs.
 #
 UNIVERSE_MODE = "ALL_NSE"
-
-# With UNIVERSE_MODE = "ALL_NSE":
-#   INCLUDE_NON_EQ_SERIES = False -> EQ series only (normal rolling settlement)
-#   INCLUDE_NON_EQ_SERIES = True  -> EVERY series on NSE's official equity list:
-#       EQ plus BE / BZ (trade-to-trade: delivery only, no same-day exit),
-#       SM / ST (SME) and any other series the list carries.
-#   INCLUDE_SME_LIST = True       -> also add NSE Emerge's separate SME list.
-# Each signal shows its series, because a trade-to-trade or SME stock cannot be
-# entered at 09:15 and exited at 15:27 like a normal stock.
-INCLUDE_NON_EQ_SERIES = True
-INCLUDE_SME_LIST = True
-
-SME_EQUITY_URLS = [
-    "https://nsearchives.nseindia.com/emerge/corporates/content/SME_EQUITY_L.csv",
-]
-
-# symbol -> NSE series, filled while the universe loads.
-SERIES_OF = {}
 
 
 # =============================================================================
@@ -345,13 +328,11 @@ NSE_EQUITY_URLS = [
 # REQUIRED CANDLES
 # =============================================================================
 
-# The twelve candles the strategy reads on the previous day: (timeframe, start).
-# 15m, 5m and 1m come straight from the data source (3m too on TradingView);
-# for other sources 3m is built from the 1m candles.
+# The nine candles the strategy reads on the previous day: (timeframe, start).
+# 15m and 1m come straight from the data source; 3m is built from the 1m candles.
 SLOTS = [
-    ("15m", 915), ("5m", 915), ("3m", 915), ("1m", 915),
+    ("15m", 915), ("3m", 915), ("1m", 915),
     ("15m", 1500), ("15m", 1515),
-    ("5m", 1520), ("5m", 1525),
     ("3m", 1524), ("3m", 1527),
     ("1m", 1528), ("1m", 1529),
 ]
@@ -359,7 +340,7 @@ SLOTS = [
 SLOT_KEYS = [f"{tf}_{hm:04d}" for tf, hm in SLOTS]
 
 # Timeframes DOWNLOADED for every symbol (3m is built from 1m, not downloaded).
-TIMEFRAMES = ("5m", "15m", "1m")
+TIMEFRAMES = ("15m", "1m")
 
 
 # =============================================================================
@@ -538,8 +519,7 @@ def load_total_market():
 
 
 def load_nse_equity_list():
-    """Every stock on NSE's official equity list (EQ only, or every series -
-    see INCLUDE_NON_EQ_SERIES)."""
+    """Every EQ-series stock on NSE, from NSE's official equity list."""
 
     print()
     print("Attempting to load NSE official equity list...")
@@ -583,23 +563,16 @@ def load_nse_equity_list():
 
                 raise ValueError("no SERIES column, so non-EQ stocks cannot be filtered out")
 
-            series_values = df[series_column].astype(str).str.strip().str.upper()
-
-            if not INCLUDE_NON_EQ_SERIES:
-                df = df[series_values == "EQ"]
-                series_values = series_values[series_values == "EQ"]
+            df = df[
+                df[series_column].astype(str).str.strip().str.upper() == "EQ"
+            ]
 
             symbols = normalize_symbols(df[symbol_column].dropna().tolist())
 
             if len(symbols) < 300:
-                raise ValueError(f"Only {len(symbols)} symbols returned")
+                raise ValueError(f"Only {len(symbols)} EQ symbols returned")
 
-            for sym, ser in zip(df[symbol_column].tolist(), series_values.tolist()):
-                SERIES_OF[str(sym).strip().upper()] = ser
-
-            by_series = Counter(series_values.tolist())
-            shown = ", ".join(f"{k} {v}" for k, v in by_series.most_common(8))
-            print(f"NSE official equity list loaded: {len(symbols)} symbols ({shown})")
+            print(f"NSE official equity list loaded: {len(symbols)} EQ symbols")
             return symbols
 
         except Exception as e:
@@ -615,66 +588,6 @@ def load_nse_equity_list():
     return None
 
 
-def load_sme_list():
-    """NSE Emerge (SME) symbols from NSE's separate SME list, or [] if it
-    cannot be loaded (the scan then simply goes ahead without them)."""
-
-    print()
-    print("Attempting to load NSE SME list...")
-
-    session = requests.Session()
-    session.headers.update({**NSE_HEADERS, "Referer": "https://www.nseindia.com/"})
-
-    try:
-        session.get("https://www.nseindia.com/", timeout=15)
-    except Exception:
-        pass
-
-    for url in SME_EQUITY_URLS:
-        try:
-            response = session.get(url, timeout=30)
-            response.raise_for_status()
-
-            df = pd.read_csv(StringIO(response.text))
-            column = next((c for c in df.columns if "symbol" in str(c).lower()), None)
-
-            if column is None:
-                raise ValueError("Symbol column not found")
-
-            symbols = normalize_symbols(df[column].dropna().tolist())
-
-            if not symbols:
-                raise ValueError("empty list")
-
-            for sym in symbols:
-                SERIES_OF.setdefault(sym, "SM")
-
-            print(f"NSE SME list loaded: {len(symbols)} symbols")
-            return symbols
-
-        except Exception as e:
-            print(f"NSE SME list unavailable ({url.rsplit('/', 1)[-1]}): {e}")
-
-    return []
-
-
-def series_note(symbol):
-    """A short warning for stocks that are not normal EQ-series stocks, or ''."""
-
-    series = SERIES_OF.get(symbol)
-
-    if series in (None, "EQ"):
-        return ""
-
-    if series in ("BE", "BZ", "BT"):
-        return f"{series}: trade-to-trade, delivery only - no same-day exit"
-
-    if series in ("SM", "ST"):
-        return f"{series}: SME, lot-size trading, often illiquid"
-
-    return f"series {series}"
-
-
 def get_stock_universe():
 
     print()
@@ -687,11 +600,7 @@ def get_stock_universe():
     attempts = []
 
     if UNIVERSE_MODE == "ALL_NSE":
-        attempts.append((
-            "NSE official equity list (every series)" if INCLUDE_NON_EQ_SERIES
-            else "NSE official equity list (all EQ)",
-            load_nse_equity_list,
-        ))
+        attempts.append(("NSE official equity list (all EQ)", load_nse_equity_list))
 
     if UNIVERSE_MODE in ("ALL_NSE", "TOTAL_MARKET"):
         attempts.append(("Nifty Total Market (Nifty 500 + Microcap 250)", load_total_market))
@@ -704,17 +613,6 @@ def get_stock_universe():
         symbols = loader()
 
         if symbols:
-            if (
-                UNIVERSE_MODE == "ALL_NSE" and INCLUDE_NON_EQ_SERIES and INCLUDE_SME_LIST
-                and label.startswith("NSE official equity list (every series)")
-            ):
-                extra = load_sme_list()
-                before = len(symbols)
-                symbols = list(dict.fromkeys(symbols + extra))
-
-                if len(symbols) > before:
-                    label += f" + SME list (+{len(symbols) - before})"
-
             return symbols, label
 
     print()
@@ -836,7 +734,7 @@ def clean_yahoo_data(df):
 # The time format of NSE's candles is not documented (and NSE's own 15-minute
 # candles turned out to be stamped on a different grid than the 09:15 one the
 # strategy needs), so:
-#   * only 1-minute candles are downloaded; the 5-minute and 3-minute candles
+#   * only 1-minute candles are downloaded; the 15-minute and 3-minute candles
 #     are built from them on the 09:15 grid;
 #   * each 1-minute stamp is floored to its minute, and before a scan starts the
 #     scanner CHECKS those minutes against Yahoo's 1-minute candles for a liquid
@@ -849,10 +747,10 @@ NSE_SEARCH_URL = "https://charting.nseindia.com/v1/exchanges/symbolsDynamic"
 NSE_HISTORY_URL = "https://charting.nseindia.com/v1/charts/symbolHistoricalData"
 NSE_HOME_URL = "https://www.nseindia.com"
 
-# NSE is asked for 1-minute candles only. The 5-minute (and 3-minute) candles
+# NSE is asked for 1-minute candles only. The 15-minute (and 3-minute) candles
 # are built from them on the 09:15 grid, because NSE's own 15-minute candles
 # are stamped on a different grid than the one the strategy needs.
-NSE_DERIVED_MINUTES = {"5m": 5, "15m": 15}
+NSE_DERIVED_MINUTES = {"15m": 15}
 
 # Liquid stocks used (in order) for the one-time check of NSE's candle times
 # against Yahoo's 1-minute candles.
@@ -1274,11 +1172,11 @@ def nse_fetch_minutes(symbol, shift):
 
 def fetch_interval_nse(symbol, interval):
     """One timeframe for one stock from NSE: (rows, info) like fetch_interval.
-    "1m" is NSE's own 1-minute data; "5m" is built from those same 1-minute
+    "1m" is NSE's own 1-minute data; "15m" is built from those same 1-minute
     candles on the 09:15 grid. The 1-minute download is shared between the two
     calls for a stock (one history request per stock).
 
-    With DATA_SOURCE = "TRADINGVIEW" all three timeframes (5m, 3m, 1m) are
+    With DATA_SOURCE = "TRADINGVIEW" all three timeframes (15m, 3m, 1m) are
     TradingView's own native candles, fetched once per stock and handed out one
     timeframe at a time."""
 
@@ -1606,7 +1504,7 @@ def nse_record(outcome):
 #      volume], time = the bar's OPEN time in UTC epoch seconds) until
 #      series_completed; answer heartbeats (~h~N) by echoing them.
 # It is unofficial, may break or be blocked, and is not covered by TradingView's
-# terms of use - use is at your own risk. The 5-minute, 3-minute and 1-minute
+# terms of use - use is at your own risk. The 15-minute, 3-minute and 1-minute
 # bars are all TradingView's own native bars (they start on the 09:15 session
 # grid); they are requested over ONE connection per stock, as three chart
 # sessions. Every failure carries a specific reason and falls back to Yahoo for
@@ -1621,9 +1519,9 @@ TV_BARS = 3000
 # The timeframes read from TradingView are its OWN native candles (not built
 # from 1-minute ones). TradingView's name for each interval (minutes) and the
 # number of bars requested per timeframe (about 8 sessions each):
-TV_TIMEFRAMES = ("15m", "5m", "3m", "1m")
-TV_INTERVALS = {"15m": "15", "5m": "5", "3m": "3", "1m": "1"}
-TV_BARS_BY_TF = {"15m": 300, "5m": 700, "3m": 1100, "1m": TV_BARS}
+TV_TIMEFRAMES = ("15m", "3m", "1m")
+TV_INTERVALS = {"15m": "15", "3m": "3", "1m": "1"}
+TV_BARS_BY_TF = {"15m": 300, "3m": 1100, "1m": TV_BARS}
 
 # True  -> the three timeframes of a stock are requested over ONE websocket
 #          connection (three chart sessions);
@@ -1862,7 +1760,7 @@ def tv_fetch_bars(tv_symbol, n_bars, interval="1"):
 
 
 def tv_fetch_timeframes(tv_symbol):
-    """TradingView's own 5m, 3m and 1m bars for one ticker: {timeframe: bars}."""
+    """TradingView's own 15m, 3m and 1m bars for one ticker: {timeframe: bars}."""
 
     wanted = {tf: (TV_INTERVALS[tf], TV_BARS_BY_TF[tf]) for tf in TV_TIMEFRAMES}
 
@@ -1950,13 +1848,13 @@ def tv_fetch_minutes(symbol, shift):
 
 
 def tv_fetch_all(symbol, shift):
-    """5m, 3m and 1m candles for one stock, all TradingView's own native
+    """15m, 3m and 1m candles for one stock, all TradingView's own native
     candles: (rows_by_timeframe, info) like fetch_all_timeframes. Each frame is
     cleaned the same way as every other source (start-labelled minutes).
 
     If the alignment check found that TradingView's minutes are offset (shift is
-    not 0), the native 5m/3m bars cannot simply be shifted onto the 09:15 grid,
-    so in that case only the 1-minute bars are used and the 5m and 3m candles
+    not 0), the native 15m/3m bars cannot simply be shifted onto the 09:15 grid,
+    so in that case only the 1-minute bars are used and the 15m and 3m candles
     are built from them."""
 
     try:
@@ -1968,7 +1866,6 @@ def tv_fetch_all(symbol, shift):
 
             return {
                 "15m": resample_from_1m(rows, 15),
-                "5m": resample_from_1m(rows, 5),
                 "3m": resample_from_1m(rows, 3),
                 "1m": rows,
             }, "OK"
@@ -2126,7 +2023,7 @@ def fetch_interval(symbol, interval):
 
 def timeframes_for(fetcher):
     """The timeframes downloaded for a symbol from one source: TradingView gives
-    native 5m, 3m and 1m candles; NSE and Yahoo give 5m and 1m (their 3m candles
+    native 15m, 3m and 1m candles; NSE and Yahoo give 15m and 1m (their 3m candles
     are built from the 1m ones)."""
 
     if fetcher is fetch_interval_nse and DATA_SOURCE == "TRADINGVIEW":
@@ -2164,7 +2061,7 @@ def fetch_all_timeframes(symbol, fetcher):
 
 
 def fetch_symbol_rows(symbol):
-    """Returns (rows_by_timeframe, info, source): 5m and 1m candles. Both
+    """Returns (rows_by_timeframe, info, source): 15m and 1m candles. Both
     timeframes always come from the SAME source. The stock is read from the
     primary source (DATA_SOURCE) and falls back to Yahoo as a whole if that
     fails and FALLBACK_TO_YAHOO is True. If rows_by_timeframe is None, info is
@@ -2336,7 +2233,7 @@ def day_map(rows):
 
 
 def slot_label(key):
-    """'5m_1520' -> '5m 15:20' (used in missing notes)."""
+    """'15m_1500' -> '15m 15:00' (used in missing notes)."""
 
     tf, hm = key.split("_")
 
@@ -2348,7 +2245,7 @@ def resample_from_1m(rows, minutes):
     and NSE's own native candles are not guaranteed to sit on the 09:15 grid the strategy needs).
 
     Buckets are anchored to the 09:15 open (for 3m: 09:15, 09:18, ... 15:24,
-    15:27; for 5m: 09:15, 09:20, ... 15:20, 15:25). Within a bucket: open =
+    15:27; for 15m: 09:15, 09:30, ... 15:00, 15:15). Within a bucket: open =
     first, high = max, low = min, close = last, volume = sum. A bucket exists if
     at least one of its 1-minute candles traded."""
 
@@ -2386,7 +2283,7 @@ def resample_to_3m(rows):
 
 def window_hms(start_hm, minutes=15, step=1):
     """Start times of the step-minute candles inside the candle that starts at
-    start_hm, e.g. 1525 -> [1525, 1526, ... 1529]."""
+    start_hm, e.g. (1525, 5) -> [1525, 1526, ... 1529]."""
 
     start = (start_hm // 100) * 60 + start_hm % 100
 
@@ -2400,7 +2297,7 @@ def derive_from_1m(day_1m, start_hm, minutes):
     """Rebuild the N-minute candle starting at start_hm from the 1-minute
     candles inside it: open = first 1m open, close = last 1m close, volume =
     sum of the 1m volumes. A 1m candle exists only if it traded, so this equals
-    Yahoo's real 5m candle. Returns None if no 1m candle exists in the window."""
+    Yahoo's real 15m candle. Returns None if no 1m candle exists in the window."""
 
     bars = [day_1m[h] for h in window_hms(start_hm, minutes) if h in day_1m]
 
@@ -2415,20 +2312,20 @@ def derive_from_1m(day_1m, start_hm, minutes):
 
 
 def evaluate_rows(rows_by_tf, session_day=None):
-    """15m / 5m / 3m / 1m closing-candle strategy, read on the previous day
+    """15m / 3m / 1m closing-candle strategy, read on the previous day
     (P = the latest completed session). Entry day = the next trading day.
 
     1) 15m 15:00 volume is higher than 15m 15:15 volume.
-    2) 5m 15:20 volume is higher than 5m 15:25 volume.
-    3) 3m 15:24 volume is higher than 3m 15:27 volume.
+    2) 3m 15:24 volume is higher than 3m 15:27 volume.
+    3) 3m 15:24 and 3m 15:27 candles have the same trend.
     4) 1m 15:28 volume is higher than 1m 15:29 volume.
-    5) 15m 15:00, 5m 15:20, 3m 15:24 and 1m 15:28 candles all have the same trend.
-    6) 15m, 5m, 3m and 1m 09:15 candles have that same trend too.
-    (No timeframe requires its last two candles to have the same trend - or the
-    opposite one.)
+    5) 1m 15:28 and 1m 15:29 candles have the same trend.
+    6) 15m 15:00, 3m 15:24 and 1m 15:28 candles all have the same trend.
+    7) 15m 09:15, 3m 09:15 and 1m 09:15 candles have that same trend too.
+    (The 15m timeframe does not require its last two candles to be opposite.)
 
-    Before a signal is allowed, the 15m and 5m candles are cross-checked against
-    the 1m candles inside them; a disagreement gives status CONFLICT, not a signal.
+    Before a signal is allowed, the 15m candles are cross-checked against the
+    1m candles inside them; a disagreement gives status CONFLICT, not a signal.
 
     session_day: read this session instead of the latest one (used to check the
     same session on a second data source).
@@ -2437,8 +2334,7 @@ def evaluate_rows(rows_by_tf, session_day=None):
     if not rows_by_tf:
         return {"status": "NO_DATA"}
 
-    # Downloaded timeframes only (15m, 5m, 1m, plus 3m on TradingView); the
-    # 3m candles are otherwise added below.
+    # Downloaded timeframes only (15m, 1m); the 3m candles are added below.
     by_tf = {tf: day_map(rows) for tf, rows in rows_by_tf.items()}
 
     # Which session is "previous" is decided once per run (see
@@ -2515,15 +2411,12 @@ def evaluate_rows(rows_by_tf, session_day=None):
         c = candles[key]
         return c["volume"] if c else None
 
-    t5_20, t5_25 = trend("5m_1520"), trend("5m_1525")
-    t15_00, t15_15 = trend("15m_1500"), trend("15m_1515")
+    t15_1500, t15_1515 = trend("15m_1500"), trend("15m_1515")
     t3_24, t3_27 = trend("3m_1524"), trend("3m_1527")
     t1_28, t1_29 = trend("1m_1528"), trend("1m_1529")
-    t5_0915, t15_0915 = trend("5m_0915"), trend("15m_0915")
-    t3_0915, t1_0915 = trend("3m_0915"), trend("1m_0915")
+    t15_0915, t3_0915, t1_0915 = trend("15m_0915"), trend("3m_0915"), trend("1m_0915")
 
-    v5_20, v5_25 = volume("5m_1520"), volume("5m_1525")
-    v15_00, v15_15 = volume("15m_1500"), volume("15m_1515")
+    v15_1500, v15_1515 = volume("15m_1500"), volume("15m_1515")
     v3_24, v3_27 = volume("3m_1524"), volume("3m_1527")
     v1_28, v1_29 = volume("1m_1528"), volume("1m_1529")
 
@@ -2538,90 +2431,82 @@ def evaluate_rows(rows_by_tf, session_day=None):
 
         return first > second
 
-    # Every timeframe: volume only. The last two candles of a timeframe may have
-    # the same or opposite trends; only their volume order matters (and the
-    # second-last candles' trend, for the alignment). Whether the last two 3m and
-    # 1m candles share a trend is still worked out (trend_3m / trend_1m), but for
-    # INFORMATION ONLY: the report shows it, it is not a rule.
-    vol_15m = higher(v15_00, v15_15)
-    vol_5m = higher(v5_20, v5_25)
+    # 15m: volume only (its last two candles may have the same or opposite
+    # trends). 3m and 1m: volume AND the last two candles must have the same
+    # trend (a flat or missing candle has trend 0, so it is never "the same").
+    vol_15m = higher(v15_1500, v15_1515)
     vol_3m = higher(v3_24, v3_27)
     vol_1m = higher(v1_28, v1_29)
     trend_3m = t3_24 != 0 and t3_24 == t3_27
     trend_1m = t1_28 != 0 and t1_28 == t1_29
 
     cond_15m = vol_15m
-    cond_5m = vol_5m
-    cond_3m = vol_3m
-    cond_1m = vol_1m
+    cond_3m = vol_3m and trend_3m
+    cond_1m = vol_1m and trend_1m
 
-    # Second-last candles of all four timeframes share one (non-flat) trend.
-    cond_align = t5_20 != 0 and t5_20 == t15_00 == t3_24 == t1_28
+    # Second-last candles of all three timeframes share one (non-flat) trend.
+    cond_align = t15_1500 != 0 and t15_1500 == t3_24 == t1_28
 
-    # The morning (09:15) candles of all four timeframes have that same trend.
-    cond_morning = cond_align and t5_0915 == t15_0915 == t3_0915 == t1_0915 == t5_20
+    # The morning (09:15) candles of all three timeframes have that same trend.
+    cond_morning = cond_align and t15_0915 == t3_0915 == t1_0915 == t15_1500
 
-    cond = cond_15m and cond_5m and cond_3m and cond_1m and cond_align and cond_morning
+    cond = cond_15m and cond_3m and cond_1m and cond_align and cond_morning
 
-    # Cross-check the native 15m and 5m candles against the 1m candles inside
-    # them (two feeds that must agree).
+    # Cross-check the two Yahoo feeds against each other (15m vs the 1m
+    # candles inside it).
     one_day = by_tf.get("1m", {}).get(previous_day, {})
     derived, conflicts = {}, []
 
-    for tf, minutes, second_hm, last_hm in (("5m", 5, 1520, 1525), ("15m", 15, 1500, 1515)):
+    for hm in (915, 1500, 1515):
+        key = f"15m_{hm:04d}"
+        rebuilt = derive_from_1m(one_day, hm, 15)
+        derived[key] = rebuilt
+        native = candles[key]
 
-        for hm in (915, second_hm, last_hm):
-            key = f"{tf}_{hm:04d}"
-            rebuilt = derive_from_1m(one_day, hm, minutes)
-            derived[key] = rebuilt
-            native = candles[key]
+        # The trends of the 09:15 and 15:00 candles matter (morning rule and
+        # alignment); the 15:15 candle's trend is not used, so only its volume
+        # is cross-checked below.
+        if hm == 1515:
+            continue
 
-            # The trends of the 09:15 and second-last candles matter (morning
-            # rule and alignment); the last candle's trend is not used, so only
-            # its volume is cross-checked below.
-            if hm == last_hm:
-                continue
+        if not CROSS_CHECK_FEEDS or native is None:
+            continue
 
-            if not CROSS_CHECK_FEEDS or native is None:
-                continue
+        if rebuilt is None:
+            conflicts.append(
+                f"15m {hm_text(hm)} exists but the 1m feed has no candle inside it"
+            )
+            continue
 
-            if rebuilt is None:
-                conflicts.append(
-                    f"{tf} {hm_text(hm)} exists but the 1m feed has no candle inside it"
-                )
-                continue
+        native_trend = candle_direction(native["open"], native["close"])
+        rebuilt_trend = candle_direction(rebuilt["open"], rebuilt["close"])
 
-            native_trend = candle_direction(native["open"], native["close"])
-            rebuilt_trend = candle_direction(rebuilt["open"], rebuilt["close"])
+        if native_trend != rebuilt_trend:
+            conflicts.append(
+                f"15m {hm_text(hm)} is {trend_name(native_trend)} in the 15m feed "
+                f"but {trend_name(rebuilt_trend)} when rebuilt from 1m candles"
+            )
 
-            if native_trend != rebuilt_trend:
-                conflicts.append(
-                    f"{tf} {hm_text(hm)} is {trend_name(native_trend)} in the {tf} feed "
-                    f"but {trend_name(rebuilt_trend)} when rebuilt from 1m candles"
-                )
+    # The two 15m candles' volume ordering must also agree between the feeds.
+    rebuilt_1500, rebuilt_1515 = derived.get("15m_1500"), derived.get("15m_1515")
 
-        # The two candles' volume ordering must also agree between the feeds.
-        native_second, native_last = candles[f"{tf}_{second_hm:04d}"], candles[f"{tf}_{last_hm:04d}"]
-        rebuilt_second, rebuilt_last = derived[f"{tf}_{second_hm:04d}"], derived[f"{tf}_{last_hm:04d}"]
+    if (
+        CROSS_CHECK_FEEDS
+        and v15_1500 is not None and v15_1515 is not None
+        and rebuilt_1500 is not None and rebuilt_1515 is not None
+    ):
+        native_higher = v15_1500 > v15_1515
+        rebuilt_higher = rebuilt_1500["volume"] > rebuilt_1515["volume"]
 
-        if (
-            CROSS_CHECK_FEEDS
-            and native_second is not None and native_last is not None
-            and rebuilt_second is not None and rebuilt_last is not None
-        ):
-            native_higher = native_second["volume"] > native_last["volume"]
-            rebuilt_higher = rebuilt_second["volume"] > rebuilt_last["volume"]
-
-            if native_higher != rebuilt_higher:
-                conflicts.append(
-                    f"{tf} volume: '{hm_text(second_hm)} higher than {hm_text(last_hm)}' is "
-                    f"{native_higher} in the {tf} feed but {rebuilt_higher} when rebuilt "
-                    f"from 1m candles"
-                )
+        if native_higher != rebuilt_higher:
+            conflicts.append(
+                f"15m volume: '15:00 higher than 15:15' is {native_higher} in the "
+                f"15m feed but {rebuilt_higher} when rebuilt from 1m candles"
+            )
 
     # Direction anchors on the alignment trend: when cond is True the 15m 15:00,
-    # 5m 15:20, 3m 15:24 and 1m 15:28 candles all share it.
-    side = t5_20 * DIRECTION_RULES[DIRECTION_RULE]
+    # 3m 15:24 and 1m 15:28 candles all share it.
+    side = t15_1500 * DIRECTION_RULES[DIRECTION_RULE]
     direction = "LONG" if side == 1 else "SHORT" if side == -1 else None
 
     if conflicts:
@@ -2637,29 +2522,25 @@ def evaluate_rows(rows_by_tf, session_day=None):
         "direction": direction if cond else None,
         "cond": cond,
         "cond_15m": cond_15m,
-        "cond_5m": cond_5m,
         "cond_3m": cond_3m,
         "cond_1m": cond_1m,
         "cond_align": cond_align,
         "cond_morning": cond_morning,
         "vol_15m": vol_15m,
-        "vol_5m": vol_5m,
         "vol_3m": vol_3m,
-        "trend_3m": trend_3m,          # information only, not a rule
+        "trend_3m": trend_3m,
         "vol_1m": vol_1m,
-        "trend_1m": trend_1m,          # information only, not a rule
+        "trend_1m": trend_1m,
         "missing": missing,
         "conflicts": conflicts,
         "candles": candles,
         "derived": derived,
         "tail_1m": sorted(h for h in one_day if h >= 1520),
         "details": {
-            "t15_00": t15_00, "t15_15": t15_15,
-            "t5_20": t5_20, "t5_25": t5_25,
+            "t15_1500": t15_1500, "t15_1515": t15_1515,
             "t3_24": t3_24, "t3_27": t3_27,
             "t1_28": t1_28, "t1_29": t1_29,
-            "t15_0915": t15_0915, "t5_0915": t5_0915,
-            "t3_0915": t3_0915, "t1_0915": t1_0915,
+            "t15_0915": t15_0915, "t3_0915": t3_0915, "t1_0915": t1_0915,
         },
     }
 
@@ -2790,7 +2671,7 @@ def mark_stale(results):
 
 def session_warning(results):
     """Warn about broad Yahoo data-quality problems: many symbols missing one
-    of the 9 required candles, or many 5m/1m conflicts. Returns text or None."""
+    of the 9 required candles, or many 15m/1m conflicts. Returns text or None."""
 
     evaluated = [
         r for r in results if r.get("status") in ("PASS", "FAIL", "CONFLICT")
@@ -2806,8 +2687,8 @@ def session_warning(results):
 
     if share < SESSION_COMPLETE_SHARE:
         messages.append(
-            f"Only {share:.0%} of scanned symbols have all twelve required candles "
-            f"(09:15 on 15m, 5m, 3m and 1m; 15m 15:00 and 15:15; 5m 15:20 and 15:25; 3m 15:24 and 15:27; "
+            f"Only {share:.0%} of scanned symbols have all nine required candles "
+            f"(09:15 on 15m, 3m and 1m; 15m 15:00 and 15:15; 3m 15:24 and 15:27; "
             f"1m 15:28 and 15:29) on the previous day. "
             f"The data may be unusually incomplete - treat matches with "
             f"extra caution and verify on TradingView."
@@ -2822,8 +2703,8 @@ def session_warning(results):
 
     if conflicts / len(evaluated) > CONFLICT_WARN_SHARE:
         messages.append(
-            f"{conflicts} of {len(evaluated)} symbols have a 5m/1m data conflict. "
-            f"The 5m and 1m feeds are inconsistent with each other today; those "
+            f"{conflicts} of {len(evaluated)} symbols have a 15m/1m data conflict. "
+            f"The 15m and 1m feeds are inconsistent with each other today; those "
             f"symbols were blocked from signalling."
         )
 
@@ -2968,7 +2849,7 @@ small { color: #777; font-size: 10px; }
 
 
 def candle_text(candle, label):
-    """'15:20 Up (100.00->101.00) vol 1,234' for the report; numbers only."""
+    """'15:00 Up (100.00->101.00) vol 1,234' for the report; numbers only."""
 
     if candle is None:
         return f"{label} missing"
@@ -2991,20 +2872,9 @@ def part_badge(value):
     return "PASS" if value else "FAIL"
 
 
-# The LAST candle of every timeframe. Only its volume is read (its trend is not a
-# rule), so with MISSING_LAST_CANDLE_IS_ZERO_VOLUME a last candle with no trades
-# counts as volume 0 instead of blocking the match.
-LAST_CANDLES = {"15m 15:15", "5m 15:25", "3m 15:27", "1m 15:29"}
-
-
-def info_text(value):
-    """'same trend' / 'different trend' for the information-only last-two-candles
-    comparison shown in the report."""
-
-    if value is None:
-        return "-"
-
-    return "same trend" if value else "different trend"
+# The only "last" candle whose volume alone is used (every other last candle
+# needs a trend too): with MISSING_LAST_CANDLE_IS_ZERO_VOLUME it may be missing.
+LAST_CANDLES = {"15m 15:15"}
 
 
 def build_funnel(results):
@@ -3015,19 +2885,20 @@ def build_funnel(results):
     show the signals actually shown: a pass on the primary source or on Yahoo."""
 
     got_data = [r for r in results if r.get("status") not in ("NO_DATA", "ERROR")]
-    evaluated = [r for r in results if "cond_5m" in r]
+    evaluated = [r for r in results if "cond_15m" in r]
     allowed_missing = (
         LAST_CANDLES if MISSING_LAST_CANDLE_IS_ZERO_VOLUME else set()
     )
     full = [r for r in evaluated if set(r.get("missing") or []) <= allowed_missing]
-    step_1 = [r for r in full if r.get("vol_5m")]
-    step_1b = [r for r in step_1 if r.get("vol_15m")]
-    step_2 = [r for r in step_1b if r.get("vol_3m")]
-    step_3 = [r for r in step_2 if r.get("vol_1m")]
-    step_4 = [r for r in step_3 if r.get("cond_align")]
-    step_5 = [r for r in step_4 if r.get("cond_morning")]
-    step_6 = [r for r in step_5 if r.get("status") != "CONFLICT"]
-    step_7 = [r for r in step_6 if r.get("status") != "STALE"]
+    step_1 = [r for r in full if r.get("vol_15m")]
+    step_2 = [r for r in step_1 if r.get("vol_3m")]
+    step_3 = [r for r in step_2 if r.get("trend_3m")]
+    step_4 = [r for r in step_3 if r.get("vol_1m")]
+    step_5 = [r for r in step_4 if r.get("trend_1m")]
+    step_6 = [r for r in step_5 if r.get("cond_align")]
+    step_7 = [r for r in step_6 if r.get("cond_morning")]
+    step_8 = [r for r in step_7 if r.get("status") != "CONFLICT"]
+    step_9 = [r for r in step_8 if r.get("status") != "STALE"]
 
     signals = final_signals(results)
     other_only = [x for x in signals if len(x["sources"]) == 1 and x.get("only_other")]
@@ -3037,29 +2908,30 @@ def build_funnel(results):
         ("Data downloaded (no error / no-data)", len(got_data)),
         ("A completed session found", len(evaluated)),
         (
-            "All twelve candles present"
-            + (" (last candles may be missing)" if allowed_missing else ""),
+            "All nine candles present"
+            + (" (15m 15:15 may be missing)" if allowed_missing else ""),
             len(full),
         ),
-        ("5m: 15:20 volume > 15:25 volume", len(step_1)),
-        ("15m: 15:00 volume > 15:15 volume", len(step_1b)),
+        ("15m: 15:00 volume > 15:15 volume", len(step_1)),
         ("3m: 15:24 volume > 15:27 volume", len(step_2)),
-        ("1m: 15:28 volume > 15:29 volume", len(step_3)),
-        ("Same trend: 15m 15:00 = 5m 15:20 = 3m 15:24 = 1m 15:28", len(step_4)),
-        ("Morning 09:15 candles (15m, 5m, 3m, 1m) share that trend", len(step_5)),
-        ("No 15m/5m vs 1m data conflict", len(step_6)),
-        ("Same session as most stocks (pass on the primary source)", len(step_7)),
+        ("3m: 15:24 and 15:27 candles same trend", len(step_3)),
+        ("1m: 15:28 volume > 15:29 volume", len(step_4)),
+        ("1m: 15:28 and 15:29 candles same trend", len(step_5)),
+        ("Same trend: 15m 15:00 = 3m 15:24 = 1m 15:28", len(step_6)),
+        ("Morning 09:15 candles (15m, 3m, 1m) share that trend", len(step_7)),
+        ("No 15m/1m data conflict", len(step_8)),
+        ("Same session as most stocks (pass on the primary source)", len(step_9)),
         (f"SIGNALS SHOWN (pass on {primary_label()} or on Yahoo)", len(signals)),
         ("   of which found only by the other source", len(other_only)),
     ]
 
 
 def missing_summary(results):
-    """How many stocks lack each of the twelve candles, and how many lack ONLY a
-    last candle (the ones MISSING_LAST_CANDLE_IS_ZERO_VOLUME would
+    """How many stocks lack each of the nine candles, and how many lack ONLY a
+    last candle (15m 15:15) (the ones MISSING_LAST_CANDLE_IS_ZERO_VOLUME would
     recover). Returns (per_slot, only_last, evaluated_count)."""
 
-    evaluated = [r for r in results if "cond_5m" in r]
+    evaluated = [r for r in results if "cond_15m" in r]
     counts = Counter()
 
     for r in evaluated:
@@ -3147,18 +3019,14 @@ def source_health(results):
 
 
 def near_miss_list(results):
-    """Stocks that failed ONLY because the LAST candle of some timeframe (15m
-    15:15, 5m 15:25, 3m 15:27, 1m 15:29) is missing - it had no trades. With
-    MISSING_LAST_CANDLE_IS_ZERO_VOLUME = True they would be signals. Returns
-    [(symbol, direction)]."""
+    """Stocks that failed ONLY because their last 15m (15:15) candle is missing.
+    With MISSING_LAST_CANDLE_IS_ZERO_VOLUME = True they would be signals.
+    (In practice the 3m 15:27 and 1m 15:29 candles, which lie inside it, are then
+    missing too, so this list is normally empty.) Returns [(symbol, direction)]."""
 
     if MISSING_LAST_CANDLE_IS_ZERO_VOLUME:
         return []
 
-    pairs = (
-        ("vol_15m", "15m_1515", "15m_1500"), ("vol_5m", "5m_1525", "5m_1520"),
-        ("vol_3m", "3m_1527", "3m_1524"), ("vol_1m", "1m_1529", "1m_1528"),
-    )
     found = []
 
     for r in results:
@@ -3169,19 +3037,16 @@ def near_miss_list(results):
 
         c = r.get("candles") or {}
 
-        volume_ok = all(
-            r.get(flag) or (c.get(last) is None and c.get(second) is not None)
-            for flag, last, second in pairs
-        )
+        ok_15m = r.get("vol_15m") or (c.get("15m_1515") is None and c.get("15m_1500") is not None)
 
-        if volume_ok and r.get("cond_align") and r.get("cond_morning"):
-            side = r["details"]["t5_20"] * DIRECTION_RULES[DIRECTION_RULE]
+        if ok_15m and r.get("cond_3m") and r.get("cond_1m") and r.get("cond_align") and r.get("cond_morning"):
+            side = r["details"]["t15_1500"] * DIRECTION_RULES[DIRECTION_RULE]
             found.append((r["symbol"], "LONG" if side == 1 else "SHORT"))
 
     return sorted(found)
 
 
-def closest_misses(results, limit=60):
+def closest_misses(results, limit=25):
     """When signals are few (or none): stocks that failed exactly ONE condition
     on their own data source (every candle present, no data conflict) and are
     not already a signal on the other source. Returns [(symbol, failed)]."""
@@ -3192,7 +3057,7 @@ def closest_misses(results, limit=60):
     found = []
 
     for r in results:
-        if r.get("status") != "FAIL" or "cond_5m" not in r:
+        if r.get("status") != "FAIL" or "cond_15m" not in r:
             continue
 
         if cross_status(r) == "OTHER SOURCE ONLY":
@@ -3204,9 +3069,10 @@ def closest_misses(results, limit=60):
         failed = [
             name for name, ok in (
                 ("15m volume", r.get("vol_15m")),
-                ("5m volume", r.get("vol_5m")),
                 ("3m volume", r.get("vol_3m")),
+                ("3m trend", r.get("trend_3m")),
                 ("1m volume", r.get("vol_1m")),
+                ("1m trend", r.get("trend_1m")),
                 ("alignment", r.get("cond_align")),
                 ("morning candles", r.get("cond_morning")),
             ) if not ok
@@ -3216,24 +3082,6 @@ def closest_misses(results, limit=60):
             found.append((r["symbol"], failed[0]))
 
     return sorted(found)[:limit]
-
-
-def rule_failure_counts(results):
-    """For every rule: how many stocks fail it ON ITS OWN (every candle present,
-    no data conflict), whatever the other rules say. Unlike the funnel this does
-    not depend on the order of the rules, so it shows which rule really is the
-    bottleneck. Returns ([(rule, count)], stocks_considered)."""
-
-    allowed_missing = LAST_CANDLES if MISSING_LAST_CANDLE_IS_ZERO_VOLUME else set()
-    pool = [
-        r for r in results
-        if r.get("status") in ("PASS", "FAIL") and "cond_5m" in r
-        and set(r.get("missing") or []) <= allowed_missing
-    ]
-
-    return [
-        (label, sum(1 for r in pool if not r.get(key))) for key, label in RULE_NAMES
-    ], len(pool)
 
 
 def funnel_console(results):
@@ -3254,28 +3102,16 @@ def funnel_console(results):
         lines.append(f"  {count:>5}  {label}")
 
     lines.append(
-        f"  {last_only:>5}  missing ONLY a last candle (15m 15:15 / 5m 15:25 / 3m 15:27 / 1m 15:29) "
+        f"  {last_only:>5}  missing ONLY a last candle (15m 15:15) "
         f"(MISSING_LAST_CANDLE_IS_ZERO_VOLUME = {MISSING_LAST_CANDLE_IS_ZERO_VOLUME})"
     )
-
-    failing, pool = rule_failure_counts(results)
-
-    lines.append("")
-    lines.append(f"  Stocks failing each rule on its own (of {pool} with every candle present):")
-
-    for label, count in failing:
-        lines.append(f"  {count:>5}  {label}")
-
-    if pool:
-        strictest = max(failing, key=lambda item: item[1])
-        lines.append(f"  Strictest rule today: {strictest[0]} ({strictest[1]} of {pool} fail it)")
 
     near = near_miss_list(results)
 
     if near:
         lines.append("")
         lines.append(
-            f"  {len(near)} stock(s) fail ONLY because a last candle had no trades."
+            f"  {len(near)} stock(s) fail ONLY because a last candle (15m 15:15) had no trades."
         )
         lines.append(
             "  They would be signals with MISSING_LAST_CANDLE_IS_ZERO_VOLUME = True:"
@@ -3313,22 +3149,10 @@ def funnel_html(results):
         f'<tr><td>{esc(label)}</td><td>{count}</td></tr>' for label, count in per_slot
     )
     missing_body += (
-        f'<tr><td>Missing ONLY a last candle '
+        f'<tr><td>Missing ONLY the last 3m/1m candle '
         f'(MISSING_LAST_CANDLE_IS_ZERO_VOLUME = '
         f'{esc(MISSING_LAST_CANDLE_IS_ZERO_VOLUME)})</td><td>{last_only}</td></tr>'
     )
-
-    failing, pool = rule_failure_counts(results)
-    failing_body = "".join(
-        f'<tr><td>{esc(label)}</td><td>{count}</td></tr>' for label, count in failing
-    )
-    failing_html = (
-        f'<h2 style="margin-top:22px">Stocks failing each rule on its own (of {pool} with every candle present)</h2>'
-        '<p class="none">Independent of the order of the rules: the biggest number is the '
-        'rule that removes the most stocks today.</p>'
-        '<div class="table-wrap"><table class="funnel"><tbody>'
-        f'{failing_body}</tbody></table></div>'
-    ) if pool else ""
 
     closest = closest_misses(results)
     closest_html = ""
@@ -3336,8 +3160,8 @@ def funnel_html(results):
     if closest:
         names = ", ".join(f"{esc(sym)} [{esc(why)}]" for sym, why in closest)
         closest_html = (
-            '<h2 style="margin-top:22px">Watchlist: closest misses (fail exactly one rule)</h2>'
-            '<p class="none">NOT signals - a watchlist only: each of these passed every rule except '
+            '<h2 style="margin-top:22px">Closest misses (fail exactly one condition)</h2>'
+            '<p class="none">Not signals: each of these passed every condition except '
             f'the one in brackets.</p><p>{names}</p>'
         )
 
@@ -3349,7 +3173,7 @@ def funnel_html(results):
         names = ", ".join(f"{esc(sym)} ({esc(d)})" for sym, d in near)
         near_html = (
             f'<h2 style="margin-top:22px">Filtered only by a missing last candle ({len(near)})</h2>'
-            '<p class="none">Every other condition holds; the last 5m (15:25), 3m (15:27) and/or '
+            '<p class="none">Every other condition holds; the last 15m (15:15), 3m (15:27) and/or '
             'last 1m (15:29) candle had no trades. They would be signals with '
             'MISSING_LAST_CANDLE_IS_ZERO_VOLUME = True. Check them on a chart '
             f'before deciding.</p><p>{names}</p>'
@@ -3362,7 +3186,7 @@ def funnel_html(results):
         f'<h2 style="margin-top:22px">Stocks missing each candle (of {total} with a session)</h2>'
         '<div class="table-wrap"><table class="funnel"><tbody>'
         f'{missing_body}</tbody></table></div>'
-        f'{failing_html}{near_html}{closest_html}</div>'
+        f'{near_html}{closest_html}</div>'
     )
 
 
@@ -3379,37 +3203,30 @@ def build_table_row(r):
             + candle_text(candles.get("15m_1515"), "15:15") + "<br>"
             + f'volume {part_badge(r.get("vol_15m"))}'
         )
-        note_5m = (
-            candle_text(candles.get("5m_1520"), "15:20") + "<br>"
-            + candle_text(candles.get("5m_1525"), "15:25") + "<br>"
-            + f'volume {part_badge(r.get("vol_5m"))}'
-        )
         note_3m = (
             candle_text(candles.get("3m_1524"), "15:24") + "<br>"
             + candle_text(candles.get("3m_1527"), "15:27") + "<br>"
-            + f'last two: {info_text(r.get("trend_3m"))} (not a rule) / '
+            + f'trend {part_badge(r.get("trend_3m"))} / '
             f'volume {part_badge(r.get("vol_3m"))}'
         )
         note_1m = (
             candle_text(candles.get("1m_1528"), "15:28") + "<br>"
             + candle_text(candles.get("1m_1529"), "15:29") + "<br>"
-            + f'last two: {info_text(r.get("trend_1m"))} (not a rule) / '
+            + f'trend {part_badge(r.get("trend_1m"))} / '
             f'volume {part_badge(r.get("vol_1m"))}'
         )
         note_align = (
-            f'15m 15:00 {trend_name(details["t15_00"])} / '
-            f'5m 15:20 {trend_name(details["t5_20"])} / '
+            f'15m 15:00 {trend_name(details["t15_1500"])} / '
             f'3m 15:24 {trend_name(details["t3_24"])} / '
             f'1m 15:28 {trend_name(details["t1_28"])}'
         )
         note_morning = (
             candle_text(candles.get("15m_0915"), "15m 09:15") + "<br>"
-            + candle_text(candles.get("5m_0915"), "5m 09:15") + "<br>"
             + candle_text(candles.get("3m_0915"), "3m 09:15") + "<br>"
             + candle_text(candles.get("1m_0915"), "1m 09:15")
         )
     else:
-        note_15m = note_5m = note_3m = note_1m = note_align = note_morning = ""
+        note_15m = note_3m = note_1m = note_align = note_morning = ""
 
     data_label = {
         "OK": "OK", "FALLBACK": "Fallback window", "NO_DATA": "No data", "ERROR": "Error",
@@ -3457,7 +3274,6 @@ def build_table_row(r):
 <td>{esc(r['previous_day']) if r.get('previous_day') else DASH}</td>
 <td>{cell(direction_value)}</td>
 <td>{badge(r.get('cond_15m'))}<br><small>{note_15m}</small></td>
-<td>{badge(r.get('cond_5m'))}<br><small>{note_5m}</small></td>
 <td>{badge(r.get('cond_3m'))}<br><small>{note_3m}</small></td>
 <td>{badge(r.get('cond_1m'))}<br><small>{note_1m}</small></td>
 <td>{badge(r.get('cond_align'))}<br><small>{note_align}</small></td>
@@ -3524,7 +3340,6 @@ def generate_html_report(results, elapsed, universe_source, run_note=None):
             f'<b>{esc(sig["symbol"])}</b>'
             f'<span class="date">Previous day: {esc(sig.get("previous_day", ""))}</span>'
             + signal_tag(sig)
-            + series_tag(sig["symbol"])
             + '</div>'
             for sig in matches
         )
@@ -3557,20 +3372,20 @@ def generate_html_report(results, elapsed, universe_source, run_note=None):
     )
 
     zero_note = (
-        " A last candle (5m 15:25) with no trades counts as volume 0."
+        " A last candle (15m 15:15) with no trades counts as volume 0."
         if MISSING_LAST_CANDLE_IS_ZERO_VOLUME else ""
     )
 
     if DIRECTION_RULES[DIRECTION_RULE] == 1:
         direction_text = (
             "Direction follows the alignment trend (the second-last candles: "
-            "5m 15:20 / 3m 15:24 / 1m 15:28): "
+            "15m 15:00 / 3m 15:24 / 1m 15:28): "
             "Up is LONG, Down is SHORT."
         )
     else:
         direction_text = (
             "Direction fades the alignment trend (the second-last candles: "
-            "5m 15:20 / 3m 15:24 / 1m 15:28): "
+            "15m 15:00 / 3m 15:24 / 1m 15:28): "
             "Up is SHORT, Down is LONG."
         )
 
@@ -3590,7 +3405,7 @@ def generate_html_report(results, elapsed, universe_source, run_note=None):
 <div class="subtitle">
 Generated: {esc(scan_time)}<br>
 Universe: {esc(universe_source)}<br>
-Data: {esc(source_text)} - 15-minute, 5-minute, 3-minute and 1-minute candles on the 09:15 grid<br>
+Data: {esc(source_text)} - 15-minute, 3-minute and 1-minute candles on the 09:15 grid<br>
 Rules: {esc(STRATEGY_RULES)}<br>
 Previous day: {esc(fmt_day(previous_day))}<br>
 Entry: {esc(fmt_day(entry_day))} at the 09:15 open &nbsp;|&nbsp; Exit: {esc(EXIT_TIME_LABEL)}
@@ -3617,11 +3432,10 @@ Entry: {esc(fmt_day(entry_day))} at the 09:15 open &nbsp;|&nbsp; Exit: {esc(EXIT
 <th>Previous day</th>
 <th>Direction</th>
 <th>15m condition<br><small>15:00 vol &gt; 15:15 vol</small></th>
-<th>5m condition<br><small>15:20 vol &gt; 15:25 vol</small></th>
-<th>3m condition<br><small>15:24 vol &gt; 15:27 vol</small></th>
-<th>1m condition<br><small>15:28 vol &gt; 15:29 vol</small></th>
-<th>Alignment<br><small>15m 15:00 = 5m 15:20 = 3m 15:24 = 1m 15:28 trend</small></th>
-<th>Morning candles<br><small>09:15 candles (15m, 5m, 3m, 1m) = that same trend</small></th>
+<th>3m condition<br><small>15:24 &amp; 15:27 same trend; 15:24 vol &gt; 15:27 vol</small></th>
+<th>1m condition<br><small>15:28 &amp; 15:29 same trend; 15:28 vol &gt; 15:29 vol</small></th>
+<th>Alignment<br><small>15m 15:00 = 3m 15:24 = 1m 15:28 trend</small></th>
+<th>Morning candles<br><small>09:15 candles (15m, 3m, 1m) = that same trend</small></th>
 <th>Result</th>
 <th>Data</th>
 </tr>
@@ -3633,18 +3447,19 @@ Entry: {esc(fmt_day(entry_day))} at the 09:15 open &nbsp;|&nbsp; Exit: {esc(EXIT
 </div>
 
 <div class="footer">
-<b>STRATEGY (15-minute, 5-minute, 3-minute and 1-minute candles)</b><br>
+<b>STRATEGY (15-minute, 3-minute and 1-minute candles)</b><br>
 Read on the previous day, the latest completed session. Candles are labelled by start
-time: the last candles are 15m 15:15 (second last 15:00), 5m 15:25 (second last 15:20),
-3m 15:27 (second last 15:24) and 1m 15:29 (second last 15:28). A stock matches only when ALL of these hold:<br>
+time: the last candles are 15m 15:15 (second last 15:00), 3m 15:27 (second last 15:24)
+and 1m 15:29 (second last 15:28). A stock matches only when ALL of these hold:<br>
 1) 15m volume: the 15:00 candle's volume is higher than the 15:15 candle's.<br>
-2) 5m volume: the 15:20 candle's volume is higher than the 15:25 candle's.<br>
-3) 3m volume: the 15:24 candle's volume is higher than the 15:27 candle's.<br>
+2) 3m volume: the 15:24 candle's volume is higher than the 15:27 candle's.<br>
+3) 3m trend: the 15:24 and 15:27 candles have the same trend.<br>
 4) 1m volume: the 15:28 candle's volume is higher than the 15:29 candle's.<br>
-5) The 15m 15:00, 5m 15:20, 3m 15:24 and 1m 15:28 candles all have the same trend.<br>
-6) The morning candles (09:15) of the 15m, 5m, 3m and 1m timeframes have that same trend too.<br>
-On every timeframe the last two candles may have the same or opposite trends: there is no
-same-trend rule on them (the report shows it for 3m and 1m for information only).<br>
+5) 1m trend: the 15:28 and 15:29 candles have the same trend.<br>
+6) The 15m 15:00, 3m 15:24 and 1m 15:28 candles all have the same trend.<br>
+7) The morning candles (09:15) of the 15m, 3m and 1m timeframes have that same trend too.<br>
+The 15m timeframe has no opposite-trend rule: its last two candles may have the same or
+opposite trends.<br>
 Trend = candle colour (close vs open); a flat candle has no trend, so it is never
 the same as another.<br>
 <b>Data sources:</b> every stock is scanned on {esc(primary_label())}; every stock that does not
@@ -3654,15 +3469,15 @@ is shown as a signal, tagged with the source(s) it passed on.<br>
 <b>Entry:</b> the 09:15 open on entry day. <b>Exit:</b> {esc(EXIT_TIME_LABEL)}.<br><br>
 <b>Data notes:</b> candles come from the primary source ({esc(primary_label())} - the DATA_SOURCE
 setting) with Yahoo as the fallback and second source; the source of each stock is shown in
-the Data column. TradingView supplies its own native 15-minute, 5-minute, 3-minute and 1-minute
-candles; for NSE's feed the 15-minute, 5-minute and 3-minute candles are built from 1-minute candles on a 09:15
+the Data column. TradingView supplies its own native 15-minute, 3-minute and 1-minute candles;
+for NSE's feed the 15-minute and 3-minute candles are built from 1-minute candles on a 09:15
 grid (open = first, close = last, volume = sum); a stock read from Yahoo uses Yahoo's own
-5-minute, 15-minute and 1-minute feeds, with its 3-minute candles built from the 1-minute ones. Prices are rounded to 2
+15-minute and 1-minute feeds, with its 3-minute candles built from the 1-minute ones. Prices are rounded to 2
 decimals; zero-volume and corrupt candles are dropped and count as missing, which can only
-block a match.{zero_note} DATA CONFLICT means a native 5m candle's trend, or which 5m candle has more
+block a match.{zero_note} DATA CONFLICT means a native 15m candle's trend, or which 15m candle has more
 volume, disagrees with the same candles rebuilt from the 1m candles inside them, so the
 symbol is blocked rather than trusted. INCOMPLETE means no completed session (or none of
-the twelve candles) came back. STALE means the previous day differs from most other symbols.
+the nine candles) came back. STALE means the previous day differs from most other symbols.
 Each candle is shown as open&rarr;close with its volume so a signal can be checked against
 a chart.
 </div>
@@ -3726,15 +3541,14 @@ def print_audit(r):
 
         print(line)
 
-    if "cond_5m" in r:
-        print(f"  15m 15:00 vol > 15:15 vol : {r['vol_15m']}")
-        print(f"  5m 15:20 vol > 15:25 vol  : {r['vol_5m']}")
+    if "cond_15m" in r:
+        print(f"  15m 15:00 vol > 15:15 vol  : {r['vol_15m']}")
         print(f"  3m  15:24 vol > 15:27 vol  : {r['vol_3m']}")
-        print(f"  3m  last two candles: {info_text(r['trend_3m'])} (information only)")
+        print(f"  3m  15:24 and 15:27 same trend: {r['trend_3m']}")
         print(f"  1m  15:28 vol > 15:29 vol  : {r['vol_1m']}")
-        print(f"  1m  last two candles: {info_text(r['trend_1m'])} (information only)")
-        print(f"  15m 15:00 = 5m 15:20 = 3m 15:24 = 1m 15:28 trend: {r['cond_align']}")
-        print(f"  09:15 candles (15m, 5m, 3m, 1m) share that trend: {r['cond_morning']}")
+        print(f"  1m  15:28 and 15:29 same trend: {r['trend_1m']}")
+        print(f"  15m 15:00 = 3m 15:24 = 1m 15:28 trend: {r['cond_align']}")
+        print(f"  09:15 candles (15m, 3m, 1m) share that trend: {r['cond_morning']}")
 
     for conflict in r.get("conflicts") or []:
         print("  CONFLICT:", conflict)
@@ -3758,7 +3572,7 @@ def audit_symbols(symbols):
 # =============================================================================
 
 def compare_sources(symbols):
-    """Fetch the same stock from NSE and from Yahoo and print the twelve strategy
+    """Fetch the same stock from NSE and from Yahoo and print the nine strategy
     candles side by side, so the two sources can be checked against each other
     (and against a chart) before trusting a scan."""
 
@@ -3883,7 +3697,7 @@ def nse_debug(symbols):
 
     print("   -> exact match:", snippet(match, 300))
 
-    for interval, minutes in (("1m", 1), ("5m", 5)):
+    for interval, minutes in (("1m", 1), ("15m", 15)):
         now = int(time.time())
         params = {
             "token": str(match["scripcode"]),
@@ -3956,18 +3770,19 @@ def nse_debug(symbols):
 
 RULE_NAMES = (
     ("vol_15m", "15m volume (15:00 > 15:15)"),
-    ("vol_5m", "5m volume (15:20 > 15:25)"),
     ("vol_3m", "3m volume (15:24 > 15:27)"),
+    ("trend_3m", "3m trend (15:24 and 15:27 same)"),
     ("vol_1m", "1m volume (15:28 > 15:29)"),
-    ("cond_align", "alignment (15m 15:00 = 5m 15:20 = 3m 15:24 = 1m 15:28)"),
-    ("cond_morning", "morning 09:15 candles (15m, 5m, 3m, 1m)"),
+    ("trend_1m", "1m trend (15:28 and 15:29 same)"),
+    ("cond_align", "alignment (15m 15:00 = 3m 15:24 = 1m 15:28)"),
+    ("cond_morning", "morning 09:15 candles"),
 )
 
 
 def failed_rules(result):
     """Names of the rules a result fails (plus data problems)."""
 
-    if "cond_5m" not in result:
+    if "cond_15m" not in result:
         return ["no usable data"]
 
     failed = [label for key, label in RULE_NAMES if not result.get(key)]
@@ -3979,7 +3794,7 @@ def failed_rules(result):
         failed.append("missing candles: " + ", ".join(missing))
 
     if result.get("conflicts"):
-        failed.append("5m/1m data conflict")
+        failed.append("15m/1m data conflict")
 
     return failed
 
@@ -4117,7 +3932,7 @@ def check_other_source(result, session_day):
 
     other_result = evaluate_rows(rows, session_day=session_day)
 
-    if "cond_5m" not in other_result:
+    if "cond_15m" not in other_result:
         return {
             "source": other, "checked": False,
             "note": other_result.get("note") or f"{other} has no usable data for that session",
@@ -4336,14 +4151,6 @@ def cross_check_console(results):
     return "\n".join(lines)
 
 
-def series_tag(symbol):
-    """HTML tag for a stock that is not a normal EQ-series stock."""
-
-    note = series_note(symbol)
-
-    return f'<span class="tag warn">{esc(note)}</span>' if note else ""
-
-
 def signal_tag(signal):
     """Small HTML tag next to a signal showing which source(s) it passed on."""
 
@@ -4421,7 +4228,7 @@ def unscanned_lines(results):
 
     for key, meaning in (
         ("ERROR", "could NOT be scanned (technical failure) and may hide a signal"),
-        ("CONFLICT", "have a 5m/1m DATA CONFLICT and were blocked"),
+        ("CONFLICT", "have a 15m/1m DATA CONFLICT and were blocked"),
         ("STALE", "were read on a different session than most stocks"),
     ):
         items = report[key]
@@ -4448,7 +4255,7 @@ def unscanned_html(results):
 # =============================================================================
 
 def tv_debug(symbols):
-    """Show what TradingView sends for one stock, whether its own 5-minute and
+    """Show what TradingView sends for one stock, whether its own 15-minute and
     3-minute candles equal the ones built from its 1-minute candles, and how its
     candle minutes line up with Yahoo's. Paste the output when asking for help."""
 
@@ -4499,7 +4306,7 @@ def tv_debug(symbols):
 
     print("2) TradingView's own candles vs the ones built from its 1-minute candles:")
 
-    for interval, minutes in (("15", 15), ("5", 5), ("3", 3)):
+    for interval, minutes in (("15", 15), ("3", 3)):
         try:
             native = tv_fetch_bars(chosen, 800, interval)
         except Exception as e:
@@ -4656,7 +4463,6 @@ def main():
                 f"  {sig['symbol']:<15}"
                 f"{sig['direction']:<7}"
                 f"{sig['previous_day']}   [{' + '.join(sig['sources'])}]"
-                + (f"   ({series_note(sig['symbol'])})" if series_note(sig["symbol"]) else "")
             )
     else:
         print("NO MATCHES.")
