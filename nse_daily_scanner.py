@@ -40,21 +40,21 @@
 #
 # ALL of these must hold:
 #   1) 15m volume: the 15:00 candle's volume is HIGHER than the 15:15 candle's.
-#   2) 15m trend:  the last two 15m candles (15:00, 15:15) have the SAME trend.
-#   3) 3m volume:  the 15:24 candle's volume is HIGHER than the 15:27 candle's.
-#   4) 1m volume:  the 15:28 candle's volume is HIGHER than the 15:29 candle's.
-#   5) The second-last candles of all three timeframes (15m 15:00, 3m 15:24,
+#   2) 3m volume:  the 15:24 candle's volume is HIGHER than the 15:27 candle's.
+#   3) 1m volume:  the 15:28 candle's volume is HIGHER than the 15:29 candle's.
+#   4) The second-last candles of all three timeframes (15m 15:00, 3m 15:24,
 #      1m 15:28) have the SAME trend (the "aligned trend").
-#   6) The morning candles (09:15) of all three timeframes (15m, 3m, 1m 09:15)
+#   5) The morning candles (09:15) of all three timeframes (15m, 3m, 1m 09:15)
 #      have that SAME aligned trend too.
-#   7) PREVIOUS DAY, 15m: the 15m 15:00 candle's trend is the SAME as the trend
+#   6) PREVIOUS DAY, 15m: the 15m 15:00 candle's trend is the SAME as the trend
 #      of the 15m 15:00 candle of the session before it (P-1).
-#   8) PREVIOUS DAY, 1m: the 1m 15:28 candle's trend is the SAME as the trend of
+#   7) PREVIOUS DAY, 1m: the 1m 15:28 candle's trend is the SAME as the trend of
 #      the 1m 15:28 candle of the session before it (P-1).
 #
-# The 3m and 1m timeframes have no same-trend rule: their last two candles may
-# have the same or opposite trends (only their volume order matters, and the
-# second-last candle's trend for the alignment).
+# On EVERY timeframe the last two candles may have the same or opposite trends:
+# only their volume order matters (and the second-last candle's trend, for the
+# alignment in 4 and the previous-day rules 6 and 7). There is no same-trend rule
+# on the last two candles of any timeframe.
 #
 # DATA SOURCES: every stock is scanned on the primary source (DATA_SOURCE), and
 # every stock that does not pass there is ALSO scanned on Yahoo for the same
@@ -71,22 +71,23 @@
 #
 # A candle with no trades is absent from the data. By default a missing
 # candle can only BLOCK a match, never create one. Optionally
-# MISSING_LAST_CANDLE_IS_ZERO_VOLUME treats a missing last 3m (15:27) or 1m
-# (15:29) candle as volume 0 (see CONFIGURATION).
+# MISSING_LAST_CANDLE_IS_ZERO_VOLUME treats a missing LAST candle (15m 15:15,
+# 3m 15:27 or 1m 15:29) as volume 0 (see CONFIGURATION).
 #
 # DATA-ACCURACY SAFEGUARDS
 #   * Prices are rounded to 2 decimals, so Yahoo's float noise can never turn a
 #     flat candle into an Up/Down one.
 #   * Zero-volume candles and corrupt candles (price <= 0, close/open outside
 #     the high-low range) are dropped and treated as MISSING.
-#   * Cross-check (the native 15-minute feed): the 15m 09:15, 15:00 and 15:15
-#     candles - and the 15:00 candle of the previous session - are rebuilt from
-#     the 1m candles inside them (volume = sum of the 1m volumes). If the two
-#     feeds disagree on the trend of any of them, or on which of the 15:00 /
-#     15:15 candles has more volume, the symbol is marked DATA CONFLICT and
-#     never produces a signal. (Yahoo has no 3m feed, so its 3m candles are
-#     built from the 1m candles; TradingView's 3m candles are its own native
-#     ones.)
+#   * Cross-check (the native 15-minute feed): the 15m 09:15 and 15:00 candles -
+#     and the 15:00 candle of the previous session - are rebuilt from the 1m
+#     candles inside them (volume = sum of the 1m volumes), and so is the 15:15
+#     candle (for its volume). If the two feeds disagree on the trend of the
+#     09:15 or 15:00 candle (or the previous session's 15:00 candle), or on which
+#     of the 15:00 / 15:15 candles has more volume, the symbol is marked DATA
+#     CONFLICT and never produces a signal. (Yahoo has no 3m feed, so its 3m
+#     candles are built from the 1m candles; TradingView's 3m candles are its own
+#     native ones.)
 #   * Every row in the report shows each candle's open -> close and volume, so
 #     any signal can be checked against a chart in seconds.
 #   * Single-stock audit:  python scanner.py --check RELIANCE TCS
@@ -173,19 +174,20 @@ CONFLICT_WARN_SHARE = 0.10
 # ("second-last volume > last volume"), a LAST candle with no trades has volume
 # 0, so:
 #   False -> a missing last candle BLOCKS the match (default, strictest)
-#   True  -> a missing last 3m (15:27) or 1m (15:29) candle counts as volume 0:
-#            the rule passes whenever the second-last candle traded. This applies
-#            to the 3m and 1m timeframes only: the last 15m candle (15:15) must
-#            exist because its TREND is a rule. Illiquid stocks often have no
-#            trade in the final minute, so this switch can matter. It stays
-#            False (strictest) unless you decide otherwise.
+#   True  -> a missing last 15m (15:15), 3m (15:27) or 1m (15:29) candle counts as
+#            volume 0: the rule passes whenever the second-last candle traded.
+#            No last candle's trend is a rule any more, so this applies to the
+#            last candle of every timeframe. Illiquid stocks often have no trade
+#            in the final minute, so this switch can matter. It stays False
+#            (strictest) unless you decide otherwise. (A missing SECOND-last
+#            candle, or a missing previous-day candle, always blocks.)
 MISSING_LAST_CANDLE_IS_ZERO_VOLUME = False
 
 # A short description of the rules, shown at the top of every report and in the
 # console so a result can always be tied to the rule set that produced it.
 # (Keep it in step with the rules above if they ever change.)
 STRATEGY_RULES = (
-    "15m volume + same trend | 3m volume | 1m volume | "
+    "15m volume | 3m volume | 1m volume | "
     "aligned second-last trend (15m/3m/1m) | morning (09:15) trend (15m/3m/1m) | "
     "15m and 1m second-last trend = previous day's"
 )
@@ -2443,17 +2445,16 @@ def evaluate_rows(rows_by_tf, session_day=None, prior_day=None):
     (P = the latest completed session). Entry day = the next trading day.
 
     1) 15m 15:00 volume is higher than 15m 15:15 volume.
-    2) 15m 15:00 and 15m 15:15 candles have the same trend.
-    3) 3m 15:24 volume is higher than 3m 15:27 volume.
-    4) 1m 15:28 volume is higher than 1m 15:29 volume.
-    5) 15m 15:00, 3m 15:24 and 1m 15:28 candles all have the same trend.
-    6) 15m, 3m and 1m 09:15 candles have that same trend too.
-    7) The 15m 15:00 candle's trend is the same as the trend of the 15m 15:00
+    2) 3m 15:24 volume is higher than 3m 15:27 volume.
+    3) 1m 15:28 volume is higher than 1m 15:29 volume.
+    4) 15m 15:00, 3m 15:24 and 1m 15:28 candles all have the same trend.
+    5) 15m, 3m and 1m 09:15 candles have that same trend too.
+    6) The 15m 15:00 candle's trend is the same as the trend of the 15m 15:00
        candle of the session before P (P-1).
-    8) The 1m 15:28 candle's trend is the same as the trend of the 1m 15:28
+    7) The 1m 15:28 candle's trend is the same as the trend of the 1m 15:28
        candle of the session before P (P-1).
-    (The 3m and 1m timeframes do not require their last two candles to share a
-    trend.)
+    (No timeframe requires its last two candles to share a trend - or to have
+    opposite trends.)
 
     Before a signal is allowed, the 15m candles are cross-checked against
     the 1m candles inside them (including the P-1 candle); a disagreement gives
@@ -2593,10 +2594,10 @@ def evaluate_rows(rows_by_tf, session_day=None, prior_day=None):
 
         return first > second
 
-    # 15m: the volume order AND the last two candles sharing one trend (a flat or
-    # missing candle has trend 0, so it is never "the same"). 3m and 1m: the
-    # volume order only; whether their last two candles share a trend is worked
-    # out (trend_3m / trend_1m) for INFORMATION ONLY - it is not a rule.
+    # Every timeframe: the volume order only. The last two candles of a timeframe
+    # may have the same or opposite trends; whether they share a trend is still
+    # worked out (trend_15m / trend_3m / trend_1m) but for INFORMATION ONLY: the
+    # report shows it, it is not a rule.
     vol_15m = higher(v15_00, v15_15)
     vol_3m = higher(v3_24, v3_27)
     vol_1m = higher(v1_28, v1_29)
@@ -2604,7 +2605,7 @@ def evaluate_rows(rows_by_tf, session_day=None, prior_day=None):
     trend_3m = t3_24 != 0 and t3_24 == t3_27
     trend_1m = t1_28 != 0 and t1_28 == t1_29
 
-    cond_15m = vol_15m and trend_15m
+    cond_15m = vol_15m
     cond_3m = vol_3m
     cond_1m = vol_1m
 
@@ -2637,9 +2638,12 @@ def evaluate_rows(rows_by_tf, session_day=None, prior_day=None):
             derived[key] = rebuilt
             native = candles[key]
 
-            # The trends of all three candles matter (morning rule, alignment and
-            # the 15m same-trend rule), so all three are cross-checked; the volume
-            # order of the 15:00 / 15:15 pair is cross-checked below.
+            # The trends of the 09:15 and second-last candles matter (morning rule,
+            # alignment and previous-day rule); the last candle's trend is not
+            # used, so only its volume is cross-checked below.
+            if hm == last_hm:
+                continue
+
             if not CROSS_CHECK_FEEDS or native is None:
                 continue
 
@@ -2726,7 +2730,7 @@ def evaluate_rows(rows_by_tf, session_day=None, prior_day=None):
         "cond_align": cond_align,
         "cond_morning": cond_morning,
         "vol_15m": vol_15m,
-        "trend_15m": trend_15m,
+        "trend_15m": trend_15m,          # information only, not a rule
         "vol_3m": vol_3m,
         "trend_3m": trend_3m,          # information only, not a rule
         "vol_1m": vol_1m,
@@ -3086,7 +3090,7 @@ def part_badge(value):
 # The LAST candle of every timeframe. Only its volume is read (its trend is not a
 # rule), so with MISSING_LAST_CANDLE_IS_ZERO_VOLUME a last candle with no trades
 # counts as volume 0 instead of blocking the match.
-LAST_CANDLES = {"3m 15:27", "1m 15:29"}
+LAST_CANDLES = {"15m 15:15", "3m 15:27", "1m 15:29"}
 
 
 def info_text(value):
@@ -3113,15 +3117,14 @@ def build_funnel(results):
     )
     full = [r for r in evaluated if set(r.get("missing") or []) <= allowed_missing]
     step_1 = [r for r in full if r.get("vol_15m")]
-    step_2 = [r for r in step_1 if r.get("trend_15m")]
-    step_3 = [r for r in step_2 if r.get("vol_3m")]
-    step_4 = [r for r in step_3 if r.get("vol_1m")]
-    step_5 = [r for r in step_4 if r.get("cond_align")]
-    step_6 = [r for r in step_5 if r.get("cond_morning")]
-    step_7 = [r for r in step_6 if r.get("cond_prior")]
-    step_8 = [r for r in step_7 if r.get("cond_prior_1m")]
-    step_9 = [r for r in step_8 if r.get("status") != "CONFLICT"]
-    step_10 = [r for r in step_9 if r.get("status") != "STALE"]
+    step_2 = [r for r in step_1 if r.get("vol_3m")]
+    step_3 = [r for r in step_2 if r.get("vol_1m")]
+    step_4 = [r for r in step_3 if r.get("cond_align")]
+    step_5 = [r for r in step_4 if r.get("cond_morning")]
+    step_6 = [r for r in step_5 if r.get("cond_prior")]
+    step_7 = [r for r in step_6 if r.get("cond_prior_1m")]
+    step_8 = [r for r in step_7 if r.get("status") != "CONFLICT"]
+    step_9 = [r for r in step_8 if r.get("status") != "STALE"]
 
     signals = final_signals(results)
     other_only = [x for x in signals if len(x["sources"]) == 1 and x.get("only_other")]
@@ -3136,15 +3139,14 @@ def build_funnel(results):
             len(full),
         ),
         ("15m: 15:00 volume > 15:15 volume", len(step_1)),
-        ("15m: 15:00 and 15:15 candles same trend", len(step_2)),
-        ("3m: 15:24 volume > 15:27 volume", len(step_3)),
-        ("1m: 15:28 volume > 15:29 volume", len(step_4)),
-        ("Same trend: 15m 15:00 = 3m 15:24 = 1m 15:28", len(step_5)),
-        ("Morning 09:15 candles (15m, 3m, 1m) share that trend", len(step_6)),
-        ("15m 15:00 trend = previous day's 15m 15:00 trend", len(step_7)),
-        ("1m 15:28 trend = previous day's 1m 15:28 trend", len(step_8)),
-        ("No 15m vs 1m data conflict", len(step_9)),
-        ("Same sessions as most stocks (pass on the primary source)", len(step_10)),
+        ("3m: 15:24 volume > 15:27 volume", len(step_2)),
+        ("1m: 15:28 volume > 15:29 volume", len(step_3)),
+        ("Same trend: 15m 15:00 = 3m 15:24 = 1m 15:28", len(step_4)),
+        ("Morning 09:15 candles (15m, 3m, 1m) share that trend", len(step_5)),
+        ("15m 15:00 trend = previous day's 15m 15:00 trend", len(step_6)),
+        ("1m 15:28 trend = previous day's 1m 15:28 trend", len(step_7)),
+        ("No 15m vs 1m data conflict", len(step_8)),
+        ("Same sessions as most stocks (pass on the primary source)", len(step_9)),
         (f"SIGNALS SHOWN (pass on {primary_label()} or on Yahoo)", len(signals)),
         ("   of which found only by the other source", len(other_only)),
     ]
@@ -3243,15 +3245,18 @@ def source_health(results):
 
 
 def near_miss_list(results):
-    """Stocks that failed ONLY because the LAST candle of the 3m or 1m timeframe
-    (3m 15:27, 1m 15:29) is missing - it had no trades. With
+    """Stocks that failed ONLY because the LAST candle of some timeframe
+    (15m 15:15, 3m 15:27, 1m 15:29) is missing - it had no trades. With
     MISSING_LAST_CANDLE_IS_ZERO_VOLUME = True they would be signals. Returns
     [(symbol, direction)]."""
 
     if MISSING_LAST_CANDLE_IS_ZERO_VOLUME:
         return []
 
-    pairs = (("vol_3m", "3m_1527", "3m_1524"), ("vol_1m", "1m_1529", "1m_1528"))
+    pairs = (
+        ("vol_15m", "15m_1515", "15m_1500"), ("vol_3m", "3m_1527", "3m_1524"),
+        ("vol_1m", "1m_1529", "1m_1528"),
+    )
     found = []
 
     for r in results:
@@ -3268,7 +3273,7 @@ def near_miss_list(results):
         )
 
         if (
-            volume_ok and r.get("cond_15m") and r.get("cond_align") and r.get("cond_morning")
+            volume_ok and r.get("cond_align") and r.get("cond_morning")
             and r.get("cond_prior") and r.get("cond_prior_1m")
         ):
             side = r["details"]["t15_00"] * DIRECTION_RULES[DIRECTION_RULE]
@@ -3300,7 +3305,6 @@ def closest_misses(results, limit=60):
         failed = [
             name for name, ok in (
                 ("15m volume", r.get("vol_15m")),
-                ("15m trend", r.get("trend_15m")),
                 ("3m volume", r.get("vol_3m")),
                 ("1m volume", r.get("vol_1m")),
                 ("alignment", r.get("cond_align")),
@@ -3352,7 +3356,7 @@ def funnel_console(results):
         lines.append(f"  {count:>5}  {label}")
 
     lines.append(
-        f"  {last_only:>5}  missing ONLY a last candle (3m 15:27 / 1m 15:29) "
+        f"  {last_only:>5}  missing ONLY a last candle (15m 15:15 / 3m 15:27 / 1m 15:29) "
         f"(MISSING_LAST_CANDLE_IS_ZERO_VOLUME = {MISSING_LAST_CANDLE_IS_ZERO_VOLUME})"
     )
 
@@ -3448,7 +3452,7 @@ def funnel_html(results):
         near_html = (
             f'<h2 style="margin-top:22px">Filtered only by a missing last candle ({len(near)})</h2>'
             '<p class="none">Every other condition holds; the '
-            'last 3m (15:27) and/or 1m (15:29) candle had no trades. They would be signals with '
+            'last 15m (15:15), 3m (15:27) and/or 1m (15:29) candle had no trades. They would be signals with '
             'MISSING_LAST_CANDLE_IS_ZERO_VOLUME = True. Check them on a chart '
             f'before deciding.</p><p>{names}</p>'
         )
@@ -3475,7 +3479,7 @@ def build_table_row(r):
         note_15m = (
             candle_text(candles.get("15m_1500"), "15:00") + "<br>"
             + candle_text(candles.get("15m_1515"), "15:15") + "<br>"
-            + f'trend {part_badge(r.get("trend_15m"))} / '
+            + f'last two: {info_text(r.get("trend_15m"))} (not a rule) / '
             f'volume {part_badge(r.get("vol_15m"))}'
         )
         note_3m = (
@@ -3717,7 +3721,7 @@ Entry: {esc(fmt_day(entry_day))} at the 09:15 open &nbsp;|&nbsp; Exit: {esc(EXIT
 <th>Symbol</th>
 <th>Previous day</th>
 <th>Direction</th>
-<th>15m condition<br><small>15:00 &amp; 15:15 same trend; 15:00 vol &gt; 15:15 vol</small></th>
+<th>15m condition<br><small>15:00 vol &gt; 15:15 vol</small></th>
 <th>3m condition<br><small>15:24 vol &gt; 15:27 vol</small></th>
 <th>1m condition<br><small>15:28 vol &gt; 15:29 vol</small></th>
 <th>Alignment<br><small>15m 15:00 = 3m 15:24 = 1m 15:28 trend</small></th>
@@ -3740,17 +3744,16 @@ Read on the previous day, the latest completed session (P). Candles are labelled
 time: the last candles are 15m 15:15 (second last 15:00), 3m 15:27 (second last 15:24)
 and 1m 15:29 (second last 15:28). A stock matches only when ALL of these hold:<br>
 1) 15m volume: the 15:00 candle's volume is higher than the 15:15 candle's.<br>
-2) 15m trend: the 15:00 and 15:15 candles have the same trend.<br>
-3) 3m volume: the 15:24 candle's volume is higher than the 15:27 candle's.<br>
-4) 1m volume: the 15:28 candle's volume is higher than the 15:29 candle's.<br>
-5) The 15m 15:00, 3m 15:24 and 1m 15:28 candles all have the same trend.<br>
-6) The morning candles (09:15) of the 15m, 3m and 1m timeframes have that same trend too.<br>
-7) Previous day, 15m: the 15m 15:00 candle's trend is the same as the trend of the 15m 15:00
+2) 3m volume: the 15:24 candle's volume is higher than the 15:27 candle's.<br>
+3) 1m volume: the 15:28 candle's volume is higher than the 15:29 candle's.<br>
+4) The 15m 15:00, 3m 15:24 and 1m 15:28 candles all have the same trend.<br>
+5) The morning candles (09:15) of the 15m, 3m and 1m timeframes have that same trend too.<br>
+6) Previous day, 15m: the 15m 15:00 candle's trend is the same as the trend of the 15m 15:00
 candle of the session before P.<br>
-8) Previous day, 1m: the 1m 15:28 candle's trend is the same as the trend of the 1m 15:28
+7) Previous day, 1m: the 1m 15:28 candle's trend is the same as the trend of the 1m 15:28
 candle of the session before P.<br>
-The 3m and 1m timeframes have no same-trend rule on their last two candles (the report shows it
-for information only).<br>
+On every timeframe the last two candles may have the same or opposite trends: there is no
+same-trend rule on them (the report shows it for information only).<br>
 Trend = candle colour (close vs open); a flat candle has no trend, so it is never
 the same as another.<br>
 <b>Data sources:</b> every stock is scanned on {esc(primary_label())}; every stock that does not
@@ -3834,7 +3837,7 @@ def print_audit(r):
 
     if "cond_15m" in r:
         print(f"  15m 15:00 vol > 15:15 vol : {r['vol_15m']}")
-        print(f"  15m 15:00 and 15:15 same trend: {r['trend_15m']}")
+        print(f"  15m last two candles: {info_text(r['trend_15m'])} (information only)")
         print(f"  3m  15:24 vol > 15:27 vol  : {r['vol_3m']}")
         print(f"  3m  last two candles: {info_text(r['trend_3m'])} (information only)")
         print(f"  1m  15:28 vol > 15:29 vol  : {r['vol_1m']}")
@@ -4064,7 +4067,6 @@ def nse_debug(symbols):
 
 RULE_NAMES = (
     ("vol_15m", "15m volume (15:00 > 15:15)"),
-    ("trend_15m", "15m trend (15:00 and 15:15 same)"),
     ("vol_3m", "3m volume (15:24 > 15:27)"),
     ("vol_1m", "1m volume (15:28 > 15:29)"),
     ("cond_align", "alignment (15m 15:00 = 3m 15:24 = 1m 15:28)"),
