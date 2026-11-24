@@ -3,12 +3,15 @@
 # =============================================================================
 #
 # Downloads candles from a free source that needs no API key or login:
-#   * TradingView's chart feed (default; see DATA_SOURCE) - the same candles
-#     you see on a TradingView chart. The 15m and 1m candles are TradingView's
-#     OWN native candles (nothing is rebuilt). Unofficial: TradingView has no
-#     free public data API, this uses the same websocket feed its web charts use.
-#   * or NSE's own charting feed (1m candles; 15m is built from them on the
-#     09:15 grid), or Yahoo Finance (native 15m and 1m).
+#   * NSE's own charting feed (default; see DATA_SOURCE) - the exchange's own
+#     data, from charting.nseindia.com. Only 1-minute candles are downloaded and
+#     the 15-minute candles are built from them on the 09:15 grid (NSE's own
+#     15-minute candles are not stamped on that grid). NSE publishes no
+#     documented public API for this: the endpoints are the ones its chart page
+#     uses, so they can change or be blocked (cloud servers such as GitHub
+#     Actions often are).
+#   * or TradingView's chart feed (native 15m and 1m), or Yahoo Finance (native
+#     15m and 1m) - see DATA_SOURCE.
 #   * Yahoo Finance is also the automatic per-stock fallback (FALLBACK_TO_YAHOO)
 #     and the second source every stock is checked on.
 # Universe: Nifty 500 CSV -> NSE equity list -> built-in fallback.
@@ -195,15 +198,16 @@ RETRY_WORKERS = 3
 CROSS_CHECK_WORKERS = 6
 
 # Where the candles come from (all free, none needs an API key or login):
-#   "TRADINGVIEW" -> TradingView's chart feed (default): the candles you see on
+#   "TRADINGVIEW" -> TradingView's chart feed: the candles you see on
 #                    a TradingView chart. Unofficial and against TradingView's
 #                    terms of use; it may be rate-limited or blocked (cloud
 #                    servers such as GitHub Actions sometimes are). Needs the
 #                    websocket-client package.
-#   "NSE"         -> NSE's own charting feed (charting.nseindia.com): the
-#                    exchange's data. Also unofficial; also blocked at times.
+#   "NSE"         -> NSE's own charting feed (charting.nseindia.com) (default):
+#                    the exchange's data. Unofficial (no documented public API);
+#                    blocked at times, especially from cloud servers.
 #   "YAHOO"       -> Yahoo Finance via yfinance.
-DATA_SOURCE = "TRADINGVIEW"
+DATA_SOURCE = "NSE"
 
 
 def primary_label():
@@ -3660,10 +3664,9 @@ is shown as a signal, tagged with the source(s) it passed on.<br>
 <b>Entry:</b> the 09:15 open on entry day. <b>Exit:</b> {esc(EXIT_TIME_LABEL)}.<br><br>
 <b>Data notes:</b> candles come from the primary source ({esc(primary_label())} - the DATA_SOURCE
 setting) with Yahoo as the fallback and second source; the source of each stock is shown in
-the Data column. TradingView supplies its own native 15-minute and 1-minute
-candles; for NSE's feed the 15-minute candles are built from 1-minute candles on a 09:15
-grid (open = first, close = last, volume = sum); a stock read from Yahoo uses Yahoo's own
-15-minute and 1-minute feeds. Prices are rounded to 2
+the Data column. NSE's charting feed supplies 1-minute candles, and the 15-minute candles
+are built from them on a 09:15 grid (open = first, close = last, volume = sum); a stock read
+from Yahoo uses Yahoo's own 15-minute and 1-minute feeds. Prices are rounded to 2
 decimals; zero-volume and corrupt candles are dropped and count as missing, which can only
 block a match.{zero_note} DATA CONFLICT means a native 15m candle's trend, or which 15m candle has more
 volume, disagrees with the same candles rebuilt from the 1m candles inside them, so the
