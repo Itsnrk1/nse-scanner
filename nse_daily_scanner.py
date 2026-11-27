@@ -623,10 +623,17 @@ def clean_candle_data(df):
 # NSE CHARTING SOURCE   (the only data source)
 # =============================================================================
 #
-# NSE's own chart site serves candles through two JSON endpoints, called with
-# plain GET requests (the symbol and range go in the URL query string):
-#   1) symbolsDynamic       : symbol -> scripcode (token)
-#   2) symbolHistoricalData : token + time range + interval -> candles
+# NSE's own chart site serves candles through two JSON endpoints. Both take a
+# POST request with a JSON body (this is how the open-source `openchart`
+# package talks to them; plain GET query strings are answered with
+# {"status": true} and NO candles):
+#   1) symbolsDynamic       : {"symbol", "segment"}  -> scripcode (token)
+#   2) symbolHistoricalData : {"token", "fromDate", "toDate" (epoch seconds),
+#                              "symbol", "symbolType", "chartType": "I",
+#                              "timeInterval": 1}  -> candles, with the time of
+#                              each candle in epoch MILLISECONDS that reads as
+#                              India clock time (09:15 ... 15:29, plus an extra
+#                              stamp at 15:30 that is discarded).
 # It is unofficial and undocumented, so it can change or be blocked.
 #
 # The time format of NSE's candles is not documented (and NSE's own 15-minute
@@ -654,6 +661,7 @@ NSE_CHART_HEADERS = {
     "Accept": "application/json, text/plain, */*",
     "Accept-Language": "en-GB,en;q=0.5",
     "Authority": "charting.nseindia.com",
+    "Origin": "https://charting.nseindia.com",
     "Referer": "https://charting.nseindia.com/",
 }
 
@@ -799,6 +807,43 @@ def nse_get(url, params=None, body=None):
     raise RuntimeError(last_error)
 
 
+def nse_search(symbol):
+    """Search NSE's chart site for a symbol: (reply, items). The EQ segment is
+    asked for with a POST first (as the chart site does); if that gives nothing
+    usable, a GET over every segment is tried. The exact-match check in
+    nse_lookup then picks the equity."""
+
+    def items_of(result):
+        if isinstance(result, list):
+            return result
+        if isinstance(result, dict) and isinstance(result.get("data"), list):
+            return result["data"]
+        return []
+
+    last = None
+
+    for method in ("POST", "GET"):
+        try:
+            if method == "POST":
+                result = nse_get(NSE_SEARCH_URL, body={"symbol": symbol, "segment": "EQ"})
+            else:
+                result = nse_get(NSE_SEARCH_URL, {"symbol": symbol, "segment": ""})
+        except RuntimeError as e:
+            if method == "GET" or "refused" in str(e) or "rate limit" in str(e):
+                raise
+
+            continue
+
+        items = items_of(result)
+
+        if items:
+            return result, items
+
+        last = result
+
+    return last, []
+
+
 def nse_lookup(symbol):
     """(token, chart_symbol, symbol_type) for an equity. Raises NseNoData with a
     reason if NSE has no exact match (a stock is never guessed from a partial
@@ -811,14 +856,10 @@ def nse_lookup(symbol):
         if symbol in _nse_misses:
             raise NseNoData(_nse_misses[symbol])
 
-    # segment is left empty: NSE then searches every segment, and the exact
-    # symbol match below picks the equity.
-    result = nse_get(NSE_SEARCH_URL, {"symbol": symbol, "segment": ""})
+    result, items = nse_search(symbol)
 
-    if isinstance(result, list):
-        items = result
-    elif isinstance(result, dict) and isinstance(result.get("data"), list):
-        items = result["data"]
+    if items:
+        pass
     elif isinstance(result, dict) and result.get("status") is False:
         detail = f"NSE symbol search said status=false | e.g. {symbol}: {snippet(result)}"
 
@@ -826,13 +867,13 @@ def nse_lookup(symbol):
             _nse_misses[symbol] = detail
 
         raise NseNoData(detail)
-    else:
+    elif not isinstance(result, (dict, list)):
         raise RuntimeError(
             f"NSE symbol search gave an unexpected reply | e.g. {symbol}: {snippet(result)}"
         )
 
     if not items:
-        detail = f"NSE symbol search returned no results | e.g. {symbol}"
+        detail = f"NSE symbol search returned no results | e.g. {symbol}: {snippet(result)}"
 
         with _nse_lock:
             _nse_misses[symbol] = detail
@@ -955,6 +996,10 @@ def nse_candles_to_frame(data, shift=0):
             labels = "start"
         elif closes > 0 and opens == 0:
             labels = "end"
+        elif opens > 0 and closes > 0:
+            # NSE stamps each candle with its START (09:15 ... 15:29) and adds
+            # an extra stamp at 15:30, which is discarded when the data is cleaned.
+            labels = "start"
         else:
             labels = None
 
@@ -1034,41 +1079,29 @@ def nse_extract_candles(result):
 
 def nse_history_variants(token, chart_symbol, symbol_type):
     """The ways of asking NSE for the candles, most likely first: (name, method,
-    query params, JSON body). NSE's history endpoint is undocumented; a request
-    in the wrong shape is answered with {"status": true} and NO candles, so the
-    first variant that returns candles is remembered and used from then on."""
+    query params, JSON body). The first is the request NSE's own chart site
+    sends (POST, JSON body, dates in epoch seconds). A request in the wrong
+    shape is answered with {"status": true} and NO candles, so the first
+    variant that returns candles is remembered and used from then on."""
 
     now = int(time.time())
-    start = now - NSE_HISTORY_DAYS * 86400
-    ist = 19800     # +05:30 in seconds
 
-    def query(first, last):
+    def payload(first, last):
         return {
             "token": token, "fromDate": first, "toDate": last,
             "symbol": chart_symbol, "symbolType": symbol_type,
             "chartType": "I", "timeInterval": 1,
         }
 
-    variants = [
-        ("GET, epoch seconds", "GET", query(start, now), None),
-        ("GET, epoch milliseconds", "GET", query(start * 1000, now * 1000), None),
-        ("GET, epoch seconds on the IST clock", "GET", query(start + ist, now + ist), None),
+    start = now - NSE_HISTORY_DAYS * 86400
+    short = now - 3 * 86400
+
+    return [
+        ("POST, JSON body, epoch seconds", "POST", None, payload(start, now)),
+        ("POST, JSON body, last 3 days", "POST", None, payload(short, now)),
+        ("POST, JSON body, epoch milliseconds", "POST", None, payload(start * 1000, now * 1000)),
+        ("GET, query string, epoch seconds", "GET", payload(start, now), None),
     ]
-
-    try:
-        code = int(token)
-        variants.append((
-            "POST, JSON body", "POST", None,
-            {
-                "exch": "N", "instrType": "C", "scripCode": code, "ulToken": code,
-                "fromDate": start, "toDate": now, "timeInterval": 1,
-                "chartPeriod": "I", "chartStart": 0,
-            },
-        ))
-    except ValueError:
-        pass
-
-    return variants
 
 
 def nse_raw_minutes(symbol, shift):
@@ -2644,27 +2677,49 @@ def nse_debug(symbols):
     print("=" * 78)
     print(f"1) cookies set after visiting NSE: {sorted(set(session.cookies.keys()))}")
 
-    try:
-        reply = session.get(
-            NSE_SEARCH_URL, params={"symbol": symbol, "segment": ""},
-            timeout=REQUEST_TIMEOUT,
+    reply = None
+
+    for method in ("POST", "GET"):
+        try:
+            if method == "POST":
+                reply = session.post(
+                    NSE_SEARCH_URL, json={"symbol": symbol, "segment": "EQ"},
+                    timeout=REQUEST_TIMEOUT,
+                )
+            else:
+                reply = session.get(
+                    NSE_SEARCH_URL, params={"symbol": symbol, "segment": ""},
+                    timeout=REQUEST_TIMEOUT,
+                )
+        except Exception as e:
+            print(f"2) symbol search ({method}) failed: {type(e).__name__}: {e}")
+            continue
+
+        print(f"2) symbol search ({method}): HTTP {reply.status_code}, "
+              f"content-type {reply.headers.get('content-type')}")
+        print("   body:", snippet(reply.text, 400))
+
+        try:
+            search = reply.json()
+        except ValueError:
+            print("   -> not JSON (probably a block page).")
+            reply = None
+            continue
+
+        found_items = search if isinstance(search, list) else (
+            (search.get("data") or []) if isinstance(search, dict) else []
         )
-    except Exception as e:
-        print(f"2) symbol search failed: {type(e).__name__}: {e}")
+
+        if found_items:
+            break
+
+        reply = None
+
+    if reply is None:
+        print("   -> the symbol search gave nothing usable.")
         return
 
-    print(f"2) symbol search: HTTP {reply.status_code}, content-type {reply.headers.get('content-type')}")
-    print("   body:", snippet(reply.text, 400))
-
-    try:
-        search = reply.json()
-    except ValueError:
-        print("   -> not JSON (probably a block page).")
-        return
-
-    items = search if isinstance(search, list) else (
-        (search.get("data") or []) if isinstance(search, dict) else []
-    )
+    items = found_items
     match = next(
         (i for i in items if isinstance(i, dict)
          and str(i.get("symbol", "")).upper() in {symbol, f"{symbol}-EQ"}),
