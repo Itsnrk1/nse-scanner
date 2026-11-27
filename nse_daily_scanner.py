@@ -1090,18 +1090,20 @@ def nse_raw_minutes(symbol, shift):
     if known:
         variants = [v for v in variants if v[0] == known] or variants
 
-    errors, last_rest, answered = [], {}, False
+    outcomes, last_rest, answered = [], {}, False
 
     for name, method, params, body in variants:
         try:
             result = nse_get(NSE_HISTORY_URL, params, body)
         except RuntimeError as e:
-            errors.append(f"{name}: {e}")
+            outcomes.append(f"{name}: {e}"[:150])
 
-            # A refusal / rate limit means NSE is unhappy with us, not with the
-            # request format: do not hammer it with the other formats.
-            if "refused" in str(e) or "rate limit" in str(e):
-                raise RuntimeError(errors[0])
+            # A refusal before any format has been answered means NSE is
+            # unhappy with us (rate limit / block), not with the request
+            # format: do not hammer it with the other formats. After an
+            # answer, a refusal just means this format is not accepted.
+            if not answered and ("refused" in str(e) or "rate limit" in str(e)):
+                raise RuntimeError(outcomes[0])
 
             continue
 
@@ -1122,14 +1124,15 @@ def nse_raw_minutes(symbol, shift):
             return frame
 
         last_rest = rest
+        outcomes.append(f"{name}: answered with no candles {snippet(rest, 80)}")
 
     if answered:
-        tried = ", ".join(v[0] for v in variants)
         raise NseNoData(
-            f"NSE history returned no candles (tried: {tried}) | e.g. {symbol}: {snippet(last_rest)}"
+            f"NSE history returned no candles in any request format | e.g. {symbol}: "
+            + " || ".join(outcomes)
         )
 
-    raise RuntimeError(errors[0] if errors else "NSE history request failed")
+    raise RuntimeError(outcomes[0] if outcomes else "NSE history request failed")
 
 
 def nse_fetch_minutes(symbol, shift):
@@ -2687,13 +2690,18 @@ def nse_debug(symbols):
             else:
                 reply = session.post(NSE_HISTORY_URL, json=body, timeout=REQUEST_TIMEOUT)
 
-            payload = reply.json()
-            data, rest = nse_extract_candles(payload)
         except Exception as e:
-            print(f"   {name}: failed ({type(e).__name__}: {e})")
+            print(f"   {name}: request failed ({type(e).__name__}: {e})")
             continue
 
-        print(f"   {name}: HTTP {reply.status_code}, {len(data)} candles, other fields {snippet(rest, 160)}")
+        try:
+            data, rest = nse_extract_candles(reply.json())
+        except Exception:
+            print(f"   {name}: HTTP {reply.status_code}, not JSON: {snippet(reply.text, 300)}")
+            continue
+
+        print(f"   {name}: HTTP {reply.status_code}, {len(data)} candles, "
+              f"other fields {snippet(rest, 160)}, raw body {snippet(reply.text, 300)}")
 
         if data and not shown:
             shown = True
