@@ -678,6 +678,7 @@ _nse_errors = Counter()
 _nse_examples = {}
 _nse_misses = {}
 _nse_convention = {"labels": None}
+_nse_variant = {"name": None}
 _nse_calibration = {"done": False, "ok": None, "shift": NSE_TIME_SHIFT_MINUTES, "detail": ""}
 
 
@@ -740,10 +741,11 @@ def nse_session(refresh=False):
     return session
 
 
-def nse_get(url, params):
-    """GET a JSON reply from NSE's chart API (parameters go in the query
-    string). Requests are throttled; rate limits and blocks are retried after a
-    wait; raises RuntimeError with a readable reason if every attempt fails."""
+def nse_get(url, params=None, body=None):
+    """GET (parameters in the query string) or, when `body` is given, POST (a
+    JSON body) a JSON reply from NSE's chart API. Requests are throttled; rate
+    limits and blocks are retried after a wait; raises RuntimeError with a
+    readable reason if every attempt fails."""
 
     last_error = "NSE request failed"
     refresh = False
@@ -754,9 +756,14 @@ def nse_get(url, params):
             nse_throttle()
 
             with _nse_slots:
-                response = nse_session(refresh).get(
-                    url, params=params, timeout=REQUEST_TIMEOUT
-                )
+                if body is None:
+                    response = nse_session(refresh).get(
+                        url, params=params, timeout=REQUEST_TIMEOUT
+                    )
+                else:
+                    response = nse_session(refresh).post(
+                        url, json=body, timeout=REQUEST_TIMEOUT
+                    )
 
             refresh = False
             status = response.status_code
@@ -992,46 +999,137 @@ def nse_candles_to_frame(data, shift=0):
     return out
 
 
-def nse_raw_minutes(symbol, shift):
-    """NSE's 1-minute candles for one stock as an uncleaned frame (see
-    nse_candles_to_frame). Raises NseNoData (NSE answered but has nothing for
-    this stock) or RuntimeError / ValueError (a real error)."""
+def nse_extract_candles(result):
+    """NSE's history reply -> (candles, rest). candles is a list of dicts with
+    time/open/high/low/close/volume (empty when the reply holds none); rest is
+    the reply's other fields (e.g. {"status": true}). Understands a list of
+    candles, {"data": [...]}, and the column format {"t": [...], "o": [...], ...}."""
 
-    token, chart_symbol, symbol_type = nse_lookup(symbol)
-
-    now = int(time.time())
-
-    result = nse_get(NSE_HISTORY_URL, {
-        "token": token,
-        "fromDate": now - NSE_HISTORY_DAYS * 86400,
-        "toDate": now,
-        "symbol": chart_symbol,
-        "symbolType": symbol_type,
-        "chartType": "I",
-        "timeInterval": 1,
-    })
+    keys = ("t", "o", "h", "l", "c", "v")
+    rest, data = {}, None
 
     if isinstance(result, list):
-        data, rest = result, {}
+        data = result
     elif isinstance(result, dict):
         data = result.get("data")
         rest = {k: v for k, v in result.items() if k != "data"}
+
+        if data is None and all(isinstance(result.get(k), list) for k in keys):
+            data = {k: result[k] for k in keys}
+            rest = {k: v for k, v in result.items() if k not in keys}
     else:
-        raise RuntimeError(
-            f"NSE history gave an unexpected reply | e.g. {symbol}: {snippet(result)}"
-        )
+        raise RuntimeError(f"NSE history gave an unexpected reply: {snippet(result)}")
 
-    if not isinstance(data, list) or not data or rest.get("status") is False:
+    if isinstance(data, dict) and all(isinstance(data.get(k), list) for k in keys):
+        data = [
+            {"time": t, "open": o, "high": h, "low": l, "close": c, "volume": v}
+            for t, o, h, l, c, v in zip(*(data[k] for k in keys))
+        ]
+    elif isinstance(data, list) and data and isinstance(data[0], (list, tuple)) and len(data[0]) >= 6:
+        names = ("time", "open", "high", "low", "close", "volume")
+        data = [dict(zip(names, row[:6])) for row in data]
+
+    return (data if isinstance(data, list) else []), rest
+
+
+def nse_history_variants(token, chart_symbol, symbol_type):
+    """The ways of asking NSE for the candles, most likely first: (name, method,
+    query params, JSON body). NSE's history endpoint is undocumented; a request
+    in the wrong shape is answered with {"status": true} and NO candles, so the
+    first variant that returns candles is remembered and used from then on."""
+
+    now = int(time.time())
+    start = now - NSE_HISTORY_DAYS * 86400
+    ist = 19800     # +05:30 in seconds
+
+    def query(first, last):
+        return {
+            "token": token, "fromDate": first, "toDate": last,
+            "symbol": chart_symbol, "symbolType": symbol_type,
+            "chartType": "I", "timeInterval": 1,
+        }
+
+    variants = [
+        ("GET, epoch seconds", "GET", query(start, now), None),
+        ("GET, epoch milliseconds", "GET", query(start * 1000, now * 1000), None),
+        ("GET, epoch seconds on the IST clock", "GET", query(start + ist, now + ist), None),
+    ]
+
+    try:
+        code = int(token)
+        variants.append((
+            "POST, JSON body", "POST", None,
+            {
+                "exch": "N", "instrType": "C", "scripCode": code, "ulToken": code,
+                "fromDate": start, "toDate": now, "timeInterval": 1,
+                "chartPeriod": "I", "chartStart": 0,
+            },
+        ))
+    except ValueError:
+        pass
+
+    return variants
+
+
+def nse_raw_minutes(symbol, shift):
+    """NSE's 1-minute candles for one stock as an uncleaned frame (see
+    nse_candles_to_frame). Raises NseNoData (NSE answered but has nothing for
+    this stock) or RuntimeError / ValueError (a real error).
+
+    Until a request format has returned candles once, the formats from
+    nse_history_variants are tried in turn; after that only the one that worked
+    is used (one request per stock)."""
+
+    token, chart_symbol, symbol_type = nse_lookup(symbol)
+
+    variants = nse_history_variants(token, chart_symbol, symbol_type)
+
+    with _nse_lock:
+        known = _nse_variant["name"]
+
+    if known:
+        variants = [v for v in variants if v[0] == known] or variants
+
+    errors, last_rest, answered = [], {}, False
+
+    for name, method, params, body in variants:
+        try:
+            result = nse_get(NSE_HISTORY_URL, params, body)
+        except RuntimeError as e:
+            errors.append(f"{name}: {e}")
+
+            # A refusal / rate limit means NSE is unhappy with us, not with the
+            # request format: do not hammer it with the other formats.
+            if "refused" in str(e) or "rate limit" in str(e):
+                raise RuntimeError(errors[0])
+
+            continue
+
+        data, rest = nse_extract_candles(result)
+        answered = True
+
+        if data and rest.get("status") is not False:
+            frame = nse_candles_to_frame(data, shift)
+
+            if frame is None:
+                raise NseNoData(f"NSE history had no usable timestamps | e.g. {symbol}")
+
+            with _nse_lock:
+                if _nse_variant["name"] is None:
+                    _nse_variant["name"] = name
+                    print(f"NSE history request format that works: {name}")
+
+            return frame
+
+        last_rest = rest
+
+    if answered:
+        tried = ", ".join(v[0] for v in variants)
         raise NseNoData(
-            f"NSE history returned no candles | e.g. {symbol}: {snippet(rest)}"
+            f"NSE history returned no candles (tried: {tried}) | e.g. {symbol}: {snippet(last_rest)}"
         )
 
-    frame = nse_candles_to_frame(data, shift)
-
-    if frame is None:
-        raise NseNoData(f"NSE history had no usable timestamps | e.g. {symbol}")
-
-    return frame
+    raise RuntimeError(errors[0] if errors else "NSE history request failed")
 
 
 def nse_fetch_minutes(symbol, shift):
@@ -2576,51 +2674,34 @@ def nse_debug(symbols):
 
     print("   -> exact match:", snippet(match, 300))
 
-    for interval, minutes in (("1m", 1), ("15m", 15)):
-        now = int(time.time())
-        params = {
-            "token": str(match["scripcode"]),
-            "fromDate": now - NSE_HISTORY_DAYS * 86400,
-            "toDate": now,
-            "symbol": match["symbol"],
-            "symbolType": match.get("type") or "Equity",
-            "chartType": "I",
-            "timeInterval": minutes,
-        }
+    print("3) candle request formats (a wrong format is answered with {\"status\": true} and no candles):")
 
+    shown = False
+
+    for name, method, params, body in nse_history_variants(
+        str(match["scripcode"]), match["symbol"], match.get("type") or "Equity"
+    ):
         try:
-            reply = session.get(NSE_HISTORY_URL, params=params, timeout=REQUEST_TIMEOUT)
-            body = reply.json()
+            if method == "GET":
+                reply = session.get(NSE_HISTORY_URL, params=params, timeout=REQUEST_TIMEOUT)
+            else:
+                reply = session.post(NSE_HISTORY_URL, json=body, timeout=REQUEST_TIMEOUT)
+
+            payload = reply.json()
+            data, rest = nse_extract_candles(payload)
         except Exception as e:
-            print(f"3) {interval} history failed: {type(e).__name__}: {e}")
+            print(f"   {name}: failed ({type(e).__name__}: {e})")
             continue
 
-        data = body if isinstance(body, list) else (body.get("data") if isinstance(body, dict) else None)
-        print(f"3) {interval} history: HTTP {reply.status_code}, "
-              f"{0 if not data else len(data)} candles, fields "
-              f"{snippet({k: v for k, v in body.items() if k != 'data'}) if isinstance(body, dict) else '(bare list)'}")
+        print(f"   {name}: HTTP {reply.status_code}, {len(data)} candles, other fields {snippet(rest, 160)}")
 
-        if not data:
-            continue
+        if data and not shown:
+            shown = True
+            print(f"      first candle: {snippet(data[0], 200)}")
+            print(f"      last candle : {snippet(data[-1], 200)}")
 
-        times = []
-
-        for row in data:
-            try:
-                value = float(row["time"])
-                unit = "ms" if abs(value) > 1e11 else "s"
-                times.append(pd.to_datetime(value, unit=unit))
-            except Exception:
-                pass
-
-        if times:
-            last_day = max(t.date() for t in times)
-            day_times = [t for t in times if t.date() == last_day]
-            labels = [t.strftime("%H:%M:%S") for t in day_times]
-            print(f"   time stamps read as clock time; last day {last_day}: "
-                  f"{len(day_times)} candles")
-            print(f"   first 6: {labels[:6]}")
-            print(f"   last 6 : {labels[-6:]}")
+    if not shown:
+        print("   -> no format returned candles. Paste this output when asking for help.")
 
     print("4) shape of each session after reading (a full session must be 09:15-15:29):")
 
