@@ -3,7 +3,7 @@
 #                              (NSE DATA ONLY)
 # =============================================================================
 #
-# Every candle comes from NSE's own charting feed (charting.nseindia.com), the
+# Every candle comes from NSE's own charting feed (charting.nseindia.in), the
 # feed behind the charts on NSE's website. No other data source is used, not
 # even as a fallback or a cross-check: if NSE cannot serve a stock, that stock
 # is reported as ERROR / NO DATA, never filled in from somewhere else.
@@ -37,6 +37,16 @@
 # NSE's feed is downloaded as 1-minute candles only; the 3-minute and
 # 15-minute candles are built from them on the 09:15 grid (09:15, 09:18, ...
 # 15:27 and 09:15, 09:30, ... 15:15), the same grid broker charts use.
+#
+# KNOWN LIMITS OF NSE'S 1-MINUTE FEED (checked against an independent NSE client
+# on 24 Nov 2026; the report repeats them):
+#   * one row near the close (15:28 or 15:29) carries the whole day's volume. It
+#     is corrected to an ESTIMATE (day total minus the other bars) and marked
+#     "estimated" in the report; it feeds the closing-volume rules.
+#   * NSE has no 1-minute rows for 15:16-15:19, so the 15m 15:15 candle's volume
+#     is understated (it only holds 15:15 and 15:20-15:29).
+#   Set ESTIMATED_VOLUME_BLOCKS_SIGNAL = True to refuse any signal whose volume
+#   rules rest on an estimated candle.
 #
 # ALL of these must hold:
 #   1) 15m volume: the 15:00 candle's volume is HIGHER than the 15:15 candle's.
@@ -82,6 +92,8 @@
 #
 # =============================================================================
 
+import base64
+import datetime
 import html
 import json
 import random
@@ -125,6 +137,15 @@ STRATEGY_RULES = (
     "aligned second-last trend | morning (09:15) trend"
 )
 
+# Shown in every report: what NSE's 1-minute feed cannot give exactly.
+NSE_FEED_NOTE = (
+    "NSE feed limits: one row near the close (15:28 or 15:29) carries the whole day's "
+    "volume and is corrected to an estimate (marked 'est.'); NSE has no 1-minute rows for "
+    "15:16-15:19, so the 15m 15:15 candle's volume is understated. Closing-volume rules "
+    "use these numbers as they are; set ESTIMATED_VOLUME_BLOCKS_SIGNAL = True to refuse "
+    "signals that rest on an estimate."
+)
+
 # No stock may be lost to a technical failure. After the main scan, stocks that
 # ERRORED are retried (waiting first, with fewer workers).
 RETRY_ROUNDS = 3
@@ -133,6 +154,21 @@ RETRY_WORKERS = 3
 
 # Days of history requested from NSE (only the last session is needed).
 NSE_HISTORY_DAYS = 8
+
+# NSE moved its websites from nseindia.com to nseindia.in in November 2026
+# (the old hosts answer with a 301 redirect, which silently drops the session
+# cookies). A redirect is refused with a message naming the new host: if NSE
+# moves again, change these two lines.
+NSE_WWW_HOST = "https://www.nseindia.in"
+NSE_CHARTING_HOST = "https://charting.nseindia.in"
+
+# One row of NSE's 1-minute feed near the close (15:28 or 15:29) carries the
+# whole day's volume. It is replaced by an estimate (day total minus the other
+# minutes) and marked "estimated". The volume rules for the closing candles
+# use those numbers as they are. Set True to make a volume rule FAIL whenever
+# one of its two candles has an estimated volume (stricter: this can remove
+# most or all signals).
+ESTIMATED_VOLUME_BLOCKS_SIGNAL = False
 
 # Manual correction (minutes) added to every NSE candle time. Leave at 0 unless
 # the time check at the start of a run fails AND `--nse-debug` shows a constant
@@ -439,11 +475,11 @@ def load_nse_equity_list():
     session = requests.Session()
     session.headers.update({
         **NSE_HEADERS,
-        "Referer": "https://www.nseindia.com/",
+        "Referer": NSE_WWW_HOST + "/",
     })
 
     try:
-        session.get("https://www.nseindia.com/", timeout=15)
+        session.get(NSE_WWW_HOST + "/", timeout=15)
     except Exception:
         pass
 
@@ -581,6 +617,9 @@ def clean_candle_data(df):
         "low": pd.to_numeric(df["Low"], errors="coerce").values,
         "close": pd.to_numeric(df["Close"], errors="coerce").values,
         "volume": pd.to_numeric(df["Volume"], errors="coerce").values,
+        "est": (
+            df["Estimated"].astype(bool).values if "Estimated" in df.columns else False
+        ),
     })
 
     # Regular NSE session only (09:15 - 15:29; the last 1-minute candle is 15:29).
@@ -623,32 +662,40 @@ def clean_candle_data(df):
 # NSE CHARTING SOURCE   (the only data source)
 # =============================================================================
 #
-# NSE's own chart site serves candles through two JSON endpoints. Both take a
-# POST request with a JSON body (this is how the open-source `openchart`
-# package talks to them; plain GET query strings are answered with
-# {"status": true} and NO candles):
-#   1) symbolsDynamic       : {"symbol", "segment"}  -> scripcode (token)
-#   2) symbolHistoricalData : {"token", "fromDate", "toDate" (epoch seconds),
-#                              "symbol", "symbolType", "chartType": "I",
-#                              "timeInterval": 1}  -> candles, with the time of
-#                              each candle in epoch MILLISECONDS that reads as
-#                              India clock time (09:15 ... 15:29, plus an extra
-#                              stamp at 15:30 that is discarded).
+# NSE's own chart site serves candles through two JSON endpoints, both called
+# with plain GET requests (parameters in the URL query string) on the
+# charting host (see NSE_CHARTING_HOST):
+#   1) symbolsDynamic       : symbol -> scripcode (token)
+#   2) symbolHistoricalData : token + time range + interval -> candles
+# What NSE's chart page sends, and what this code copies (as of Nov 2026):
+#   * the session cookies are collected from the main site (NSE_WWW_HOST) and
+#     sent as a Cookie header;
+#   * the history "token" is base64("<scripcode>-<DDMMYYYY>") with today's IST
+#     date. A bare scripcode is answered with {"status": true, "data": []};
+#   * intraday timeInterval is in SECONDS (60 = one minute), and fromDate /
+#     toDate are IST-shifted Unix seconds (real time + 5h30m); history is cut
+#     by whole sessions, so the range starts at an IST midnight;
+#   * each candle's time is IST-shifted epoch milliseconds, so it reads as
+#     India clock time. Older days are stamped at the minute's last trade
+#     (09:15:55), the latest day at the minute's start (09:15:00): every stamp
+#     is floored to its minute, exact repeats are dropped and other rows of the
+#     same minute are merged;
+#   * rows from 15:30 on are dropped; one row near the close carries the day's
+#     total volume and is corrected to an estimate (see nse_fix_day_total).
 # It is unofficial and undocumented, so it can change or be blocked.
 #
-# The time format of NSE's candles is not documented (and NSE's own 15-minute
-# candles are stamped on a different grid than the 09:15 one the strategy
-# needs), so:
-#   * only 1-minute candles are downloaded; the 15-minute and 3-minute candles
-#     are built from them on the 09:15 grid;
-#   * each 1-minute stamp is floored to its minute; whether stamps mark a
-#     candle's start or end is detected from the data;
-#   * before a scan starts, the day shape (first candle 09:15, last 15:29) is
-#     checked on liquid reference stocks (see nse_preflight).
+# Only 1-minute candles are downloaded (NSE's own 3m / 15m bars are unreliable);
+# the 15-minute and 3-minute candles are built from them on the 09:15 grid.
+# Before a scan starts, the day shape is checked on liquid reference stocks
+# (see nse_preflight).
 
-NSE_SEARCH_URL = "https://charting.nseindia.com/v1/exchanges/symbolsDynamic"
-NSE_HISTORY_URL = "https://charting.nseindia.com/v1/charts/symbolHistoricalData"
-NSE_HOME_URL = "https://www.nseindia.com"
+NSE_SEARCH_URL = NSE_CHARTING_HOST + "/v1/exchanges/symbolsDynamic"
+NSE_HISTORY_URL = NSE_CHARTING_HOST + "/v1/charts/symbolHistoricalData"
+NSE_HOME_URL = NSE_WWW_HOST
+NSE_WARMUP_URL = NSE_WWW_HOST + "/get-quote/equity/RELIANCE/Reliance-Industries-Limited"
+
+# NSE's chart timestamps and dates are IST-shifted: real Unix time + 5h30m.
+IST_OFFSET_SECONDS = 5 * 3600 + 30 * 60
 
 # Liquid stocks used (in order) for the one-time check of NSE's candle times.
 NSE_REFERENCE_SYMBOLS = ("RELIANCE", "HDFCBANK", "ICICIBANK", "INFY", "TCS", "SBIN")
@@ -657,18 +704,17 @@ NSE_CHART_HEADERS = {
     "User-Agent":
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/124.0.0.0 Safari/537.36",
-    "Accept": "application/json, text/plain, */*",
-    "Accept-Language": "en-GB,en;q=0.5",
-    "Authority": "charting.nseindia.com",
-    "Origin": "https://charting.nseindia.com",
-    "Referer": "https://charting.nseindia.com/",
+        "Chrome/134.0.0.0 Safari/537.36",
+    "Accept": "application/json, text/javascript, */*; q=0.01",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Referer": NSE_WWW_HOST + "/",
+    "X-Requested-With": "XMLHttpRequest",
 }
 
 NSE_PAGE_HEADERS = {
     "User-Agent": NSE_CHART_HEADERS["User-Agent"],
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    "Accept-Language": "en-GB,en;q=0.5",
+    "Accept-Language": "en-US,en;q=0.9",
 }
 
 _nse_local = threading.local()
@@ -685,8 +731,6 @@ _nse_next = [0.0]
 _nse_errors = Counter()
 _nse_examples = {}
 _nse_misses = {}
-_nse_convention = {"labels": None}
-_nse_variant = {"name": None}
 _nse_calibration = {"done": False, "ok": None, "shift": NSE_TIME_SHIFT_MINUTES, "detail": ""}
 
 
@@ -728,8 +772,10 @@ def nse_throttle():
 
 
 def nse_session(refresh=False):
-    """One requests session per worker thread, holding the cookies NSE sets on
-    its main site and on the charting site."""
+    """One requests session per worker thread. The session cookies NSE sets on
+    its main site are collected once and then sent as an explicit Cookie header
+    on every API call (the way NSE's chart page does), because the API lives on
+    another host (charting.*) where a cookie jar would not send them."""
 
     session = getattr(_nse_local, "session", None)
 
@@ -737,23 +783,35 @@ def nse_session(refresh=False):
         session = requests.Session()
         session.headers.update(NSE_CHART_HEADERS)
 
-        for page in (NSE_HOME_URL + "/", "https://charting.nseindia.com/"):
+        for page in (NSE_HOME_URL + "/", NSE_WARMUP_URL):
             try:
                 nse_throttle()
-                session.get(page, headers=NSE_PAGE_HEADERS, timeout=REQUEST_TIMEOUT)
+                response = session.get(
+                    page, headers=NSE_PAGE_HEADERS, timeout=REQUEST_TIMEOUT,
+                    allow_redirects=False,
+                )
+
+                if response.status_code in (301, 302, 303, 307, 308):
+                    _nse_local.moved = response.headers.get("Location", "?")
             except Exception:
                 pass
 
+        _nse_local.cookie_header = "; ".join(
+            f"{cookie.name}={cookie.value}" for cookie in session.cookies
+        )
+        session.cookies.clear()
         _nse_local.session = session
 
     return session
 
 
-def nse_get(url, params=None, body=None):
-    """GET (parameters in the query string) or, when `body` is given, POST (a
-    JSON body) a JSON reply from NSE's chart API. Requests are throttled; rate
-    limits and blocks are retried after a wait; raises RuntimeError with a
-    readable reason if every attempt fails."""
+def nse_get(url, params=None):
+    """GET a JSON reply from NSE's chart API (parameters go in the query
+    string, session cookies in a Cookie header). Requests are throttled; rate
+    limits and blocks are retried after a wait. A redirect is never followed
+    (NSE moved hosts in Nov 2026 and a followed redirect loses the cookies): it
+    raises at once, naming the new host. Raises RuntimeError with a readable
+    reason if every attempt fails."""
 
     last_error = "NSE request failed"
     refresh = False
@@ -764,22 +822,31 @@ def nse_get(url, params=None, body=None):
             nse_throttle()
 
             with _nse_slots:
-                if body is None:
-                    response = nse_session(refresh).get(
-                        url, params=params, timeout=REQUEST_TIMEOUT
-                    )
-                else:
-                    response = nse_session(refresh).post(
-                        url, json=body, timeout=REQUEST_TIMEOUT
-                    )
+                session = nse_session(refresh)
+                cookie_header = getattr(_nse_local, "cookie_header", "")
+                moved = getattr(_nse_local, "moved", None)
+
+                response = session.get(
+                    url, params=params,
+                    headers={"Cookie": cookie_header} if cookie_header else None,
+                    timeout=REQUEST_TIMEOUT, allow_redirects=False,
+                )
 
             refresh = False
             status = response.status_code
 
+            if status in (301, 302, 303, 307, 308):
+                where = response.headers.get("Location", moved or "?")
+                raise RuntimeError(
+                    f"NSE redirected the request to {where}: NSE has moved hosts - "
+                    f"update NSE_WWW_HOST / NSE_CHARTING_HOST in the CONFIGURATION section"
+                )
+
             if status in (401, 403):
+                n_cookies = len([c for c in cookie_header.split(";") if c.strip()])
                 last_error = (
-                    f"NSE refused the request (HTTP {status}); "
-                    f"NSE is probably rate-limiting this network"
+                    f"NSE refused the request (HTTP {status}, {n_cookies} session cookies); "
+                    f"NSE is probably rate-limiting or blocking this network"
                 )
                 # One fresh session at most per call: opening many new sessions
                 # while NSE is refusing us only makes the block worse.
@@ -808,40 +875,18 @@ def nse_get(url, params=None, body=None):
 
 
 def nse_search(symbol):
-    """Search NSE's chart site for a symbol: (reply, items). The EQ segment is
-    asked for with a POST first (as the chart site does); if that gives nothing
-    usable, a GET over every segment is tried. The exact-match check in
-    nse_lookup then picks the equity."""
+    """Search NSE's chart site for a symbol: (reply, items). All segments are
+    searched; the exact-match check in nse_lookup then picks the equity."""
 
-    def items_of(result):
-        if isinstance(result, list):
-            return result
-        if isinstance(result, dict) and isinstance(result.get("data"), list):
-            return result["data"]
-        return []
+    result = nse_get(NSE_SEARCH_URL, {"segment": "", "symbol": symbol.upper()})
 
-    last = None
+    if isinstance(result, list):
+        return result, result
 
-    for method in ("POST", "GET"):
-        try:
-            if method == "POST":
-                result = nse_get(NSE_SEARCH_URL, body={"symbol": symbol, "segment": "EQ"})
-            else:
-                result = nse_get(NSE_SEARCH_URL, {"symbol": symbol, "segment": ""})
-        except RuntimeError as e:
-            if method == "GET" or "refused" in str(e) or "rate limit" in str(e):
-                raise
+    if isinstance(result, dict) and isinstance(result.get("data"), list):
+        return result, result["data"]
 
-            continue
-
-        items = items_of(result)
-
-        if items:
-            return result, items
-
-        last = result
-
-    return last, []
+    return result, []
 
 
 def nse_lookup(symbol):
@@ -938,11 +983,55 @@ def nse_lookup(symbol):
     raise NseNoData(detail)
 
 
+def nse_chart_token(scripcode, now=None):
+    """The `token` NSE's history endpoint takes: base64("<scripcode>-<DDMMYYYY>")
+    with today's IST date, the way NSE's chart page sends it. A bare scripcode is
+    answered with {"status": true, "data": []} and no candles."""
+
+    now = time.time() if now is None else now
+    ist_date = datetime.datetime.fromtimestamp(
+        now + IST_OFFSET_SECONDS, datetime.timezone.utc
+    ).strftime("%d%m%Y")
+
+    return base64.b64encode(f"{scripcode}-{ist_date}".encode()).decode()
+
+
+def nse_fix_day_total(frame):
+    """NSE's intraday volume is per minute, except that one row near the end of
+    each day (15:28 or 15:29, sometimes elsewhere) carries roughly the WHOLE
+    day's volume. When a day's largest row is at least half of all the other
+    rows together and over three times any other row, its volume is replaced by
+    what is left after subtracting the day's other rows (never below 0) and the
+    row is marked Estimated: NSE's day total does not line up exactly with the
+    rows. The row is found by size, not position. All rows of the day count
+    here, including pre-open ones."""
+
+    frame = frame.reset_index(drop=True)
+
+    for _, index in frame.groupby(frame["minute"].dt.date).groups.items():
+        if len(index) < 3:
+            continue
+
+        volumes = frame.loc[index, "Volume"].fillna(0.0)
+        biggest = volumes.idxmax()
+        total = float(volumes[biggest])
+        others = volumes.drop(biggest)
+
+        if total >= 0.5 * float(others.sum()) and total > 3.0 * float(others.max()):
+            frame.loc[biggest, "Volume"] = max(total - float(others.sum()), 0.0)
+            frame.loc[biggest, "Estimated"] = True
+
+    return frame
+
+
 def nse_candles_to_frame(data, shift=0):
-    """NSE 1-minute candles -> a frame (Datetime index = the minute the candle
-    STARTS, in IST; Open/High/Low/Close/Volume) that clean_candle_data
-    understands. `shift` (minutes) is a manual correction
-    (NSE_TIME_SHIFT_MINUTES). Raises ValueError when the times cannot be read."""
+    """NSE 1-minute rows -> a frame (Datetime index = the minute the candle
+    STARTS, in IST; Open/High/Low/Close/Volume/Estimated) that clean_candle_data
+    understands. Every stamp is floored to its minute, exact repeats are
+    dropped, other rows of the same minute are merged, rows from 15:30 on are
+    dropped and the day-total row is corrected (nse_fix_day_total). `shift`
+    (minutes) is a manual correction (NSE_TIME_SHIFT_MINUTES). Raises
+    ValueError when the times cannot be read."""
 
     df = pd.DataFrame(data)
 
@@ -963,73 +1052,23 @@ def nse_candles_to_frame(data, shift=0):
     unit = "ms" if raw.abs().median() > 1e11 else "s"
     stamp = pd.to_datetime(raw, unit=unit)
 
-    def where():
-        return (
-            f"raw times {raw.head(3).tolist()} ... {raw.tail(1).tolist()}, "
-            f"unit {unit}, first {stamp.iloc[0]}, last {stamp.iloc[-1]}"
-        )
-
     def in_session(values):
         minute_of_day = values.dt.hour * 60 + values.dt.minute
         return ((minute_of_day >= 9 * 60) & (minute_of_day <= 15 * 60 + 35)).mean()
 
-    # India wall-clock (stored as if it were UTC) or real UTC?
-    shifted = stamp + pd.Timedelta(hours=5, minutes=30)
-
-    if in_session(shifted) > in_session(stamp) and in_session(shifted) >= 0.9:
-        stamp = shifted
+    # NSE writes India clock time as if it were UTC. If the stamps only look
+    # like trading hours after +05:30, they are real UTC.
+    if in_session(stamp) < 0.5 and in_session(stamp + pd.Timedelta(hours=5, minutes=30)) >= 0.9:
+        stamp = stamp + pd.Timedelta(hours=5, minutes=30)
     elif in_session(stamp) < 0.9:
         raise ValueError(
-            f"NSE candle times do not fall inside trading hours | e.g. {where()}"
+            f"NSE candle times do not fall inside trading hours | e.g. raw times "
+            f"{raw.head(3).tolist()} ... {raw.tail(1).tolist()}, unit {unit}, "
+            f"first {stamp.iloc[0]}, last {stamp.iloc[-1]}"
         )
 
-    boundary = stamp.dt.floor("min")
-
-    # Stamps on an exact minute may mark a candle's START (09:15 ... 15:29) or
-    # its END (09:16 ... 15:30): the day's first/last stamp tells which.
-    if (stamp.dt.second == 0).mean() >= 0.99:
-        minute_of_day = boundary.dt.hour * 60 + boundary.dt.minute
-        opens = int((minute_of_day == MARKET_OPEN_MINUTES).sum())
-        closes = int((minute_of_day == MARKET_CLOSE_MINUTES).sum())
-
-        if opens > 0 and closes == 0:
-            labels = "start"
-        elif closes > 0 and opens == 0:
-            labels = "end"
-        elif opens > 0 and closes > 0:
-            # NSE stamps each candle with its START (09:15 ... 15:29) and adds
-            # an extra stamp at 15:30, which is discarded when the data is cleaned.
-            labels = "start"
-        else:
-            labels = None
-
-        with _nse_lock:
-            known = _nse_convention["labels"]
-
-            if labels is None:
-                labels = known
-            elif known is not None and known != labels:
-                raise ValueError(
-                    f"NSE candle times look like candle {labels.upper()} times, "
-                    f"which contradicts the {known.upper()} times found earlier "
-                    f"| e.g. {where()}"
-                )
-            else:
-                _nse_convention["labels"] = labels
-
-        if labels is None:
-            raise ValueError(
-                f"cannot tell whether NSE candle times mark the START or END of a "
-                f"candle (stamped 09:15: {opens}, stamped 15:30: {closes}) "
-                f"| e.g. {where()}"
-            )
-
-        if labels == "end":
-            boundary = boundary - pd.Timedelta(minutes=1)
-
-    start = boundary + pd.Timedelta(minutes=shift)
-
-    out = pd.DataFrame({
+    frame = pd.DataFrame({
+        "minute": stamp.dt.floor("min"),
         "Open": pd.to_numeric(df["open"], errors="coerce"),
         "High": pd.to_numeric(df["high"], errors="coerce"),
         "Low": pd.to_numeric(df["low"], errors="coerce"),
@@ -1037,8 +1076,33 @@ def nse_candles_to_frame(data, shift=0):
         "Volume": pd.to_numeric(df["volume"], errors="coerce"),
     })
 
-    index = pd.DatetimeIndex(start).tz_localize("Asia/Kolkata")
+    # One bar per minute: exact repeats dropped, any other rows of the same
+    # minute folded together (first open, highest high, lowest low, last close,
+    # summed volume).
+    frame = frame.sort_values("minute", kind="stable").drop_duplicates()
+    frame = (
+        frame.groupby("minute", sort=True)
+        .agg(Open=("Open", "first"), High=("High", "max"), Low=("Low", "min"),
+             Close=("Close", "last"), Volume=("Volume", "sum"))
+        .reset_index()
+    )
+
+    # Trades after the close are not part of the day total.
+    minute_of_day = frame["minute"].dt.hour * 60 + frame["minute"].dt.minute
+    frame = frame[minute_of_day < MARKET_CLOSE_MINUTES].copy()
+
+    if frame.empty:
+        return None
+
+    frame["Estimated"] = False
+    frame = nse_fix_day_total(frame)
+
+    index = pd.DatetimeIndex(
+        frame["minute"] + pd.Timedelta(minutes=shift)
+    ).tz_localize("Asia/Kolkata")
     index.name = "Datetime"
+
+    out = frame[["Open", "High", "Low", "Close", "Volume", "Estimated"]].copy()
     out.index = index
 
     return out
@@ -1077,95 +1141,40 @@ def nse_extract_candles(result):
     return (data if isinstance(data, list) else []), rest
 
 
-def nse_history_variants(token, chart_symbol, symbol_type):
-    """The ways of asking NSE for the candles, most likely first: (name, method,
-    query params, JSON body). The first is the request NSE's own chart site
-    sends (POST, JSON body, dates in epoch seconds). A request in the wrong
-    shape is answered with {"status": true} and NO candles, so the first
-    variant that returns candles is remembered and used from then on."""
-
-    now = int(time.time())
-
-    def payload(first, last):
-        return {
-            "token": token, "fromDate": first, "toDate": last,
-            "symbol": chart_symbol, "symbolType": symbol_type,
-            "chartType": "I", "timeInterval": 1,
-        }
-
-    start = now - NSE_HISTORY_DAYS * 86400
-    short = now - 3 * 86400
-
-    return [
-        ("POST, JSON body, epoch seconds", "POST", None, payload(start, now)),
-        ("POST, JSON body, last 3 days", "POST", None, payload(short, now)),
-        ("POST, JSON body, epoch milliseconds", "POST", None, payload(start * 1000, now * 1000)),
-        ("GET, query string, epoch seconds", "GET", payload(start, now), None),
-    ]
-
-
 def nse_raw_minutes(symbol, shift):
     """NSE's 1-minute candles for one stock as an uncleaned frame (see
     nse_candles_to_frame). Raises NseNoData (NSE answered but has nothing for
-    this stock) or RuntimeError / ValueError (a real error).
-
-    Until a request format has returned candles once, the formats from
-    nse_history_variants are tried in turn; after that only the one that worked
-    is used (one request per stock)."""
+    this stock) or RuntimeError / ValueError (a real error)."""
 
     token, chart_symbol, symbol_type = nse_lookup(symbol)
 
-    variants = nse_history_variants(token, chart_symbol, symbol_type)
+    now_shifted = int(time.time()) + IST_OFFSET_SECONDS
+    # History is cut by whole sessions: start at an IST midnight.
+    first_day = ((now_shifted - NSE_HISTORY_DAYS * 86400) // 86400) * 86400
 
-    with _nse_lock:
-        known = _nse_variant["name"]
+    result = nse_get(NSE_HISTORY_URL, {
+        "chartType": "I",
+        "fromDate": first_day,
+        "symbol": chart_symbol,
+        "symbolType": symbol_type,
+        "timeInterval": 60,                 # seconds: one-minute candles
+        "toDate": now_shifted,
+        "token": nse_chart_token(token),
+    })
 
-    if known:
-        variants = [v for v in variants if v[0] == known] or variants
+    data, rest = nse_extract_candles(result)
 
-    outcomes, last_rest, answered = [], {}, False
-
-    for name, method, params, body in variants:
-        try:
-            result = nse_get(NSE_HISTORY_URL, params, body)
-        except RuntimeError as e:
-            outcomes.append(f"{name}: {e}"[:150])
-
-            # A refusal before any format has been answered means NSE is
-            # unhappy with us (rate limit / block), not with the request
-            # format: do not hammer it with the other formats. After an
-            # answer, a refusal just means this format is not accepted.
-            if not answered and ("refused" in str(e) or "rate limit" in str(e)):
-                raise RuntimeError(outcomes[0])
-
-            continue
-
-        data, rest = nse_extract_candles(result)
-        answered = True
-
-        if data and rest.get("status") is not False:
-            frame = nse_candles_to_frame(data, shift)
-
-            if frame is None:
-                raise NseNoData(f"NSE history had no usable timestamps | e.g. {symbol}")
-
-            with _nse_lock:
-                if _nse_variant["name"] is None:
-                    _nse_variant["name"] = name
-                    print(f"NSE history request format that works: {name}")
-
-            return frame
-
-        last_rest = rest
-        outcomes.append(f"{name}: answered with no candles {snippet(rest, 80)}")
-
-    if answered:
+    if not data or rest.get("status") is False:
         raise NseNoData(
-            f"NSE history returned no candles in any request format | e.g. {symbol}: "
-            + " || ".join(outcomes)
+            f"NSE history returned no candles | e.g. {symbol}: {snippet(rest)}"
         )
 
-    raise RuntimeError(outcomes[0] if outcomes else "NSE history request failed")
+    frame = nse_candles_to_frame(data, shift)
+
+    if frame is None:
+        raise NseNoData(f"NSE history had no usable timestamps | e.g. {symbol}")
+
+    return frame
 
 
 def nse_fetch_minutes(symbol, shift):
@@ -1244,7 +1253,7 @@ def day_structure(rows):
 def nse_preflight():
     """One-time check, before a scan, that NSE's candle times line up with the
     real session: on a liquid reference stock a full session (300+ candles)
-    must start at 09:15 and end at 15:29. Returns True when verified. When it
+    must start at 09:15 and end at 15:28 or 15:29. Returns True when verified. When it
     cannot be verified the scan must not run: there is no other source to fall
     back to, and a time offset would silently read the wrong candles."""
 
@@ -1276,7 +1285,9 @@ def nse_preflight():
             continue
 
         for date, count, first, last in full[-2:][::-1]:
-            if first == 915 and last == 1529:
+            # The very last minute can be missing: NSE's day-total row sits at
+            # 15:28 or 15:29 and is dropped when its corrected volume is 0.
+            if first == 915 and last in (1528, 1529):
                 _nse_calibration.update(
                     ok=True,
                     detail=(
@@ -1529,6 +1540,15 @@ def slot_label(key):
     return f"{tf} {hm_text(int(hm))}"
 
 
+def window_minutes(start_hm, minutes):
+    """Start times of the 1-minute candles inside the candle that starts at
+    start_hm, e.g. (1524, 3) -> [1524, 1525, 1526]."""
+
+    start = (start_hm // 100) * 60 + start_hm % 100
+
+    return [((start + k) // 60) * 100 + (start + k) % 60 for k in range(minutes)]
+
+
 def resample_from_1m(rows, minutes):
     """Build N-minute candles from 1-minute rows (NSE's own 15-minute candles
     are not on the 09:15 grid the strategy needs, and there is no 3-minute feed).
@@ -1609,6 +1629,14 @@ def evaluate_rows(rows):
         "15m": day_map(resample_from_1m(day_rows, 15)),
     }
 
+    # 1-minute rows whose volume NSE's day-total correction had to estimate.
+    estimated_minutes = set()
+
+    if "est" in day_rows.columns:
+        estimated_minutes = {int(h) for h in day_rows.loc[day_rows["est"].astype(bool), "hm"]}
+
+    minutes_in = {"15m": 15, "3m": 3, "1m": 1}
+
     candles, missing = {}, []
 
     for tf, hm in SLOTS:
@@ -1620,7 +1648,10 @@ def evaluate_rows(rows):
             missing.append(slot_label(key))
         else:
             o, h, l, c, v = bar
-            candles[key] = {"open": o, "close": c, "volume": int(round(v))}
+            candles[key] = {
+                "open": o, "close": c, "volume": int(round(v)),
+                "est": bool(estimated_minutes & set(window_minutes(hm, minutes_in[tf]))),
+            }
 
     if len(missing) == len(SLOTS):
         return {
@@ -1648,9 +1679,16 @@ def evaluate_rows(rows):
     v3_24, v3_27 = volume("3m_1524"), volume("3m_1527")
     v1_28, v1_29 = volume("1m_1528"), volume("1m_1529")
 
-    def higher(first, second):
+    def is_est(key):
+        return bool(candles[key] and candles[key].get("est"))
+
+    def higher(first, second, estimated=False):
         # Both candles must exist: a missing candle can only block a match.
         if first is None or second is None:
+            return False
+
+        # Optionally refuse a volume comparison that rests on an estimate.
+        if estimated and ESTIMATED_VOLUME_BLOCKS_SIGNAL:
             return False
 
         return first > second
@@ -1658,9 +1696,11 @@ def evaluate_rows(rows):
     # 15m: volume only (its last two candles may have the same or opposite
     # trends). 3m and 1m: volume AND the last two candles must have the same
     # trend (a flat or missing candle has trend 0, so it is never "the same").
-    vol_15m = higher(v15_1500, v15_1515)
-    vol_3m = higher(v3_24, v3_27)
-    vol_1m = higher(v1_28, v1_29)
+    vol_15m = higher(v15_1500, v15_1515, is_est("15m_1500") or is_est("15m_1515"))
+    vol_3m = higher(v3_24, v3_27, is_est("3m_1524") or is_est("3m_1527"))
+    vol_1m = higher(v1_28, v1_29, is_est("1m_1528") or is_est("1m_1529"))
+
+    volume_keys = ("15m_1500", "15m_1515", "3m_1524", "3m_1527", "1m_1528", "1m_1529")
     trend_3m = t3_24 != 0 and t3_24 == t3_27
     trend_1m = t1_28 != 0 and t1_28 == t1_29
 
@@ -1702,6 +1742,8 @@ def evaluate_rows(rows):
         "trend_1m": trend_1m,
         "missing": missing,
         "candles": candles,
+        "estimated": [slot_label(k) for k in SLOT_KEYS if candles[k] and candles[k].get("est")],
+        "vol_estimated": any(is_est(k) for k in volume_keys),
         "tail_1m": sorted(h for h in one_day if h >= 1520),
         "details": {
             "t15_1500": t15_1500, "t15_1515": t15_1515,
@@ -2035,6 +2077,11 @@ h1 { margin-bottom: 5px; }
 .long { background: #dff5e5; color: #08752f; }
 .short { background: #f8dddd; color: #a52222; }
 .date { color: #777; margin-left: 8px; font-size: 12px; }
+.tag {
+    display: inline-block; margin-left: 8px; padding: 2px 6px; border-radius: 4px;
+    font-size: 11px; font-weight: bold;
+}
+.tag.warn { background: #fff3cd; color: #6b5200; }
 .table-wrap { overflow-x: auto; }
 table {
     width: 100%; border-collapse: collapse; background: white; font-size: 13px;
@@ -2072,6 +2119,7 @@ def candle_text(candle, label):
         f'{label} {trend_name(direction)} '
         f'({candle["open"]:.2f}&rarr;{candle["close"]:.2f}) '
         f'vol {candle["volume"]:,}'
+        + (" (est.)" if candle.get("est") else "")
     )
 
 
@@ -2092,6 +2140,7 @@ def final_signals(results):
             "symbol": r["symbol"],
             "direction": r["direction"],
             "previous_day": r.get("previous_day"),
+            "vol_estimated": bool(r.get("vol_estimated")),
         }
         for r in results if r.get("status") == "PASS"
     ]
@@ -2391,6 +2440,12 @@ def build_table_row(r):
             + ", ".join(esc(m) for m in r["missing"]) + "</small>"
         )
 
+    if r.get("estimated"):
+        data_text += (
+            "<br><small>volume estimated: "
+            + ", ".join(esc(m) for m in r["estimated"]) + "</small>"
+        )
+
     if r.get("error"):
         data_text += f"<br><small>{esc(r['error'][:120])}</small>"
 
@@ -2445,6 +2500,7 @@ def generate_html_report(results, elapsed, universe_source, run_note=None):
     warning = session_warning(results)
     warning_html = (
         (f'<div class="note">{esc(run_note)}</div>' if run_note else "")
+        + f'<div class="note">{esc(NSE_FEED_NOTE)}</div>'
         + health_html
         + unscanned_html(results)
         + (f'<div class="warn">{esc(warning)}</div>' if warning else "")
@@ -2457,7 +2513,12 @@ def generate_html_report(results, elapsed, universe_source, run_note=None):
             f'{esc(sig["direction"])}</span>'
             f'<b>{esc(sig["symbol"])}</b>'
             f'<span class="date">Previous day: {esc(sig.get("previous_day", ""))}</span>'
-            '</div>'
+            + (
+                '<span class="tag warn" title="A closing-candle volume is NSE\'s '
+                'day-total row, corrected to an estimate">volume estimated</span>'
+                if sig.get("vol_estimated") else ""
+            )
+            + '</div>'
             for sig in matches
         )
     else:
@@ -2580,7 +2641,7 @@ the same as another.<br>
 <b>Entry:</b> the 09:15 open on entry day. <b>Exit:</b> {esc(EXIT_TIME_LABEL)}.<br><br>
 <b>Data notes:</b> all candles come from NSE's charting feed; no other source is used. NSE is
 downloaded as 1-minute candles, and the 3-minute and 15-minute candles are built from them on a
-09:15 grid (open = first, close = last, volume = sum). Prices are rounded to 2 decimals;
+09:15 grid (open = first, close = last, volume = sum). <b>{esc(NSE_FEED_NOTE)}</b> Prices are rounded to 2 decimals;
 zero-volume and corrupt candles are dropped and count as missing, which can only block a
 match. INCOMPLETE means no completed session (or none of the nine candles) came back. STALE
 means the previous day differs from most other symbols. NO DATA / ERROR mean NSE had nothing
@@ -2671,55 +2732,46 @@ def nse_debug(symbols):
 
     symbol = (symbols[0] if symbols else "RELIANCE").strip().upper()
     session = nse_session(refresh=True)
+    cookie_header = getattr(_nse_local, "cookie_header", "")
+    headers = {"Cookie": cookie_header} if cookie_header else None
 
     print("=" * 78)
     print(f"NSE DEBUG for {symbol}")
     print("=" * 78)
-    print(f"1) cookies set after visiting NSE: {sorted(set(session.cookies.keys()))}")
+    print(f"1) hosts: www {NSE_WWW_HOST}, charting {NSE_CHARTING_HOST}")
+    print(f"   session cookies collected: {[c.split('=')[0].strip() for c in cookie_header.split(';') if c.strip()]}")
 
-    reply = None
+    moved = getattr(_nse_local, "moved", None)
 
-    for method in ("POST", "GET"):
-        try:
-            if method == "POST":
-                reply = session.post(
-                    NSE_SEARCH_URL, json={"symbol": symbol, "segment": "EQ"},
-                    timeout=REQUEST_TIMEOUT,
-                )
-            else:
-                reply = session.get(
-                    NSE_SEARCH_URL, params={"symbol": symbol, "segment": ""},
-                    timeout=REQUEST_TIMEOUT,
-                )
-        except Exception as e:
-            print(f"2) symbol search ({method}) failed: {type(e).__name__}: {e}")
-            continue
+    if moved:
+        print(f"   !! the main site answered with a redirect to {moved}: NSE has moved hosts again.")
 
-        print(f"2) symbol search ({method}): HTTP {reply.status_code}, "
-              f"content-type {reply.headers.get('content-type')}")
-        print("   body:", snippet(reply.text, 400))
-
-        try:
-            search = reply.json()
-        except ValueError:
-            print("   -> not JSON (probably a block page).")
-            reply = None
-            continue
-
-        found_items = search if isinstance(search, list) else (
-            (search.get("data") or []) if isinstance(search, dict) else []
+    try:
+        reply = session.get(
+            NSE_SEARCH_URL, params={"segment": "", "symbol": symbol},
+            headers=headers, timeout=REQUEST_TIMEOUT, allow_redirects=False,
         )
-
-        if found_items:
-            break
-
-        reply = None
-
-    if reply is None:
-        print("   -> the symbol search gave nothing usable.")
+    except Exception as e:
+        print(f"2) symbol search failed: {type(e).__name__}: {e}")
         return
 
-    items = found_items
+    print(f"2) symbol search: HTTP {reply.status_code}, content-type {reply.headers.get('content-type')}")
+
+    if reply.status_code in (301, 302, 303, 307, 308):
+        print(f"   -> redirected to {reply.headers.get('Location')}: update NSE_WWW_HOST / NSE_CHARTING_HOST.")
+        return
+
+    print("   body:", snippet(reply.text, 400))
+
+    try:
+        search = reply.json()
+    except ValueError:
+        print("   -> not JSON (probably a block page).")
+        return
+
+    items = search if isinstance(search, list) else (
+        (search.get("data") or []) if isinstance(search, dict) else []
+    )
     match = next(
         (i for i in items if isinstance(i, dict)
          and str(i.get("symbol", "")).upper() in {symbol, f"{symbol}-EQ"}),
@@ -2732,46 +2784,60 @@ def nse_debug(symbols):
 
     print("   -> exact match:", snippet(match, 300))
 
-    print("3) candle request formats (a wrong format is answered with {\"status\": true} and no candles):")
+    now_shifted = int(time.time()) + IST_OFFSET_SECONDS
+    params = {
+        "chartType": "I",
+        "fromDate": ((now_shifted - NSE_HISTORY_DAYS * 86400) // 86400) * 86400,
+        "symbol": match["symbol"],
+        "symbolType": match.get("type") or "Equity",
+        "timeInterval": 60,
+        "toDate": now_shifted,
+        "token": nse_chart_token(str(match["scripcode"])),
+    }
 
-    shown = False
+    print(f"3) history request: {params}")
 
-    for name, method, params, body in nse_history_variants(
-        str(match["scripcode"]), match["symbol"], match.get("type") or "Equity"
-    ):
-        try:
-            if method == "GET":
-                reply = session.get(NSE_HISTORY_URL, params=params, timeout=REQUEST_TIMEOUT)
-            else:
-                reply = session.post(NSE_HISTORY_URL, json=body, timeout=REQUEST_TIMEOUT)
+    try:
+        reply = session.get(
+            NSE_HISTORY_URL, params=params, headers=headers,
+            timeout=REQUEST_TIMEOUT, allow_redirects=False,
+        )
+        print(f"   HTTP {reply.status_code}, body {snippet(reply.text, 300)}")
+        body = reply.json()
+        data, rest = nse_extract_candles(body)
+    except Exception as e:
+        print(f"   history failed: {type(e).__name__}: {e}")
+        return
 
-        except Exception as e:
-            print(f"   {name}: request failed ({type(e).__name__}: {e})")
-            continue
+    print(f"   {len(data)} candles, other fields {snippet(rest, 160)}")
 
-        try:
-            data, rest = nse_extract_candles(reply.json())
-        except Exception:
-            print(f"   {name}: HTTP {reply.status_code}, not JSON: {snippet(reply.text, 300)}")
-            continue
+    if data:
+        times = []
 
-        print(f"   {name}: HTTP {reply.status_code}, {len(data)} candles, "
-              f"other fields {snippet(rest, 160)}, raw body {snippet(reply.text, 300)}")
+        for row in data:
+            try:
+                value = float(row["time"])
+                unit = "ms" if abs(value) > 1e11 else "s"
+                times.append(pd.to_datetime(value, unit=unit))
+            except Exception:
+                pass
 
-        if data and not shown:
-            shown = True
-            print(f"      first candle: {snippet(data[0], 200)}")
-            print(f"      last candle : {snippet(data[-1], 200)}")
+        if times:
+            last_day = max(t.date() for t in times)
+            day_times = [t for t in times if t.date() == last_day]
+            labels = [t.strftime("%H:%M:%S") for t in day_times]
+            print(f"   stamps read as clock time; last day {last_day}: {len(day_times)} candles")
+            print(f"   first 6: {labels[:6]}")
+            print(f"   last 6 : {labels[-6:]}")
 
-    if not shown:
-        print("   -> no format returned candles. Paste this output when asking for help.")
-
-    print("4) shape of each session after reading (a full session must be 09:15-15:29):")
+    print("4) shape of each session after reading (09:15 first, 15:28/15:29 last; "
+          "15:16-15:19 absent in NSE's feed):")
 
     shift = _nse_calibration["shift"]
 
     try:
         raw = nse_raw_minutes(symbol, shift)
+        flagged = raw.index[raw["Estimated"]]
         rows = clean_candle_data(raw)
 
         if rows is None:
@@ -2779,11 +2845,13 @@ def nse_debug(symbols):
             return
 
         print(f"   manual shift NSE_TIME_SHIFT_MINUTES = {shift:+d}")
-        print(f"   start/end convention detected: {_nse_convention['labels']}")
 
         for date, count, first, last in day_structure(rows):
-            verdict = "OK" if (first == 915 and last == 1529 and count >= 300) else "check"
+            verdict = "OK" if (first == 915 and last in (1528, 1529) and count >= 300) else "check"
             print(f"   {date}: {count:>3} candles, {hm_text(first)} to {hm_text(last)}  [{verdict}]")
+
+        for stamp in flagged:
+            print(f"   day-total row corrected to an estimate: {stamp:%Y-%m-%d %H:%M}")
     except Exception as e:
         print(f"   could not read: {type(e).__name__}: {e}")
 
